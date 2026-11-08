@@ -10,7 +10,7 @@ use crate::core::{ItemDef, ObjectDef, Registry, ShapeDef, TerrainDef, Use};
 use crate::items::interact::in_reach;
 use crate::items::inventory::Inventory;
 use crate::player::{Cursor, Player};
-use crate::world::stream::put_object;
+use crate::world::stream::{clear_object, put_object};
 use crate::world::{ChunkMap, chunk::chunk_of};
 
 /// Game-time at which each growing crop advances a stage.
@@ -23,9 +23,11 @@ pub fn till(
     cursor: Res<Cursor>,
     items: Res<Registry<ItemDef>>,
     terrain: Res<Registry<TerrainDef>>,
+    objects: Res<Registry<ObjectDef>>,
     mut map: ResMut<ChunkMap>,
     ui: Res<crate::core::UiHovered>,
     player: Single<(&Transform, &Inventory), With<Player>>,
+    mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Left) || ui.0 {
         return;
@@ -42,7 +44,7 @@ pub fn till(
         return;
     }
     let Some(tile) = map.tile(cell) else { return };
-    if tile.object.is_some() {
+    if tile.object.is_some_and(|o| !objects.at(o).decor()) {
         return;
     }
     if let Some(next) = terrain
@@ -51,11 +53,13 @@ pub fn till(
         .as_deref()
         .and_then(|id| terrain.idx(id))
     {
+        // Tufts and flowers are turned under.
+        clear_object(&mut map, cell, &mut commands);
         map.set(
             cell,
             crate::world::chunk::Tile {
                 terrain: next,
-                ..tile
+                object: None,
             },
         );
     }

@@ -83,6 +83,8 @@ pub fn movement(
     terrain: Res<Registry<TerrainDef>>,
     objects: Res<Registry<ObjectDef>>,
     mut target: ResMut<Target>,
+    mut toast: ResMut<crate::core::Toast>,
+    mut stalled: Local<f32>,
     mut player: Single<(&mut Transform, &mut Stats), With<Player>>,
 ) {
     let (tf, stats) = &mut *player;
@@ -92,12 +94,14 @@ pub fn movement(
     let mut dir =
         Vec2::new(axis(&keys.left, &keys.right), axis(&keys.down, &keys.up)).normalize_or_zero();
     let pos = tf.translation.truncate();
+    let mut walking_to_target = false;
     if dir != Vec2::ZERO {
         target.0 = None;
     } else if let Some(cell) = target.0 {
         let to = center_of(cell) - pos;
         if to.length() > REACH * 0.8 {
             dir = to.normalize_or_zero();
+            walking_to_target = true;
         }
     }
     let sprinting = keys.pressed(&input, &keys.sprint) && dir != Vec2::ZERO && stats.stamina > 0.0;
@@ -113,6 +117,17 @@ pub fn movement(
     p = slide(p, delta.with_y(0.0), PLAYER_R, solid);
     p = slide(p, delta.with_x(0.0), PLAYER_R, solid);
     tf.translation = p.extend(tf.translation.z);
+    // Auto-walk that makes no headway (water, wall, trunk) gives up instead of grinding.
+    if walking_to_target && (p - pos).length() < 0.5 * time.delta_secs() * 60.0 {
+        *stalled += time.delta_secs();
+        if *stalled > 0.5 {
+            target.0 = None;
+            *stalled = 0.0;
+            toast.show("Can't reach that from here.", 2.0);
+        }
+    } else {
+        *stalled = 0.0;
+    }
     // Walk bob: a little squash in step with movement.
     let moving = (p - pos).length() > 0.01;
     let wave = (time.elapsed_secs() * 16.0).sin() * 0.05;

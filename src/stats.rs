@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use crate::core::{CreatureDef, ItemDef, LootDef, Registry, StatsDef};
 use crate::items::drops::{SpawnDrop, roll_loot};
+use crate::items::inventory::Inventory;
 use crate::player::Player;
 use crate::world::worldgen::WorldGen;
 
@@ -79,6 +80,13 @@ pub struct Died {
     pub creature: Option<u16>,
 }
 
+/// Hostiles within `radius` of `around` forget the player for a moment (respawn grace).
+#[derive(Message, Clone, Copy)]
+pub struct CalmHostiles {
+    pub around: Vec2,
+    pub radius: f32,
+}
+
 /// Experience granted to the player.
 #[derive(Message, Clone)]
 pub struct GainXp {
@@ -90,17 +98,30 @@ pub struct GainXp {
 #[derive(Component)]
 pub struct HitFlash(pub f32);
 
+/// Seconds of grace after respawning: damage is ignored and hostiles nearby lose interest.
+#[derive(Component)]
+pub struct Invulnerable(pub f32);
+pub const RESPAWN_GRACE: f32 = 3.0;
+/// Share of every stack dropped where the player died.
+pub const DEATH_DROP: f32 = 0.2;
+
 pub fn apply_damage(
     mut damage: MessageReader<Damage>,
     mut died: MessageWriter<Died>,
-    mut targets: Query<(&mut Stats, &Transform, Option<&Creature>, Has<Player>)>,
+    mut targets: Query<(
+        &mut Stats,
+        &Transform,
+        Option<&Creature>,
+        Has<Player>,
+        Has<Invulnerable>,
+    )>,
     mut commands: Commands,
 ) {
     for d in damage.read() {
-        let Ok((mut stats, tf, creature, is_player)) = targets.get_mut(d.target) else {
+        let Ok((mut stats, tf, creature, is_player, shielded)) = targets.get_mut(d.target) else {
             continue;
         };
-        if stats.hp <= 0.0 {
+        if stats.hp <= 0.0 || shielded {
             continue;
         }
         stats.hp -= (d.amount - stats.defense).max(1.0);
@@ -133,9 +154,10 @@ pub fn on_death(
     wg: Res<WorldGen>,
     spawn: Res<SpawnPoint>,
     mobs: Query<&Creature, Without<Player>>,
-    mut player: Single<(&mut Transform, &mut Stats), With<Player>>,
+    mut player: Single<(Entity, &mut Transform, &mut Stats, &mut Inventory), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
     mut xp: MessageWriter<GainXp>,
+    mut calm: MessageWriter<CalmHostiles>,
     mut commands: Commands,
 ) {
     for d in died.read() {
@@ -157,11 +179,33 @@ pub fn on_death(
             });
             commands.entity(d.entity).despawn();
         } else {
-            let (tf, stats) = &mut *player;
+            let (entity, tf, stats, inv) = &mut *player;
             info!("you died; respawning");
+            // Part of every stack stays where you fell.
+            for slot in inv.slots.iter_mut() {
+                if let Some(st) = slot {
+                    let lost = ((st.n as f32 * DEATH_DROP).ceil() as u32).min(st.n);
+                    if lost > 0 {
+                        drops.write(SpawnDrop {
+                            item: st.item,
+                            n: lost,
+                            at: d.at,
+                        });
+                        st.n -= lost;
+                        if st.n == 0 {
+                            *slot = None;
+                        }
+                    }
+                }
+            }
             tf.translation = spawn.0.extend(tf.translation.z);
             stats.hp = stats.max_hp;
             stats.stamina = stats.max_stamina;
+            commands.entity(*entity).insert(Invulnerable(RESPAWN_GRACE));
+            calm.write(CalmHostiles {
+                around: spawn.0,
+                radius: 8.0 * crate::world::CELL,
+            });
         }
     }
 }
@@ -184,6 +228,15 @@ pub fn gain_xp(
             stats.hp = stats.max_hp;
             stats.attack += 1.0;
             info!("level {}", prog.level);
+        }
+    }
+}
+
+pub fn grace(time: Res<Time>, mut q: Query<(Entity, &mut Invulnerable)>, mut commands: Commands) {
+    for (e, mut g) in &mut q {
+        g.0 -= time.delta_secs();
+        if g.0 <= 0.0 {
+            commands.entity(e).remove::<Invulnerable>();
         }
     }
 }
@@ -215,9 +268,10 @@ impl Plugin for StatsPlugin {
             .add_message::<Damage>()
             .add_message::<Died>()
             .add_message::<GainXp>()
+            .add_message::<CalmHostiles>()
             .add_systems(
                 Update,
-                (apply_damage, on_death, gain_xp, regen, hit_flash)
+                (apply_damage, on_death, gain_xp, regen, grace, hit_flash)
                     .chain()
                     .in_set(StatsSet),
             );

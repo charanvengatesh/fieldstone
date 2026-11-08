@@ -16,6 +16,8 @@ pub struct Ai {
     /// Seconds until the next wander decision.
     pub timer: f32,
     pub bite: f32,
+    /// Seconds of ignoring the player (after a respawn nearby).
+    pub calm: f32,
 }
 
 pub fn think(
@@ -27,9 +29,11 @@ pub fn think(
     objects: Res<Registry<ObjectDef>>,
     player: Single<(Entity, &Transform), With<Player>>,
     mut mobs: Query<(&Creature, &Stats, &mut Ai, &mut Transform), Without<Player>>,
+    mut calm: MessageReader<crate::stats::CalmHostiles>,
     mut damage: MessageWriter<Damage>,
 ) {
     let (player_entity, ptf) = *player;
+    let calms: Vec<crate::stats::CalmHostiles> = calm.read().copied().collect();
     let target = ptf.translation.truncate();
     let dt = time.delta_secs();
     let solid = |c| solid_half(&map, &terrain, &objects, c);
@@ -39,8 +43,15 @@ pub fn think(
         let to_player = target - pos;
         ai.timer -= dt;
         ai.bite -= dt;
-        let hostile =
-            matches!(def.ai, Behavior::Hostile { aggro } if to_player.length() <= aggro * CELL);
+        ai.calm -= dt;
+        for c in &calms {
+            if pos.distance(c.around) <= c.radius {
+                ai.calm = crate::stats::RESPAWN_GRACE;
+                ai.dir = (pos - c.around).normalize_or_zero();
+            }
+        }
+        let hostile = ai.calm <= 0.0
+            && matches!(def.ai, Behavior::Hostile { aggro } if to_player.length() <= aggro * CELL);
         let speed = if hostile {
             if to_player.length() <= BITE_RANGE {
                 ai.dir = Vec2::ZERO;

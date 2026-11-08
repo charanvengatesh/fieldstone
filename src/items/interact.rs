@@ -23,6 +23,8 @@ use crate::world::worldgen::WorldGen;
 use crate::world::{CELL, ChunkMap, PLAYER_R, center_of, overlapping_cells};
 
 pub const REACH: f32 = CELL * 6.0;
+/// Farthest a click target may be; beyond that the player walks toward it first.
+pub const TARGET_RANGE: f32 = CELL * 14.0;
 /// Damage per second from bare hands or a tool whose power exactly meets the hardness.
 const BASE_DPS: f32 = 1.5;
 /// Scroll distance (in pixels, lines count as 40) per hotbar step.
@@ -110,12 +112,15 @@ pub fn pick_target(
     ui: Res<UiHovered>,
     map: Res<ChunkMap>,
     items: Res<Registry<ItemDef>>,
-    inv: Single<&Inventory, With<Player>>,
+    objects: Res<Registry<ObjectDef>>,
+    terrain: Res<Registry<TerrainDef>>,
+    player: Single<(&Inventory, &Transform), With<Player>>,
     mut target: ResMut<Target>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) || ui.0 {
         return;
     }
+    let (inv, player) = *player;
     // Weapons and rods have their own click handling.
     if matches!(
         inv.held().map(|s| &items.at(s.item).usage),
@@ -124,9 +129,13 @@ pub fn pick_target(
         target.0 = None;
         return;
     }
-    target.0 = cursor
-        .cell
-        .filter(|c| map.tile(*c).is_some_and(|t| t.object.is_some()));
+    target.0 = cursor.cell.filter(|c| {
+        map.tile(*c).is_some_and(|t| {
+            t.object.is_some_and(|o| !objects.at(o).decor())
+                && terrain.at(t.terrain).walkable
+                && center_of(*c).distance(player.translation.truncate()) <= TARGET_RANGE
+        })
+    });
 }
 
 pub fn mine(
@@ -330,7 +339,8 @@ pub fn place(
     let Some(tile) = map.tile(cell) else { return };
     let ground = terrain.at(tile.terrain);
     let def = objects.at(obj);
-    let blocked = tile.object.is_some()
+    let occupied = tile.object.is_some_and(|o| !objects.at(o).decor());
+    let blocked = occupied
         || !ground.walkable
         || def
             .on

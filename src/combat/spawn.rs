@@ -10,11 +10,12 @@ use crate::player::Player;
 use crate::stats::{Creature, Stats};
 use crate::world::{CELL, ChunkMap, PLAYER_R, cell_of, center_of, overlapping_cells};
 
-const MAX_MOBS: usize = 24;
+const MAX_HOSTILE: usize = 18;
+const MAX_PASSIVE: usize = 12;
 const SPAWN_INTERVAL: f32 = 1.5;
-const MIN_DIST: f32 = 9.0;
-const MAX_DIST: f32 = 18.0;
-const DESPAWN_DIST: f32 = 40.0;
+/// Cells past the visible half-extent where creatures may appear, and where they vanish.
+const MARGIN_IN: f32 = 3.0;
+const MARGIN_OUT: f32 = 20.0;
 /// Spawn attempts succeed at this rate by day; night is twice as busy.
 const DAY_CHANCE: f32 = 0.25;
 
@@ -58,28 +59,47 @@ pub fn natural_spawns(
     assets: Res<ShapeAssets>,
     map: Res<ChunkMap>,
     player: Single<&Transform, With<Player>>,
-    mobs: Query<&Transform, (With<Creature>, Without<Player>)>,
+    cam: Single<&Projection, With<Camera2d>>,
+    mobs: Query<&Creature, Without<Player>>,
     mut commands: Commands,
 ) {
     timer.0 -= time.delta_secs();
-    if timer.0 > 0.0 || mobs.iter().count() >= MAX_MOBS {
+    if timer.0 > 0.0 {
         return;
     }
     timer.0 = SPAWN_INTERVAL;
+    let (mut hostile, mut passive) = (0, 0);
+    for c in &mobs {
+        if matches!(creatures.at(c.0).ai, crate::core::Behavior::Hostile { .. }) {
+            hostile += 1;
+        } else {
+            passive += 1;
+        }
+    }
     let night = is_night(&clock);
     if rng.f32() > if night { DAY_CHANCE * 2.0 } else { DAY_CHANCE } {
         return;
     }
     let origin = player.translation.truncate();
+    let half = view_half_extent(&cam);
+    let ring = half.max_element() / CELL;
     let at = origin
         + Vec2::from_angle(rng.range(0.0, std::f32::consts::TAU))
             * CELL
-            * rng.range(MIN_DIST, MAX_DIST);
+            * rng.range(ring + MARGIN_IN, ring + MARGIN_IN + 6.0);
     let cell = cell_of(at);
+    // Only off-screen candidates; the ring is round, the view is not.
+    let rel = (center_of(cell) - origin).abs();
+    if rel.x < half.x + CELL && rel.y < half.y + CELL {
+        return;
+    }
     let Some(tile) = map.tile(cell) else { return };
-    if tile.object.is_some()
+    if tile.object.is_some_and(|o| !objects.at(o).decor())
         || !terrain.at(tile.terrain).walkable
-        || overlapping_cells(at, PLAYER_R).any(|c| map.tile(c).is_none_or(|t| t.object.is_some()))
+        || overlapping_cells(center_of(cell), PLAYER_R).any(|c| {
+            map.tile(c)
+                .is_none_or(|t| t.object.is_some_and(|o| objects.at(o).solid))
+        })
     {
         return;
     }
@@ -91,6 +111,10 @@ pub fn natural_spawns(
         .iter()
         .filter_map(|(i, c)| {
             let s = c.spawn.as_ref()?;
+            let is_hostile = matches!(c.ai, crate::core::Behavior::Hostile { .. });
+            if (is_hostile && hostile >= MAX_HOSTILE) || (!is_hostile && passive >= MAX_PASSIVE) {
+                return None;
+            }
             let time_ok = match s.time {
                 TimeOfDay::Any => true,
                 TimeOfDay::Day => !night,
@@ -140,13 +164,23 @@ pub fn lit(map: &ChunkMap, objects: &Registry<ObjectDef>, cell: IVec2) -> bool {
 
 pub fn despawn_far(
     player: Single<&Transform, With<Player>>,
+    cam: Single<&Projection, With<Camera2d>>,
     mobs: Query<(Entity, &Transform), (With<Creature>, Without<Player>)>,
     mut commands: Commands,
 ) {
     let origin = player.translation.truncate();
+    let limit = view_half_extent(&cam).max_element() + (MARGIN_IN + MARGIN_OUT) * CELL;
     for (e, tf) in &mobs {
-        if tf.translation.truncate().distance(origin) > DESPAWN_DIST * CELL {
+        if tf.translation.truncate().distance(origin) > limit {
             commands.entity(e).despawn();
         }
+    }
+}
+
+/// Half the visible world size, from the orthographic projection.
+pub fn view_half_extent(proj: &Projection) -> Vec2 {
+    match proj {
+        Projection::Orthographic(o) => o.area.half_size(),
+        _ => Vec2::splat(20.0 * CELL),
     }
 }

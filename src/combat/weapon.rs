@@ -31,6 +31,7 @@ pub fn attack(
     time: Res<Time>,
     cursor: Res<Cursor>,
     items: Res<Registry<ItemDef>>,
+    objects: Res<Registry<ObjectDef>>,
     shapes: Res<Registry<ShapeDef>>,
     assets: Res<ShapeAssets>,
     map: Res<ChunkMap>,
@@ -56,8 +57,13 @@ pub fn attack(
         return;
     };
     let Some(target) = cursor.cell else { return };
-    // A cursor on an object means the player wants to mine it, not swing at it.
-    if map.tile(target).is_some_and(|t| t.object.is_some()) && projectile.is_none() {
+    // A cursor on a real object means the player wants to mine it, not swing at it.
+    if map
+        .tile(target)
+        .and_then(|t| t.object)
+        .is_some_and(|o| !objects.at(o).decor())
+        && projectile.is_none()
+    {
         return;
     }
     if stats.stamina < SWING_STAMINA {

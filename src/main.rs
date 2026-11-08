@@ -26,7 +26,6 @@ use bevy::prelude::*;
 use crate::core::save::{PendingPlayer, SavedChunks};
 use crate::core::time::GameTime;
 use crate::core::{ObjectDef, Registry, TerrainDef, WorldGenDef};
-use crate::world::cell_of;
 use crate::world::worldgen::WorldGen;
 
 fn main() {
@@ -162,7 +161,7 @@ fn setup_world(app: &mut App, options: &Options) {
         )
     });
     let wg = WorldGen::new(seed, &gen_def, terrain, objects);
-    let spawn = spawn_point(&wg, terrain);
+    let spawn = spawn_point(&wg, terrain, objects);
     let pending = match &loaded {
         Some(l) => PendingPlayer {
             pos: l.player,
@@ -190,9 +189,24 @@ fn setup_world(app: &mut App, options: &Options) {
         .insert_resource(pending);
 }
 
-/// Nearest walkable, empty cell to the origin, searched in growing rings.
-fn spawn_point(wg: &WorldGen, terrain: &Registry<TerrainDef>) -> Vec2 {
-    for r in 0..200i32 {
+/// A good place to start: open land (not sand, not rock), trees close by, and enough
+/// connected ground to walk around on. Searched in growing rings from the origin.
+fn spawn_point(
+    wg: &WorldGen,
+    terrain: &Registry<TerrainDef>,
+    objects: &Registry<ObjectDef>,
+) -> Vec2 {
+    let land: Vec<u16> = ["grass", "meadow", "forest"]
+        .iter()
+        .filter_map(|id| terrain.idx(id))
+        .collect();
+    let tree = objects.idx("tree");
+    let open = |c: IVec2| {
+        let t = wg.tile(c);
+        terrain.at(t.terrain).walkable && t.object.is_none_or(|o| !objects.at(o).solid)
+    };
+    let mut fallback = None;
+    for r in 0..400i32 {
         for dy in -r..=r {
             for dx in -r..=r {
                 if dx.abs() != r && dy.abs() != r {
@@ -200,12 +214,42 @@ fn spawn_point(wg: &WorldGen, terrain: &Registry<TerrainDef>) -> Vec2 {
                 }
                 let c = IVec2::new(dx, dy);
                 let t = wg.tile(c);
-                if terrain.at(t.terrain).walkable && t.object.is_none() {
+                if !terrain.at(t.terrain).walkable || t.object.is_some() {
+                    continue;
+                }
+                fallback.get_or_insert(c);
+                if !land.contains(&t.terrain) {
+                    continue;
+                }
+                let trees = (-10..=10)
+                    .flat_map(|y| (-10..=10).map(move |x| c + IVec2::new(x, y)))
+                    .filter(|n| wg.tile(*n).object == tree && tree.is_some())
+                    .count();
+                if trees < 4 {
+                    continue;
+                }
+                if connected_area(c, 200, &open) >= 200 {
                     return world::center_of(c);
                 }
             }
         }
     }
-    let _ = cell_of;
-    Vec2::ZERO
+    world::center_of(fallback.unwrap_or(IVec2::ZERO))
+}
+
+/// Flood fill over open cells, stopping once `cap` cells are reached.
+fn connected_area(start: IVec2, cap: usize, open: &impl Fn(IVec2) -> bool) -> usize {
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![start];
+    while let Some(c) = stack.pop() {
+        if seen.len() >= cap || !seen.insert(c) || !open(c) {
+            continue;
+        }
+        for d in [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
+            if !seen.contains(&(c + d)) {
+                stack.push(c + d);
+            }
+        }
+    }
+    seen.len()
 }

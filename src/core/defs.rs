@@ -161,6 +161,11 @@ impl ObjectDef {
     pub fn interactive(&self) -> bool {
         self.storage > 0 || self.use_swaps.is_some() || self.bed
     }
+    /// Set dressing: walkable, worthless, gone in a tap. Never a click target, never in the
+    /// way of building, and a swing goes to the creature standing on it.
+    pub fn decor(&self) -> bool {
+        !self.solid && self.drops.is_none() && self.hp <= 0.5
+    }
 }
 def!(ObjectDef, "objects.ron");
 
