@@ -10,6 +10,7 @@ pub struct ItemsPlugin;
 impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<interact::Damage>()
+            .init_resource::<interact::Target>()
             .add_message::<drops::SpawnDrop>()
             .add_message::<interact::ObjectBroken>()
             .add_message::<interact::ObjectPlaced>()
@@ -19,6 +20,7 @@ impl Plugin for ItemsPlugin {
                 Update,
                 (
                     interact::select_slot,
+                    interact::pick_target,
                     interact::mine,
                     interact::place,
                     craft::craft,

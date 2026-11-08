@@ -113,14 +113,20 @@ pub fn draw(
         .map(|(p, _)| *p)
         .collect();
     for pos in dirty {
-        let chunk = chunks.get_mut(&pos).unwrap();
-        chunk.dirty = false;
-        let mesh = meshes.add(terrain_mesh(&chunk.tiles, &colors));
+        chunks.get_mut(&pos).unwrap().dirty = false;
+        let tiles = chunks[&pos].tiles;
+        let neighbor = |c: IVec2| {
+            chunks
+                .get(&chunk_of(c))
+                .map(|ch| ch.tiles[local_index(c)].terrain)
+        };
+        let mesh = meshes.add(terrain_mesh(pos, &tiles, &colors, neighbor));
+        let chunk = &tiles;
         let origin = center_of(pos * CHUNK) - CELL / 2.0;
         let new_objects: Vec<(IVec2, u16)> = (0..TILES)
             .filter_map(|i| {
                 let cell = pos * CHUNK + IVec2::new(i as i32 % CHUNK, i as i32 / CHUNK);
-                chunk.tiles[i]
+                chunk[i]
                     .object
                     .filter(|_| !obj_entities.contains_key(&cell))
                     .map(|o| (cell, o))
@@ -155,36 +161,91 @@ pub fn draw(
     }
 }
 
-fn terrain_mesh(tiles: &[Tile; TILES], colors: &[[f32; 4]]) -> Mesh {
-    let n = TILES;
-    let mut pos = Vec::with_capacity(n * 4);
-    let mut col = Vec::with_capacity(n * 4);
-    let mut idx = Vec::with_capacity(n * 6);
-    for (i, t) in tiles.iter().enumerate() {
-        let (x, y) = (
-            (i as i32 % CHUNK) as f32 * CELL,
-            (i as i32 / CHUNK) as f32 * CELL,
-        );
-        let c = colors
-            .get(t.terrain as usize)
+/// Terrain as a soft gradient: each vertex takes the average of the four tiles meeting at that
+/// corner, with a little per-tile brightness jitter so flat areas do not read as a grid.
+fn terrain_mesh(
+    pos: IVec2,
+    tiles: &[Tile; TILES],
+    colors: &[[f32; 4]],
+    tile_at: impl Fn(IVec2) -> Option<u16>,
+) -> Mesh {
+    let origin = pos * CHUNK;
+    let color_of = |cell: IVec2| -> [f32; 4] {
+        let local = cell - origin;
+        let terrain = if (0..CHUNK).contains(&local.x) && (0..CHUNK).contains(&local.y) {
+            Some(tiles[(local.y * CHUNK + local.x) as usize].terrain)
+        } else {
+            tile_at(cell)
+        };
+        let Some(t) = terrain else {
+            return [0.0, 0.0, 0.0, 1.0];
+        };
+        let base = colors
+            .get(t as usize)
             .copied()
             .unwrap_or([1.0, 0.0, 1.0, 1.0]);
-        let b = pos.len() as u32;
-        pos.extend([
+        let jitter = 0.92 + 0.16 * crate::core::hash01(7, cell.x, cell.y, 3);
+        [base[0] * jitter, base[1] * jitter, base[2] * jitter, 1.0]
+    };
+    // Corner color = mean of the four tiles touching it; corners are shared by (CHUNK+1)^2 points.
+    let n = (CHUNK + 1) as usize;
+    let mut corner = vec![[0.0f32; 4]; n * n];
+    for cy in 0..=CHUNK {
+        for cx in 0..=CHUNK {
+            let mut acc = [0.0f32; 4];
+            for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
+                let c = color_of(origin + IVec2::new(cx + dx, cy + dy));
+                for k in 0..4 {
+                    acc[k] += c[k] * 0.25;
+                }
+            }
+            corner[cy as usize * n + cx as usize] = acc;
+        }
+    }
+    let mut positions = Vec::with_capacity(TILES * 5);
+    let mut cols = Vec::with_capacity(TILES * 5);
+    let mut idx = Vec::with_capacity(TILES * 12);
+    for (i, _) in tiles.iter().enumerate() {
+        let (tx, ty) = (i as i32 % CHUNK, i as i32 / CHUNK);
+        let (x, y) = (tx as f32 * CELL, ty as f32 * CELL);
+        let c = |cx: i32, cy: i32| corner[cy as usize * n + cx as usize];
+        let center = color_of(origin + IVec2::new(tx, ty));
+        let b = positions.len() as u32;
+        positions.extend([
             [x, y, 0.0],
             [x + CELL, y, 0.0],
             [x + CELL, y + CELL, 0.0],
             [x, y + CELL, 0.0],
+            [x + CELL / 2.0, y + CELL / 2.0, 0.0],
         ]);
-        col.extend([c; 4]);
-        idx.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
+        cols.extend([
+            c(tx, ty),
+            c(tx + 1, ty),
+            c(tx + 1, ty + 1),
+            c(tx, ty + 1),
+            center,
+        ]);
+        idx.extend([
+            b,
+            b + 1,
+            b + 4,
+            b + 1,
+            b + 2,
+            b + 4,
+            b + 2,
+            b + 3,
+            b + 4,
+            b + 3,
+            b,
+            b + 4,
+        ]);
     }
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, pos)
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, col)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, cols)
     .with_inserted_indices(Indices::U32(idx))
 }
 

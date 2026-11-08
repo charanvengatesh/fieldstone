@@ -1,6 +1,8 @@
-//! Using the held item on the world: mining objects (left click held) and placing (right click).
+//! Using the held item on the world. Built for trackpads: a single click on an object sets a
+//! mining target that keeps working (and walks you closer) until it breaks, you move, or you
+//! click elsewhere. Holding the button still works. `F` does what right click does.
 
-use bevy::input::mouse::MouseWheel;
+use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
@@ -17,29 +19,39 @@ use crate::world::{CELL, ChunkMap, PLAYER_R, center_of, overlapping_cells};
 pub const REACH: f32 = CELL * 6.0;
 /// Damage per second from bare hands or a tool whose power exactly meets the hardness.
 const BASE_DPS: f32 = 1.5;
+/// Scroll distance (in pixels, lines count as 40) per hotbar step.
+const SCROLL_STEP: f32 = 36.0;
 
 /// Remaining hit points of objects currently being mined.
 #[derive(Resource, Default)]
 pub struct Damage(pub HashMap<IVec2, f32>);
 
+/// Cell the player is working on after a click, if any.
+#[derive(Resource, Default)]
+pub struct Target(pub Option<IVec2>);
+
 /// Fired when an object breaks; farming, scripts and stats listen.
 #[derive(Message)]
-#[allow(dead_code)] // listeners arrive with farming, stats and scripting
 pub struct ObjectBroken {
     pub cell: IVec2,
     pub object: u16,
 }
 
 #[derive(Message)]
-#[allow(dead_code)]
 pub struct ObjectPlaced {
     pub cell: IVec2,
     pub object: u16,
 }
 
+/// Right click or `F`.
+pub fn use_pressed(mouse: &ButtonInput<MouseButton>, keys: &ButtonInput<KeyCode>) -> bool {
+    mouse.just_pressed(MouseButton::Right) || keys.just_pressed(KeyCode::KeyF)
+}
+
 pub fn select_slot(
     keys: Res<ButtonInput<KeyCode>>,
     mut wheel: MessageReader<MouseWheel>,
+    mut acc: Local<f32>,
     mut inv: Single<&mut Inventory, With<Player>>,
 ) {
     use KeyCode::*;
@@ -49,14 +61,55 @@ pub fn select_slot(
     if let Some(i) = DIGITS.iter().position(|k| keys.just_pressed(*k)) {
         inv.selected = i;
     }
+    // Trackpads emit many tiny pixel deltas; accumulate and step at a threshold.
     for w in wheel.read() {
-        let step = if w.y < 0.0 { 1 } else { HOTBAR - 1 };
-        inv.selected = (inv.selected + step) % HOTBAR;
+        let scale = match w.unit {
+            MouseScrollUnit::Line => 40.0,
+            MouseScrollUnit::Pixel => 1.0,
+        };
+        *acc += (w.y + w.x) * scale;
+    }
+    while *acc <= -SCROLL_STEP {
+        *acc += SCROLL_STEP;
+        inv.selected = (inv.selected + 1) % HOTBAR;
+    }
+    while *acc >= SCROLL_STEP {
+        *acc -= SCROLL_STEP;
+        inv.selected = (inv.selected + HOTBAR - 1) % HOTBAR;
     }
 }
 
 pub fn in_reach(player: Vec2, cell: IVec2) -> bool {
     player.distance(center_of(cell)) <= REACH
+}
+
+/// Click an object to target it; click empty ground or press Escape to clear.
+pub fn pick_target(
+    mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    cursor: Res<Cursor>,
+    map: Res<ChunkMap>,
+    items: Res<Registry<ItemDef>>,
+    inv: Single<&Inventory, With<Player>>,
+    mut target: ResMut<Target>,
+) {
+    if keys.just_pressed(KeyCode::Escape) {
+        target.0 = None;
+    }
+    if !mouse.just_pressed(MouseButton::Left) {
+        return;
+    }
+    // Weapons and rods have their own click handling.
+    if matches!(
+        inv.held().map(|s| &items.at(s.item).usage),
+        Some(Use::Weapon { .. } | Use::Rod { .. })
+    ) {
+        target.0 = None;
+        return;
+    }
+    target.0 = cursor
+        .cell
+        .filter(|c| map.tile(*c).is_some_and(|t| t.object.is_some()));
 }
 
 pub fn mine(
@@ -69,6 +122,7 @@ pub fn mine(
     loot: Res<Registry<LootDef>>,
     mut map: ResMut<ChunkMap>,
     mut damage: ResMut<Damage>,
+    mut target: ResMut<Target>,
     player: Single<(&Transform, &Inventory, &Progress), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
     mut broken: MessageWriter<ObjectBroken>,
@@ -77,14 +131,16 @@ pub fn mine(
 ) {
     let (tf, inv, progress) = *player;
     let pos = tf.translation.truncate();
-    let target = cursor
-        .0
-        .filter(|c| mouse.pressed(MouseButton::Left) && in_reach(pos, *c));
-    let Some(cell) = target else {
-        damage.0.clear();
-        return;
+    let held_cell = cursor.cell.filter(|_| mouse.pressed(MouseButton::Left));
+    let cell = match target.0.or(held_cell) {
+        Some(c) if in_reach(pos, c) => c,
+        _ => {
+            damage.0.clear();
+            return;
+        }
     };
     let Some(obj) = map.tile(cell).and_then(|t| t.object) else {
+        target.0 = None;
         return;
     };
     let def = objects.at(obj);
@@ -105,6 +161,7 @@ pub fn mine(
         return;
     }
     damage.0.remove(&cell);
+    target.0 = None;
     clear_object(&mut map, cell, &mut commands);
     if let Some(table) = def.drops.as_deref().and_then(|id| loot.get(id)) {
         roll_loot(table, &items, center_of(cell), wg.seed, 1, &mut drops);
@@ -116,8 +173,10 @@ pub fn mine(
     });
 }
 
+/// Right click / `F`: eat the held food, or place the held object on the hovered cell.
 pub fn place(
     mouse: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     cursor: Res<Cursor>,
     items: Res<Registry<ItemDef>>,
     objects: Res<Registry<ObjectDef>>,
@@ -129,7 +188,7 @@ pub fn place(
     mut placed: MessageWriter<ObjectPlaced>,
     mut commands: Commands,
 ) {
-    if !mouse.just_pressed(MouseButton::Right) {
+    if !use_pressed(&mouse, &keys) {
         return;
     }
     let (tf, inv, stats) = &mut *player;
@@ -141,7 +200,7 @@ pub fn place(
         inv.consume_held();
         return;
     }
-    let Some(cell) = cursor.0.filter(|c| in_reach(pos, *c)) else {
+    let Some(cell) = cursor.cell.filter(|c| in_reach(pos, *c)) else {
         return;
     };
     let Use::Place(id) = &items.at(held.item).usage else {
@@ -156,14 +215,14 @@ pub fn place(
     };
     let Some(tile) = map.tile(cell) else { return };
     let ground = terrain.at(tile.terrain);
+    let def = objects.at(obj);
     let blocked = tile.object.is_some()
         || !ground.walkable
-        || objects
-            .at(obj)
+        || def
             .on
             .as_ref()
             .is_some_and(|allowed| !allowed.iter().any(|t| t == &ground.id))
-        || (objects.at(obj).solid && overlapping_cells(pos, PLAYER_R).any(|c| c == cell));
+        || (def.solid && overlapping_cells(pos, PLAYER_R + def.radius * CELL).any(|c| c == cell));
     if blocked {
         return;
     }

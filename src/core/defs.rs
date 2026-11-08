@@ -38,6 +38,9 @@ pub struct PackDef {
 pub struct ColorDef {
     pub id: String,
     pub rgb: Rgb,
+    /// Opacity 0..255; shadows and glass use this.
+    #[serde(default = "opaque")]
+    pub a: u8,
 }
 def!(ColorDef, "palette.ron");
 
@@ -101,6 +104,9 @@ pub struct ObjectDef {
     pub shape: String,
     #[serde(default = "yes")]
     pub solid: bool,
+    /// Half-size of the collision box in cells (0.5 fills the cell). Trees use a small trunk.
+    #[serde(default = "half")]
+    pub radius: f32,
     /// Tool power needed to damage it at all. 0 means bare hands work.
     #[serde(default)]
     pub hardness: u8,
@@ -315,6 +321,12 @@ fn any() -> TimeOfDay {
 }
 fn passive() -> Behavior {
     Behavior::Passive
+}
+fn opaque() -> u8 {
+    255
+}
+fn half() -> f32 {
+    0.5
 }
 fn yes() -> bool {
     true

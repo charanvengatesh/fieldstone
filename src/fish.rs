@@ -60,7 +60,7 @@ pub fn cast_and_catch(
             if !mouse.just_pressed(MouseButton::Left) {
                 return;
             }
-            let Some(cell) = cursor.0.filter(|c| in_reach(pos, *c)) else {
+            let Some(cell) = cursor.cell.filter(|c| in_reach(pos, *c)) else {
                 return;
             };
             let Some(table) = map

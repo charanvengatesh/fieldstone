@@ -70,14 +70,17 @@ mod tests {
         let a = r.insert(ColorDef {
             id: "a".into(),
             rgb: [1, 1, 1],
+            a: 255,
         });
         r.insert(ColorDef {
             id: "b".into(),
             rgb: [2, 2, 2],
+            a: 255,
         });
         let a2 = r.insert(ColorDef {
             id: "a".into(),
             rgb: [9, 9, 9],
+            a: 255,
         });
         assert_eq!(a, a2);
         assert_eq!(r.len(), 2);

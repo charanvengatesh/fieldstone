@@ -49,6 +49,7 @@ fn main() {
         ))
         .init_asset::<Mesh>()
         .init_asset::<ColorMaterial>()
+        .init_asset::<Image>()
         .init_resource::<smoke::Smoke>()
         .add_systems(Update, smoke::drive.before(player::PlayerSet));
     } else {

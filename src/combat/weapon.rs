@@ -8,7 +8,7 @@ use crate::fx::Swing;
 use crate::items::inventory::Inventory;
 use crate::player::{Cursor, Player};
 use crate::stats::{Creature, Damage, Stats};
-use crate::world::{CELL, ChunkMap, cell_of, center_of, is_solid};
+use crate::world::{CELL, ChunkMap, cell_of, center_of, solid_half};
 
 const PROJECTILE_SPEED: f32 = 420.0;
 const ARC_HALF_ANGLE: f32 = 1.1;
@@ -54,7 +54,7 @@ pub fn attack(
     else {
         return;
     };
-    let Some(target) = cursor.0 else { return };
+    let Some(target) = cursor.cell else { return };
     // A cursor on an object means the player wants to mine it, not swing at it.
     if map.tile(target).is_some_and(|t| t.object.is_some()) && projectile.is_none() {
         return;
@@ -128,7 +128,10 @@ pub fn fly(
                 amount: p.damage,
             });
         }
-        if hit.is_some() || p.left <= 0.0 || is_solid(&map, &terrain, &objects, cell_of(pos)) {
+        if hit.is_some()
+            || p.left <= 0.0
+            || solid_half(&map, &terrain, &objects, cell_of(pos)).is_some()
+        {
             commands.entity(e).despawn();
         }
     }

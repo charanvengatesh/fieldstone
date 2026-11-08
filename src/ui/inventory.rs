@@ -10,22 +10,22 @@ use crate::player::Player;
 pub struct InventoryPanel;
 
 pub fn spawn(mut commands: Commands) {
+    let width = (SLOT + 6.0) * HOTBAR as f32 + 10.0;
     commands
         .spawn((
             InventoryPanel,
-            Node {
+            panel(Node {
                 position_type: PositionType::Absolute,
-                bottom: Val::Px(12.0 + SLOT + 16.0),
+                bottom: Val::Px(12.0 + SLOT + 44.0),
                 left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-(SLOT + 4.0) * HOTBAR as f32 / 2.0 - 8.0)),
-                padding: UiRect::all(Val::Px(8.0)),
+                margin: UiRect::left(Val::Px(-width / 2.0)),
+                padding: UiRect::all(Val::Px(5.0)),
                 display: Display::Grid,
                 grid_template_columns: RepeatedGridTrack::px(HOTBAR as u16, SLOT),
-                row_gap: Val::Px(4.0),
-                column_gap: Val::Px(4.0),
+                row_gap: Val::Px(6.0),
+                column_gap: Val::Px(6.0),
                 ..default()
-            },
-            BackgroundColor(PANEL_BG),
+            }),
             Visibility::Hidden,
         ))
         .with_children(|p| {

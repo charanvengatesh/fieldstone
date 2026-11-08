@@ -10,17 +10,22 @@ pub use collide::{PLAYER_R, overlapping_cells, slide};
 
 use crate::core::{ObjectDef, Registry, TerrainDef};
 
-/// Whether a cell blocks movement: unloaded, unwalkable terrain, or a solid object.
-pub fn is_solid(
+/// Half-size of the collision box on a cell, or `None` if it is passable. Unloaded chunks and
+/// unwalkable terrain fill the whole cell; objects use their own `radius`.
+pub fn solid_half(
     map: &ChunkMap,
     terrain: &Registry<TerrainDef>,
     objects: &Registry<ObjectDef>,
     cell: IVec2,
-) -> bool {
-    match map.tile(cell) {
-        None => true,
-        Some(t) => !terrain.at(t.terrain).walkable || t.object.is_some_and(|o| objects.at(o).solid),
+) -> Option<f32> {
+    let Some(t) = map.tile(cell) else {
+        return Some(CELL / 2.0);
+    };
+    if !terrain.at(t.terrain).walkable {
+        return Some(CELL / 2.0);
     }
+    let o = objects.at(t.object?);
+    (o.solid && o.radius > 0.0).then_some(o.radius * CELL)
 }
 
 pub struct WorldPlugin;

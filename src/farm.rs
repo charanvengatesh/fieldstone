@@ -30,7 +30,10 @@ pub fn till(
         return;
     }
     let (tf, inv) = *player;
-    let Some(cell) = cursor.0.filter(|c| in_reach(tf.translation.truncate(), *c)) else {
+    let Some(cell) = cursor
+        .cell
+        .filter(|c| in_reach(tf.translation.truncate(), *c))
+    else {
         return;
     };
     let is_hoe = matches!(inv.held().map(|s| &items.at(s.item).usage), Some(Use::Tool { tag, .. }) if tag == "hoe");

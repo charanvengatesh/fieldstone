@@ -6,15 +6,19 @@ off a base. Everything you see is a vector shape; everything you interact with i
 
 ## Controls
 
+Built for a trackpad first: nothing needs holding or a right button.
+
 | Input | Action |
 |-------|--------|
 | WASD / arrow keys | Move |
-| Shift | Sprint |
-| Left click (hold) | Mine the outlined object under the cursor; a bar shows progress. Reach is 6 cells |
-| Left click | Swing or shoot the held weapon toward the cursor |
-| Left click | With a hoe: till grass. With a rod: cast at water, click again on the bite |
-| Right click | Place the held block or station, or eat the held food |
-| 1-0, mouse wheel | Select hotbar slot |
+| Shift | Sprint (uses stamina) |
+| Click an object | Target it: the player walks within reach and works it until it breaks. Click empty ground or press Esc to stop. Holding the button also works |
+| Click with a weapon | Swing or shoot toward the cursor |
+| Click water with a rod | Cast; click again on the bite |
+| Click grass with a hoe | Till it |
+| F or right click | Use the held item: place a block or station, plant seeds, eat |
+| 1-0, two-finger scroll | Select hotbar slot |
+| Pinch, or - / = | Zoom |
 | E | Inventory (click a slot to swap it with the selected hotbar slot) |
 | C | Crafting menu (click a lit recipe to craft) |
 | F5 | Save to `saves/world.ron` (loaded automatically next start) |

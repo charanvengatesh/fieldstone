@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::core::{Behavior, CreatureDef, ObjectDef, Registry, Rng, TerrainDef};
 use crate::player::Player;
 use crate::stats::{Creature, Damage, Stats};
-use crate::world::{CELL, ChunkMap, PLAYER_R, is_solid, slide};
+use crate::world::{CELL, ChunkMap, PLAYER_R, slide, solid_half};
 
 const BITE_RANGE: f32 = CELL * 0.9;
 const BITE_COOLDOWN: f32 = 1.0;
@@ -32,7 +32,7 @@ pub fn think(
     let (player_entity, ptf) = *player;
     let target = ptf.translation.truncate();
     let dt = time.delta_secs();
-    let solid = |c| is_solid(&map, &terrain, &objects, c);
+    let solid = |c| solid_half(&map, &terrain, &objects, c);
     for (c, stats, mut ai, mut tf) in &mut mobs {
         let def = creatures.at(c.0);
         let pos = tf.translation.truncate();

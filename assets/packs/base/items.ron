@@ -9,6 +9,7 @@
     (id: "gold_ore", name: "Gold Ore", shape: "gold_nugget"),
     (id: "iron_ingot", name: "Iron Ingot", shape: "ingot"),
     (id: "berries",  name: "Berries",  shape: "berries", use: Eat(hp: 2.0, stamina: 10.0)),
+    (id: "mushroom", name: "Mushroom", shape: "mushroom_item", use: Eat(hp: 3.0, stamina: 6.0)),
 
     (id: "wall_wood",  name: "Wood Wall",  shape: "wall_wood",  use: Place("wall_wood")),
     (id: "wall_stone", name: "Stone Wall", shape: "wall_stone", use: Place("wall_stone")),

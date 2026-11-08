@@ -48,7 +48,8 @@ pub fn drive(
                         objects.id_of(map.tile(c).unwrap().object.unwrap())
                     );
                     smoke.target = Some(c);
-                    cursor.0 = Some(c);
+                    cursor.cell = Some(c);
+                    cursor.world = Some(crate::world::center_of(c));
                     mouse.press(MouseButton::Left);
                 }
                 None => {
@@ -87,7 +88,7 @@ pub fn drive(
                         && map.tile(*c).is_some_and(|t| t.object.is_none())
                 });
             smoke.place_at = spot;
-            cursor.0 = spot;
+            cursor.cell = spot;
             mouse.press(MouseButton::Right);
         }
         402 => mouse.release(MouseButton::Right),

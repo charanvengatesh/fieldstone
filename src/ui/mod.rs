@@ -5,17 +5,20 @@ pub mod inventory;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::art::{ShapeAssets, swatch};
-use crate::core::{ItemDef, Registry, ShapeDef};
+use crate::art::ShapeAssets;
+use crate::core::{ItemDef, Registry};
 use crate::items::inventory::Stack;
 
-pub const SLOT: f32 = 44.0;
-pub const PANEL_BG: Color = Color::srgba(0.05, 0.08, 0.05, 0.85);
-pub const SLOT_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.35);
-pub const BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.25);
-pub const SELECTED: Color = Color::srgb(1.0, 0.9, 0.4);
+pub const SLOT: f32 = 46.0;
+pub const ICON: f32 = 34.0;
+pub const PANEL_BG: Color = Color::srgba(0.06, 0.09, 0.07, 0.82);
+pub const PANEL_BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.14);
+pub const SLOT_BG: Color = Color::srgba(0.0, 0.0, 0.0, 0.30);
+pub const BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.18);
+pub const SELECTED: Color = Color::srgb(1.0, 0.88, 0.45);
+pub const TEXT_DIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.7);
 
-/// A slot box showing one inventory index: a swatch child and a count child.
+/// A slot box showing one inventory index: an icon child and a count child.
 #[derive(Component)]
 pub struct SlotUi(pub usize);
 #[derive(Component)]
@@ -23,46 +26,57 @@ pub struct Swatch;
 #[derive(Component)]
 pub struct Count;
 
-pub fn slot_node() -> Node {
-    Node {
-        width: Val::Px(SLOT),
-        height: Val::Px(SLOT),
-        border: UiRect::all(Val::Px(2.0)),
-        justify_content: JustifyContent::Center,
-        align_items: AlignItems::Center,
-        ..default()
-    }
+/// Rounded translucent panel used for every HUD surface.
+pub fn panel(node: Node) -> impl Bundle {
+    (
+        Node {
+            border: UiRect::all(Val::Px(1.0)),
+            border_radius: BorderRadius::all(Val::Px(10.0)),
+            ..node
+        },
+        BackgroundColor(PANEL_BG),
+        BorderColor::all(PANEL_BORDER),
+    )
 }
 
 pub fn spawn_slot(parent: &mut ChildSpawnerCommands, index: usize) -> Entity {
     parent
         .spawn((
             SlotUi(index),
-            slot_node(),
+            Node {
+                width: Val::Px(SLOT),
+                height: Val::Px(SLOT),
+                border: UiRect::all(Val::Px(2.0)),
+                border_radius: BorderRadius::all(Val::Px(7.0)),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
             BackgroundColor(SLOT_BG),
             BorderColor::all(BORDER),
         ))
         .with_children(|s| {
             s.spawn((
                 Swatch,
+                ImageNode::new(Handle::default()).with_color(Color::NONE),
                 Node {
-                    width: Val::Px(SLOT * 0.55),
-                    height: Val::Px(SLOT * 0.55),
+                    width: Val::Px(ICON),
+                    height: Val::Px(ICON),
                     ..default()
                 },
-                BackgroundColor(Color::NONE),
             ));
             s.spawn((
                 Count,
                 Text::new(""),
                 TextFont {
-                    font_size: FontSize::Px(13.0),
+                    font_size: FontSize::Px(12.0),
                     ..default()
                 },
+                TextColor(Color::WHITE),
                 Node {
                     position_type: PositionType::Absolute,
-                    right: Val::Px(3.0),
-                    bottom: Val::Px(1.0),
+                    right: Val::Px(4.0),
+                    bottom: Val::Px(2.0),
                     ..default()
                 },
             ));
@@ -74,10 +88,9 @@ pub fn spawn_slot(parent: &mut ChildSpawnerCommands, index: usize) -> Entity {
 #[derive(SystemParam)]
 pub struct SlotPainter<'w, 's> {
     items: Res<'w, Registry<ItemDef>>,
-    shapes: Res<'w, Registry<ShapeDef>>,
     assets: Res<'w, ShapeAssets>,
     boxes: Query<'w, 's, (&'static SlotUi, &'static mut BorderColor, &'static Children)>,
-    swatches: Query<'w, 's, &'static mut BackgroundColor, With<Swatch>>,
+    swatches: Query<'w, 's, &'static mut ImageNode, With<Swatch>>,
     counts: Query<'w, 's, &'static mut Text, With<Count>>,
 }
 
@@ -95,10 +108,14 @@ impl SlotPainter<'_, '_> {
                 BORDER
             });
             for kid in kids {
-                if let Ok(mut bg) = self.swatches.get_mut(*kid) {
-                    bg.0 = stack.map_or(Color::NONE, |s| {
-                        swatch(&self.assets, &self.shapes, &self.items.at(s.item).shape)
-                    });
+                if let Ok(mut img) = self.swatches.get_mut(*kid) {
+                    match stack.and_then(|s| self.assets.icons.get(&self.items.at(s.item).shape)) {
+                        Some(h) => {
+                            img.image = h.clone();
+                            img.color = Color::WHITE;
+                        }
+                        None => img.color = Color::NONE,
+                    }
                 }
                 if let Ok(mut text) = self.counts.get_mut(*kid) {
                     text.0 = stack

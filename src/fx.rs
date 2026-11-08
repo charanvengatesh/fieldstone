@@ -190,7 +190,7 @@ pub fn hover(
     player: Single<&Transform, With<Player>>,
     mut gizmos: Gizmos,
 ) {
-    let Some(cell) = cursor.0 else { return };
+    let Some(cell) = cursor.cell else { return };
     let center = center_of(cell);
     let near = player.translation.truncate().distance(center) <= REACH;
     let color = if near {
