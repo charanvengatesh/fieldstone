@@ -2,6 +2,7 @@ pub mod blend;
 pub mod chunk;
 pub mod collide;
 pub mod stream;
+pub mod tiles;
 pub mod worldgen;
 
 use bevy::prelude::*;
@@ -51,6 +52,13 @@ pub struct WorldPlugin;
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ChunkMap>()
+            .init_resource::<tiles::TileSheets>()
+            .init_resource::<tiles::WaterClock>()
+            .add_systems(
+                PreStartup,
+                tiles::build_sheets.after(crate::art::build_shapes),
+            )
+            .add_systems(Update, tiles::animate_water)
             .add_systems(Startup, stream::setup)
             .add_systems(
                 Update,

@@ -221,7 +221,7 @@ fn loaded_or_rotated(def: Option<&SpriteDef>) -> bool {
 }
 
 /// Reads a PNG relative to whichever pack directory holds it (first match wins).
-fn load_png(packs: &LoadedPacks, rel: &str) -> Option<Image> {
+pub fn load_png(packs: &LoadedPacks, rel: &str) -> Option<Image> {
     for (dir, _) in packs.0.iter().rev() {
         let path = dir.join(rel);
         let Ok(bytes) = std::fs::read(&path) else {
@@ -239,7 +239,7 @@ fn load_png(packs: &LoadedPacks, rel: &str) -> Option<Image> {
             Err(e) => error!("{}: {e}", path.display()),
         }
     }
-    warn!("sprite image '{rel}' not found in any pack");
+    debug!("image '{rel}' not found in any pack");
     None
 }
 

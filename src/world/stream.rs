@@ -115,6 +115,7 @@ pub fn draw(
     material: Res<TerrainMaterial>,
     water: Option<Res<crate::water::WaterHandle>>,
     ground: Option<Res<crate::ground::GroundHandles>>,
+    sheets: Res<super::tiles::TileSheets>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
@@ -152,12 +153,42 @@ pub fn draw(
                 .map(|ch| ch.tiles[local_index(c)].terrain)
         };
         let field = super::blend::chunk_field(pos, &tiles, &neighbor);
-        let mesh = meshes.add(terrain_mesh(&field, &colors));
-        if let Some(ground) = &ground {
-            for e in layers.remove(&pos).unwrap_or_default() {
-                commands.entity(e).despawn();
+        let pixel = assets.pixel() && !sheets.ground.is_empty();
+        let origin_v = (center_of(pos * CHUNK) - CELL / 2.0).extend(0.0);
+        for e in layers.remove(&pos).unwrap_or_default() {
+            commands.entity(e).despawn();
+        }
+        // Pixel mode: tile sheets. The lowest terrain present fills every cell; the rest
+        // draw their corner-mask tiles on top in priority order.
+        let (mesh, pixel_material) = if pixel {
+            let order = super::tiles::present(&field);
+            let base = order[0];
+            let mut spawned = Vec::new();
+            for (k, &t) in order.iter().enumerate().skip(1) {
+                let Some(m) = super::tiles::tile_mesh(&field, t, false) else {
+                    continue;
+                };
+                let (material, is_water) = sheet_material(&sheets, t);
+                let mut e = commands.spawn((
+                    Mesh2d(meshes.add(m)),
+                    MeshMaterial2d(material),
+                    Transform::from_translation(origin_v + Vec3::Z * (0.01 + 0.005 * k as f32)),
+                ));
+                if is_water {
+                    e.insert(super::tiles::WaterLayer(t));
+                }
+                spawned.push(e.id());
             }
-            let origin_v = (center_of(pos * CHUNK) - CELL / 2.0).extend(0.0);
+            if !spawned.is_empty() {
+                layers.insert(pos, spawned);
+            }
+            let m = super::tiles::tile_mesh(&field, base, true).expect("base tile mesh");
+            let (material, is_water) = sheet_material(&sheets, base);
+            (meshes.add(m), Some((material, is_water, base)))
+        } else {
+            (meshes.add(terrain_mesh(&field, &colors)), None)
+        };
+        if let Some(ground) = ground.as_ref().filter(|_| !pixel) {
             let spawned: Vec<Entity> = crate::ground::layer_meshes(&field, &colors)
                 .into_iter()
                 .enumerate()
@@ -178,7 +209,7 @@ pub fn draw(
                 layers.insert(pos, spawned);
             }
         }
-        if let Some(water) = &water {
+        if let Some(water) = water.as_ref().filter(|_| !pixel) {
             let wm = crate::water::water_mesh(
                 &field,
                 |t| wet.get(t as usize).copied().unwrap_or(false),
@@ -225,26 +256,45 @@ pub fn draw(
                     .map(|o| (cell, o))
             })
             .collect();
-        match entities.get(&pos) {
-            Some(&e) => {
-                commands.entity(e).insert(Mesh2d(mesh));
-            }
+        // Which material type the base uses depends on the mode (set once at startup).
+        enum BaseMat {
+            Color(Handle<ColorMaterial>),
+            Ground(Handle<crate::ground::GroundMaterial>),
+        }
+        let base_material = match (&pixel_material, &ground) {
+            (Some((m, _, _)), _) => BaseMat::Color(m.clone()),
+            (None, Some(g)) => BaseMat::Ground(g.base.clone()),
+            (None, None) => BaseMat::Color(material.0.clone()),
+        };
+        let base_entity = match entities.get(&pos) {
+            Some(&e) => e,
             None => {
-                let mut e = commands.spawn((
-                    ChunkMesh(pos),
-                    Mesh2d(mesh),
-                    Transform::from_translation(origin.extend(0.0)),
-                ));
-                match &ground {
-                    Some(g) => {
-                        e.insert(MeshMaterial2d(g.base.clone()));
-                    }
-                    None => {
-                        e.insert(MeshMaterial2d(material.0.clone()));
-                    }
-                }
-                let e = e.id();
+                let e = commands
+                    .spawn((
+                        ChunkMesh(pos),
+                        Transform::from_translation(origin.extend(0.0)),
+                    ))
+                    .id();
                 entities.insert(pos, e);
+                e
+            }
+        };
+        let mut ec = commands.entity(base_entity);
+        ec.insert(Mesh2d(mesh));
+        match base_material {
+            BaseMat::Color(h) => {
+                ec.insert(MeshMaterial2d(h));
+            }
+            BaseMat::Ground(h) => {
+                ec.insert(MeshMaterial2d(h));
+            }
+        }
+        match &pixel_material {
+            Some((_, true, t)) => {
+                ec.insert(super::tiles::WaterLayer(*t));
+            }
+            _ => {
+                ec.remove::<super::tiles::WaterLayer>();
             }
         }
         for (cell, obj) in new_objects {
@@ -361,6 +411,14 @@ pub fn put_object(
     map.objects.insert(cell, e);
 }
 
+/// Material for a terrain's tile sheet (first water frame for water) and whether it is water.
+fn sheet_material(sheets: &super::tiles::TileSheets, t: u16) -> (Handle<ColorMaterial>, bool) {
+    if let Some(frames) = sheets.water.get(&t) {
+        return (frames[0].clone(), true);
+    }
+    (sheets.ground.get(&t).cloned().unwrap_or_default(), false)
+}
+
 /// Where an object draws: the cell center nudged by its `jitter`, deterministic per cell, so
 /// forests and scattered decor stop lining up on the grid.
 pub fn object_pos(cell: IVec2, def: &ObjectDef) -> Vec2 {
@@ -369,5 +427,6 @@ pub fn object_pos(cell: IVec2, def: &ObjectDef) -> Vec2 {
     }
     let dx = crate::core::hash01(5, cell.x, cell.y, 21) - 0.5;
     let dy = crate::core::hash01(5, cell.x, cell.y, 22) - 0.5;
-    center_of(cell) + Vec2::new(dx, dy) * 2.0 * def.jitter * CELL
+    // Whole units so pixel art stays on the texel grid.
+    (center_of(cell) + Vec2::new(dx, dy) * 2.0 * def.jitter * CELL).round()
 }
