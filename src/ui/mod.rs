@@ -179,6 +179,7 @@ impl Plugin for UiPlugin {
                 container::paint.after(inventory::toggle),
                 craft_menu::toggle,
                 craft_menu::paint,
+                craft_menu::scroll,
                 pause::toggle,
             ),
         );

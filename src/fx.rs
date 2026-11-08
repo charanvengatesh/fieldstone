@@ -9,7 +9,6 @@ use crate::core::{ObjectDef, Registry, Rng, ShapeDef, TerrainDef};
 use crate::daylight::darkness;
 use crate::items::interact::{Damage, ObjectBroken, REACH};
 use crate::player::{Cursor, Player};
-use crate::world::chunk::{CHUNK, TILES};
 use crate::world::{CELL, ChunkMap, center_of};
 
 /// Shrinks to nothing over `total` seconds while drifting, then despawns.
@@ -155,15 +154,14 @@ pub fn glows(
     if let Some(mut m) = materials.get_mut(&material.0) {
         m.color = GLOW_COLOR.with_alpha(GLOW_ALPHA * darkness(clock.day_frac()));
     }
-    let mut live: HashMap<IVec2, f32> = HashMap::default();
-    for (pos, chunk) in &map.chunks {
-        for i in 0..TILES {
-            if let Some(r) = chunk.tiles[i].object.and_then(|o| objects.at(o).light) {
-                let cell = pos * CHUNK + IVec2::new(i as i32 % CHUNK, i as i32 / CHUNK);
-                live.insert(cell, r);
-            }
-        }
-    }
+    let live: HashMap<IVec2, f32> = map
+        .lights
+        .iter()
+        .filter_map(|c| {
+            let r = map.tile(*c)?.object.and_then(|o| objects.at(o).light)?;
+            Some((*c, r))
+        })
+        .collect();
     let stale: Vec<IVec2> = glows
         .0
         .keys()

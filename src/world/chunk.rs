@@ -44,6 +44,8 @@ pub struct ChunkMap {
     pub water: HashMap<IVec2, Entity>,
     /// Per-terrain edge layers per chunk (see `ground.rs`).
     pub layers: HashMap<IVec2, Vec<Entity>>,
+    /// Cells holding a light-giving object, kept current by `stream`.
+    pub lights: bevy::platform::collections::HashSet<IVec2>,
 }
 
 pub fn chunk_of(cell: IVec2) -> IVec2 {

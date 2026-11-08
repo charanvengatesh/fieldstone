@@ -16,6 +16,8 @@ use crate::player::Player;
 const LOAD_RADIUS: i32 = 2;
 const UNLOAD_RADIUS: i32 = 3;
 const LOADS_PER_FRAME: usize = 2;
+/// Dirty chunks re-meshed per frame; the rest wait a frame or two.
+const REBUILDS_PER_FRAME: usize = 2;
 
 #[derive(Component)]
 #[allow(dead_code)] // handy when inspecting entities
@@ -92,7 +94,9 @@ fn unload(map: &mut ChunkMap, saved: &mut SavedChunks, pos: IVec2, commands: &mu
     let origin = pos * CHUNK;
     for y in 0..CHUNK {
         for x in 0..CHUNK {
-            if let Some(e) = map.objects.remove(&(origin + IVec2::new(x, y))) {
+            let cell = origin + IVec2::new(x, y);
+            map.lights.remove(&cell);
+            if let Some(e) = map.objects.remove(&cell) {
                 commands.entity(e).despawn();
             }
         }
@@ -101,6 +105,7 @@ fn unload(map: &mut ChunkMap, saved: &mut SavedChunks, pos: IVec2, commands: &mu
 
 /// Rebuilds meshes for dirty chunks and spawns missing object entities.
 pub fn draw(
+    player: Single<&Transform, With<Player>>,
     mut map: ResMut<ChunkMap>,
     terrain: Res<Registry<TerrainDef>>,
     objects: Res<Registry<ObjectDef>>,
@@ -121,18 +126,23 @@ pub fn draw(
         .iter()
         .map(|(_, t)| t.fish_table.is_some())
         .collect();
+    let focus = chunk_of(cell_of(player.translation.truncate()));
     let ChunkMap {
         chunks,
         entities,
         objects: obj_entities,
         water: water_entities,
         layers,
+        lights,
     } = &mut *map;
-    let dirty: Vec<IVec2> = chunks
+    let mut dirty: Vec<IVec2> = chunks
         .iter()
         .filter(|(_, c)| c.dirty)
         .map(|(p, _)| *p)
         .collect();
+    // Rebuilding is the expensive part of streaming; spread it out, nearest chunk first.
+    dirty.sort_by_key(|p| (*p - focus).abs().max_element());
+    dirty.truncate(REBUILDS_PER_FRAME);
     for pos in dirty {
         chunks.get_mut(&pos).unwrap().dirty = false;
         let tiles = chunks[&pos].tiles;
@@ -141,13 +151,14 @@ pub fn draw(
                 .get(&chunk_of(c))
                 .map(|ch| ch.tiles[local_index(c)].terrain)
         };
-        let mesh = meshes.add(terrain_mesh(pos, &tiles, &colors, neighbor));
+        let field = super::blend::chunk_field(pos, &tiles, &neighbor);
+        let mesh = meshes.add(terrain_mesh(&field, &colors));
         if let Some(ground) = &ground {
             for e in layers.remove(&pos).unwrap_or_default() {
                 commands.entity(e).despawn();
             }
             let origin_v = (center_of(pos * CHUNK) - CELL / 2.0).extend(0.0);
-            let spawned: Vec<Entity> = crate::ground::layer_meshes(pos, &tiles, &colors, neighbor)
+            let spawned: Vec<Entity> = crate::ground::layer_meshes(&field, &colors)
                 .into_iter()
                 .enumerate()
                 .map(|(k, (_, m))| {
@@ -169,8 +180,7 @@ pub fn draw(
         }
         if let Some(water) = &water {
             let wm = crate::water::water_mesh(
-                pos,
-                &tiles,
+                &field,
                 |t| wet.get(t as usize).copied().unwrap_or(false),
                 |t| {
                     colors
@@ -178,7 +188,6 @@ pub fn draw(
                         .copied()
                         .unwrap_or([0.0, 0.0, 1.0, 1.0])
                 },
-                neighbor,
             );
             match (wm, water_entities.get(&pos)) {
                 (Some(m), Some(&e)) => {
@@ -240,6 +249,9 @@ pub fn draw(
         }
         for (cell, obj) in new_objects {
             let def = objects.at(obj);
+            if def.light.is_some() {
+                lights.insert(cell);
+            }
             let shape = shapes.idx(&def.shape);
             let e = crate::art::spawn_shape(
                 &mut commands,
@@ -252,22 +264,14 @@ pub fn draw(
     }
 }
 
-/// Width of the anti-alias band between terrains, in weight units (0.5 is the boundary).
+/// Width of the anti-alias band between terrains in the opaque base mesh (the edge layers on
+/// top do the real per-pixel cut; this just keeps the base from showing hard seams).
 const EDGE: f32 = 0.06;
 
-/// Ground mesh on the dual grid: each cell spans four tile centers and is tessellated into
-/// `SUB x SUB` quads whose vertices take the heaviest terrain of the smooth field in
-/// [`super::blend`], with a thin blend at the contour. Grain is hashed on a shared lattice so
-/// it is continuous across cells and chunks.
-fn terrain_mesh(
-    pos: IVec2,
-    tiles: &[Tile; TILES],
-    colors: &[[f32; 4]],
-    tile_at: impl Fn(IVec2) -> Option<u16>,
-) -> Mesh {
-    use super::blend::{SUB, terrain_lookup, weights_at};
-    let origin = pos * CHUNK;
-    let terrain_of = terrain_lookup(pos, tiles, &tile_at);
+/// Opaque ground mesh: each vertex takes the heaviest terrain of the shared field with a thin
+/// blend toward the runner-up.
+fn terrain_mesh(field: &[super::blend::Weights], colors: &[[f32; 4]]) -> Mesh {
+    use super::blend::{SUB, VERTS, cell_vertex, push_cell_indices};
     let color = |t: u16| {
         colors
             .get(t as usize)
@@ -278,25 +282,23 @@ fn terrain_mesh(
         let x = x.clamp(0.0, 1.0);
         x * x * (3.0 - 2.0 * x)
     };
-    let verts_per_cell = ((SUB + 1) * (SUB + 1)) as usize;
-    let mut positions = Vec::with_capacity(TILES * verts_per_cell);
-    let mut cols = Vec::with_capacity(TILES * verts_per_cell);
+    let mut positions = Vec::with_capacity(TILES * VERTS);
+    let mut cols = Vec::with_capacity(TILES * VERTS);
     let mut idx = Vec::with_capacity(TILES * (SUB * SUB * 6) as usize);
     for ty in 0..CHUNK {
         for tx in 0..CHUNK {
-            let cell = origin + IVec2::new(tx, ty);
+            let cell_i = (ty * CHUNK + tx) as usize * VERTS;
             let b = positions.len() as u32;
             for sy in 0..=SUB {
                 for sx in 0..=SUB {
-                    let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
-                    let p = cell.as_vec2() + Vec2::new(u, v);
-                    let w = weights_at(p, &terrain_of);
-                    let a = color(w[0].0);
-                    let c = match w.get(1) {
+                    let w = &field[cell_i + (sy * (SUB + 1) + sx) as usize];
+                    let (top, tw) = w.first();
+                    let a = color(top);
+                    let c = match w.second() {
                         None => a,
-                        Some(second) => {
-                            let bcol = color(second.0);
-                            let m = smooth((w[0].1 - second.1) / (2.0 * EDGE) + 0.5);
+                        Some((second, sw)) => {
+                            let bcol = color(second);
+                            let m = smooth((tw - sw) / (2.0 * EDGE) + 0.5);
                             [
                                 bcol[0] + (a[0] - bcol[0]) * m,
                                 bcol[1] + (a[1] - bcol[1]) * m,
@@ -305,21 +307,11 @@ fn terrain_mesh(
                             ]
                         }
                     };
-                    positions.push([
-                        (tx as f32 + 0.5 + u) * CELL,
-                        (ty as f32 + 0.5 + v) * CELL,
-                        0.0,
-                    ]);
+                    positions.push(cell_vertex(tx, ty, sx, sy));
                     cols.push(c);
                 }
             }
-            let wv = (SUB + 1) as u32;
-            for sy in 0..SUB as u32 {
-                for sx in 0..SUB as u32 {
-                    let i0 = b + sy * wv + sx;
-                    idx.extend([i0, i0 + 1, i0 + wv + 1, i0, i0 + wv + 1, i0 + wv]);
-                }
-            }
+            push_cell_indices(&mut idx, b);
         }
     }
     Mesh::new(
@@ -334,6 +326,7 @@ fn terrain_mesh(
 /// Removes the object entity on a cell, if any, and clears the tile's object.
 pub fn clear_object(map: &mut ChunkMap, cell: IVec2, commands: &mut Commands) -> Option<u16> {
     let old = map.set_object(cell, None)?.object;
+    map.lights.remove(&cell);
     if let Some(e) = map.objects.remove(&cell) {
         commands.entity(e).despawn();
     }
@@ -355,6 +348,9 @@ pub fn put_object(
         return;
     }
     let def = objects.at(object);
+    if def.light.is_some() {
+        map.lights.insert(cell);
+    }
     let shape = shapes.idx(&def.shape);
     let e = crate::art::spawn_shape(
         commands,

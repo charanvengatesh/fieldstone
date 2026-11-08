@@ -100,12 +100,12 @@ pub fn spawn(mut commands: Commands) {
                 }
             });
         });
-    // Vitals, bottom left.
+    // Vitals, bottom left, above the hotbar's height so narrow windows never overlap.
     commands
         .spawn(panel(Node {
             position_type: PositionType::Absolute,
             left: Val::Px(12.0),
-            bottom: Val::Px(12.0),
+            bottom: Val::Px(12.0 + SLOT + 40.0),
             padding: UiRect::all(Val::Px(10.0)),
             flex_direction: FlexDirection::Column,
             row_gap: Val::Px(5.0),
@@ -116,26 +116,25 @@ pub fn spawn(mut commands: Commands) {
             bar(p, HpBar, Color::srgb(0.88, 0.30, 0.34));
             bar(p, StaminaBar, Color::srgb(0.40, 0.78, 0.36));
         });
-    commands.spawn((
-        StatusText,
-        small("", 18.0, Color::WHITE),
-        Node {
+    commands
+        .spawn(Node {
             position_type: PositionType::Absolute,
             bottom: Val::Px(12.0 + SLOT + 48.0),
-            left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-40.0)),
+            width: Val::Percent(100.0),
+            justify_content: JustifyContent::Center,
             ..default()
-        },
-    ));
+        })
+        .with_children(|p| {
+            p.spawn((StatusText, small("", 18.0, Color::WHITE)));
+        });
     commands
         .spawn((
             TitleCard(6.0),
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Percent(28.0),
-                left: Val::Percent(50.0),
-                margin: UiRect::left(Val::Px(-230.0)),
-                width: Val::Px(460.0),
+                width: Val::Percent(100.0),
+                padding: UiRect::axes(Val::Px(20.0), Val::Px(0.0)),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::Center,
                 row_gap: Val::Px(8.0),
@@ -155,19 +154,25 @@ pub fn spawn(mut commands: Commands) {
                 TEXT_DIM,
             ));
         });
-    commands.spawn((
-        ToastText,
-        small("", 18.0, Color::WHITE),
-        Node {
+    commands
+        .spawn(Node {
             position_type: PositionType::Absolute,
             top: Val::Px(18.0),
-            left: Val::Percent(50.0),
-            margin: UiRect::left(Val::Px(-260.0)),
-            width: Val::Px(520.0),
+            width: Val::Percent(100.0),
             justify_content: JustifyContent::Center,
+            padding: UiRect::axes(Val::Px(20.0), Val::Px(0.0)),
             ..default()
-        },
-    ));
+        })
+        .with_children(|p| {
+            p.spawn((
+                ToastText,
+                small("", 18.0, Color::WHITE),
+                Node {
+                    max_width: Val::Px(620.0),
+                    ..default()
+                },
+            ));
+        });
     commands
         .spawn((
             EndingCard,

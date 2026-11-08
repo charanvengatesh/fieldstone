@@ -9,8 +9,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dPlugin};
 
-use crate::world::blend::{SUB, terrain_lookup, weights_at};
-use crate::world::chunk::{CELL, CHUNK, TILES, Tile};
+use crate::world::blend::{SUB, VERTS, Weights, cell_vertex, push_cell_indices};
+use crate::world::chunk::CHUNK;
 
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub struct GroundMaterial {
@@ -48,24 +48,14 @@ pub fn setup(mut commands: Commands, mut materials: ResMut<Assets<GroundMaterial
     });
 }
 
-/// One layer mesh per terrain that appears anywhere near this chunk, in priority order.
-/// Each returns `(terrain, mesh)`; cells where the terrain's weight never rises above a
-/// trace are skipped so layers stay small.
-pub fn layer_meshes(
-    pos: IVec2,
-    tiles: &[Tile; TILES],
-    colors: &[[f32; 4]],
-    tile_at: impl Fn(IVec2) -> Option<u16>,
-) -> Vec<(u16, Mesh)> {
-    let origin = pos * CHUNK;
-    let terrain_of = terrain_lookup(pos, tiles, &tile_at);
-    // Terrains present in the chunk plus a one-cell margin.
+/// One layer mesh per terrain that appears anywhere in the chunk's field, in priority order.
+/// Cells where the terrain's weight never rises above a trace are skipped so layers stay small.
+pub fn layer_meshes(field: &[Weights], colors: &[[f32; 4]]) -> Vec<(u16, Mesh)> {
     let mut present: Vec<u16> = Vec::new();
-    for y in -1..=CHUNK {
-        for x in -1..=CHUNK {
-            let t = terrain_of(origin + IVec2::new(x, y));
-            if !present.contains(&t) {
-                present.push(t);
+    for w in field {
+        for (t, _) in w.iter() {
+            if !present.contains(t) {
+                present.push(*t);
             }
         }
     }
@@ -73,21 +63,6 @@ pub fn layer_meshes(
         return Vec::new();
     }
     present.sort_unstable();
-    // Cache the field once per vertex, then split into layers.
-    let n = ((SUB + 1) * (SUB + 1)) as usize;
-    let mut field: Vec<Vec<(u16, f32)>> = Vec::with_capacity(TILES * n);
-    for ty in 0..CHUNK {
-        for tx in 0..CHUNK {
-            let cell = origin + IVec2::new(tx, ty);
-            for sy in 0..=SUB {
-                for sx in 0..=SUB {
-                    let p =
-                        cell.as_vec2() + Vec2::new(sx as f32 / SUB as f32, sy as f32 / SUB as f32);
-                    field.push(weights_at(p, &terrain_of));
-                }
-            }
-        }
-    }
     let mut out = Vec::new();
     for &t in &present {
         let color = colors
@@ -99,42 +74,20 @@ pub fn layer_meshes(
         let mut idx = Vec::new();
         for ty in 0..CHUNK {
             for tx in 0..CHUNK {
-                let cell_i = (ty * CHUNK + tx) as usize * n;
-                let weights: Vec<f32> = (0..n)
-                    .map(|k| {
-                        field[cell_i + k]
-                            .iter()
-                            .find(|(id, _)| *id == t)
-                            .map_or(0.0, |e| e.1)
-                    })
-                    .collect();
-                if weights.iter().all(|w| *w < 0.03) {
+                let cell_i = (ty * CHUNK + tx) as usize * VERTS;
+                let cell = &field[cell_i..cell_i + VERTS];
+                if cell.iter().all(|w| w.of(t) < 0.03) {
                     continue;
                 }
                 let b = positions.len() as u32;
                 for sy in 0..=SUB {
                     for sx in 0..=SUB {
-                        let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
-                        positions.push([
-                            (tx as f32 + 0.5 + u) * CELL,
-                            (ty as f32 + 0.5 + v) * CELL,
-                            0.0,
-                        ]);
-                        cols.push([
-                            color[0],
-                            color[1],
-                            color[2],
-                            weights[(sy * (SUB + 1) + sx) as usize],
-                        ]);
+                        positions.push(cell_vertex(tx, ty, sx, sy));
+                        let w = cell[(sy * (SUB + 1) + sx) as usize].of(t);
+                        cols.push([color[0], color[1], color[2], w]);
                     }
                 }
-                let wv = (SUB + 1) as u32;
-                for sy in 0..SUB as u32 {
-                    for sx in 0..SUB as u32 {
-                        let i0 = b + sy * wv + sx;
-                        idx.extend([i0, i0 + 1, i0 + wv + 1, i0, i0 + wv + 1, i0 + wv]);
-                    }
-                }
+                push_cell_indices(&mut idx, b);
             }
         }
         if positions.is_empty() {

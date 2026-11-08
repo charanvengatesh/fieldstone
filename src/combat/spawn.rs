@@ -146,19 +146,11 @@ pub fn natural_spawns(
 
 /// Whether any light-giving object covers `cell`.
 pub fn lit(map: &ChunkMap, objects: &Registry<ObjectDef>, cell: IVec2) -> bool {
-    let max_r = objects
-        .iter()
-        .filter_map(|(_, o)| o.light)
-        .fold(0.0f32, f32::max)
-        .ceil() as i32;
-    (-max_r..=max_r).any(|dy| {
-        (-max_r..=max_r).any(|dx| {
-            let c = cell + IVec2::new(dx, dy);
-            map.tile(c)
-                .and_then(|t| t.object)
-                .and_then(|o| objects.at(o).light)
-                .is_some_and(|r| (c - cell).as_vec2().length() <= r)
-        })
+    map.lights.iter().any(|c| {
+        map.tile(*c)
+            .and_then(|t| t.object)
+            .and_then(|o| objects.at(o).light)
+            .is_some_and(|r| (*c - cell).as_vec2().length() <= r)
     })
 }
 

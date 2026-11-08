@@ -32,23 +32,27 @@ pub fn spawn(
                 top: Val::Px(16.0),
                 right: Val::Px(16.0),
                 padding: UiRect::all(Val::Px(10.0)),
-                flex_direction: FlexDirection::Column,
+                display: Display::Grid,
+                grid_template_columns: RepeatedGridTrack::px(2, 250.0),
                 row_gap: Val::Px(3.0),
+                column_gap: Val::Px(8.0),
                 max_height: Val::Percent(85.0),
                 overflow: Overflow::scroll_y(),
                 ..default()
             }),
+            ScrollPosition::default(),
             Visibility::Hidden,
         ))
         .with_children(|p| {
             p.spawn((
-                Text::new("Crafting"),
+                Text::new("Crafting   (scroll for more)"),
                 TextFont {
                     font_size: FontSize::Px(16.0),
                     ..default()
                 },
                 TextColor(TEXT_DIM),
                 Node {
+                    grid_column: GridPlacement::span(2),
                     margin: UiRect::bottom(Val::Px(6.0)),
                     ..default()
                 },
@@ -124,6 +128,20 @@ pub fn spawn(
                     move |_: On<PointerClick>, mut w: MessageWriter<CraftRequest>| {
                         w.write(CraftRequest(i));
                     },
+                )
+                .observe(
+                    |over: On<PointerOver>, mut bg: Query<&mut BackgroundColor>| {
+                        if let Ok(mut b) = bg.get_mut(over.entity) {
+                            b.0 = Color::srgba(1.0, 1.0, 1.0, 0.08);
+                        }
+                    },
+                )
+                .observe(
+                    |out: On<PointerOut>, mut bg: Query<&mut BackgroundColor>| {
+                        if let Ok(mut b) = bg.get_mut(out.entity) {
+                            b.0 = Color::NONE;
+                        }
+                    },
                 );
             }
         });
@@ -178,5 +196,26 @@ pub fn paint(
                 }
             }
         }
+    }
+}
+
+/// Two-finger scroll moves the list while the pointer is over it (the hotbar ignores the
+/// wheel at the same time, see `select_slot`).
+pub fn scroll(
+    mut wheel: MessageReader<bevy::input::mouse::MouseWheel>,
+    ui: Res<crate::core::UiHovered>,
+    mut panel: Single<(&Visibility, &mut ScrollPosition), With<CraftPanel>>,
+) {
+    let (vis, pos) = &mut *panel;
+    if **vis == Visibility::Hidden || !ui.0 {
+        wheel.clear();
+        return;
+    }
+    for w in wheel.read() {
+        let step = match w.unit {
+            bevy::input::mouse::MouseScrollUnit::Line => 30.0,
+            bevy::input::mouse::MouseScrollUnit::Pixel => 1.0,
+        };
+        pos.0.y = (pos.0.y - w.y * step).max(0.0);
     }
 }
