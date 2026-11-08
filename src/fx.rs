@@ -184,7 +184,7 @@ pub fn glows(
                 Glow,
                 Mesh2d(assets.unit_circle.clone()),
                 MeshMaterial2d(material.0.clone()),
-                Transform::from_translation(center_of(cell).extend(11.0))
+                Transform::from_translation(center_of(cell).extend(31.0))
                     .with_scale(Vec3::splat(r * CELL)),
             ))
             .id();

@@ -129,6 +129,18 @@ impl SlotPainter<'_, '_> {
     }
 }
 
+/// Mirrors the picking hover map into `UiHovered` so world clicks ignore the UI.
+pub fn track_hover(
+    hover: Res<bevy::picking::hover::HoverMap>,
+    nodes: Query<(), With<Node>>,
+    mut ui: ResMut<crate::core::UiHovered>,
+) {
+    ui.0 = hover
+        .values()
+        .flat_map(|m| m.keys())
+        .any(|e| nodes.contains(*e));
+}
+
 pub fn flip(vis: &mut Visibility) {
     *vis = if *vis == Visibility::Hidden {
         Visibility::Visible
@@ -151,6 +163,7 @@ impl Plugin for UiPlugin {
                 pause::spawn,
             ),
         )
+        .add_systems(Update, track_hover.before(crate::player::PlayerSet))
         .add_systems(
             Update,
             (

@@ -36,6 +36,7 @@ pub fn cast_and_catch(
     tables: Res<Registry<FishTableDef>>,
     map: Res<ChunkMap>,
     mut status: ResMut<FishingStatus>,
+    ui: Res<crate::core::UiHovered>,
     mut player: Single<(Entity, &Transform, &Inventory, Option<&mut Fishing>), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
     mut xp: MessageWriter<GainXp>,
@@ -57,7 +58,7 @@ pub fn cast_and_catch(
     match fishing {
         None => {
             status.0 = None;
-            if !mouse.just_pressed(MouseButton::Left) {
+            if !mouse.just_pressed(MouseButton::Left) || ui.0 {
                 return;
             }
             let Some(cell) = cursor.cell.filter(|c| in_reach(pos, *c)) else {

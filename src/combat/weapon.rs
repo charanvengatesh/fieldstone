@@ -35,14 +35,15 @@ pub fn attack(
     assets: Res<ShapeAssets>,
     map: Res<ChunkMap>,
     mut player: Single<(&Transform, &Inventory, &mut Stats, &mut Cooldown), With<Player>>,
-    mobs: Query<(Entity, &Transform), With<Creature>>,
+    mobs: Query<(Entity, &Transform), (With<Creature>, Without<Player>)>,
     mut damage: MessageWriter<Damage>,
     mut swings: MessageWriter<Swing>,
+    ui: Res<crate::core::UiHovered>,
     mut commands: Commands,
 ) {
     let (tf, inv, stats, cd) = &mut *player;
     cd.0 = (cd.0 - time.delta_secs()).max(0.0);
-    if !mouse.just_pressed(MouseButton::Left) || cd.0 > 0.0 {
+    if !mouse.just_pressed(MouseButton::Left) || cd.0 > 0.0 || ui.0 {
         return;
     }
     let Some(Use::Weapon {
@@ -109,7 +110,7 @@ pub fn fly(
     terrain: Res<Registry<TerrainDef>>,
     objects: Res<Registry<ObjectDef>>,
     mut shots: Query<(Entity, &mut Transform, &mut Projectile)>,
-    mobs: Query<(Entity, &Transform), (With<Creature>, Without<Projectile>)>,
+    mobs: Query<(Entity, &Transform), (With<Creature>, Without<Projectile>, Without<Player>)>,
     mut damage: MessageWriter<Damage>,
     mut commands: Commands,
 ) {

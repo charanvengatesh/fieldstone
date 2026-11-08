@@ -30,6 +30,12 @@ use crate::world::cell_of;
 use crate::world::worldgen::WorldGen;
 
 fn main() {
+    // Content and player files are found relative to the game folder, not wherever the
+    // process was launched from (Finder, a zip, a terminal elsewhere).
+    let root = core::paths::root();
+    if let Err(e) = std::env::set_current_dir(&root) {
+        eprintln!("could not enter {}: {e}", root.display());
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let headless = args.iter().any(|a| a == "--headless-smoke");
     let options = Options {

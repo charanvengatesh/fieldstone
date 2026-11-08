@@ -2,7 +2,6 @@
 //! generation. Tiles are stored through a per-file id table so saves survive pack reordering.
 
 use std::fs;
-use std::path::Path;
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
@@ -17,8 +16,6 @@ use crate::player::Player;
 use crate::stats::{Progress, Stats};
 use crate::world::chunk::{TILES, Tile};
 use crate::world::{ChunkMap, worldgen::WorldGen};
-
-pub const SAVE_PATH: &str = "saves/world.ron";
 
 /// Set by the pause menu: `.0` save now, `.1` exit after saving.
 #[derive(Resource, Default)]
@@ -122,15 +119,15 @@ pub fn save(
         ids,
         chunks,
     };
+    let path = super::paths::save_file();
     let result = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default())
         .map_err(|e| e.to_string())
         .and_then(|text| {
-            fs::create_dir_all(Path::new(SAVE_PATH).parent().unwrap())
-                .map_err(|e| e.to_string())?;
-            fs::write(SAVE_PATH, text).map_err(|e| e.to_string())
+            fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+            fs::write(&path, text).map_err(|e| e.to_string())
         });
     match result {
-        Ok(()) => info!("saved to {SAVE_PATH}"),
+        Ok(()) => info!("saved to {}", path.display()),
         Err(e) => error!("save failed: {e}"),
     }
 }
@@ -148,11 +145,12 @@ pub struct Loaded {
 }
 
 pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Option<Loaded> {
-    let text = fs::read_to_string(SAVE_PATH).ok()?;
+    let path = super::paths::save_file();
+    let text = fs::read_to_string(&path).ok()?;
     let file: SaveFile = match ron::from_str(&text) {
         Ok(f) => f,
         Err(e) => {
-            error!("{SAVE_PATH}: {e}; starting a new world");
+            error!("{}: {e}; starting a new world", path.display());
             return None;
         }
     };
@@ -167,7 +165,7 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
         }
         chunks.insert(IVec2::new(x, y), arr);
     }
-    info!("loaded {SAVE_PATH}");
+    info!("loaded {}", path.display());
     Some(Loaded {
         seed: file.seed,
         time: file.time,

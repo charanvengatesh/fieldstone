@@ -26,7 +26,7 @@ pub fn spawn(
             Overlay,
             Mesh2d(quad),
             MeshMaterial2d(material.clone()),
-            Transform::from_xyz(0.0, 0.0, -990.0),
+            Transform::from_xyz(0.0, 0.0, 30.0),
         ))
         .id();
     commands.entity(*cam).add_child(overlay);

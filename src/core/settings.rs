@@ -6,8 +6,6 @@ use std::fs;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_PATH: &str = "settings.ron";
-
 #[derive(Resource, Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
     pub zoom: f32,
@@ -189,11 +187,12 @@ pub fn parse_key(name: &str) -> Option<KeyCode> {
 }
 
 pub fn load() -> Settings {
-    match fs::read_to_string(SETTINGS_PATH) {
+    let path = super::paths::settings_file();
+    match fs::read_to_string(&path) {
         Ok(text) => match ron::from_str::<Settings>(&text) {
             Ok(s) => s,
             Err(e) => {
-                error!("{SETTINGS_PATH}: {e}; using defaults");
+                error!("{}: {e}; using defaults", path.display());
                 Settings::default()
             }
         },
@@ -206,10 +205,11 @@ pub fn load() -> Settings {
 }
 
 pub fn save(settings: &Settings) {
+    let path = super::paths::settings_file();
     match ron::ser::to_string_pretty(settings, ron::ser::PrettyConfig::default()) {
         Ok(text) => {
-            if let Err(e) = fs::write(SETTINGS_PATH, text) {
-                error!("could not write {SETTINGS_PATH}: {e}");
+            if let Err(e) = fs::write(&path, text) {
+                error!("could not write {}: {e}", path.display());
             }
         }
         Err(e) => error!("settings: {e}"),

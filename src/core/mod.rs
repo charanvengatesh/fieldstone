@@ -1,5 +1,6 @@
 pub mod defs;
 pub mod packs;
+pub mod paths;
 pub mod registry;
 pub mod save;
 pub mod settings;
@@ -50,6 +51,10 @@ impl Rng {
     }
 }
 
+/// True while the pointer is over any UI node; world click handlers stay out of the way.
+#[derive(Resource, Default)]
+pub struct UiHovered(pub bool);
+
 /// Gameplay stops while true; the clock and every gameplay set are gated on it.
 #[derive(Resource, Default)]
 pub struct Paused(pub bool);
@@ -83,6 +88,7 @@ impl Plugin for CorePlugin {
         app.init_resource::<time::GameTime>()
             .init_resource::<Rng>()
             .init_resource::<Paused>()
+            .init_resource::<UiHovered>()
             .init_resource::<Toast>()
             .init_resource::<Ending>()
             .add_systems(Update, (time::tick, toast_tick).run_if(not_paused));

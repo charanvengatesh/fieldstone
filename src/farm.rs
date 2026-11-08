@@ -24,9 +24,10 @@ pub fn till(
     items: Res<Registry<ItemDef>>,
     terrain: Res<Registry<TerrainDef>>,
     mut map: ResMut<ChunkMap>,
+    ui: Res<crate::core::UiHovered>,
     player: Single<(&Transform, &Inventory), With<Player>>,
 ) {
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !mouse.just_pressed(MouseButton::Left) || ui.0 {
         return;
     }
     let (tf, inv) = *player;

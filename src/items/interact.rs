@@ -11,7 +11,9 @@ use super::inventory::{HOTBAR, Inventory};
 use crate::art::ShapeAssets;
 use crate::core::settings::Keys;
 use crate::core::time::{DAY_SECS, GameTime};
-use crate::core::{ItemDef, LootDef, ObjectDef, Registry, ShapeDef, TerrainDef, Toast, Use};
+use crate::core::{
+    ItemDef, LootDef, ObjectDef, Registry, ShapeDef, TerrainDef, Toast, UiHovered, Use,
+};
 use crate::items::container::OpenContainer;
 use crate::player::{Cursor, Player};
 use crate::stats::SpawnPoint;
@@ -104,17 +106,14 @@ pub fn in_reach(player: Vec2, cell: IVec2) -> bool {
 /// Click an object to target it; click empty ground or press Escape to clear.
 pub fn pick_target(
     mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     cursor: Res<Cursor>,
+    ui: Res<UiHovered>,
     map: Res<ChunkMap>,
     items: Res<Registry<ItemDef>>,
     inv: Single<&Inventory, With<Player>>,
     mut target: ResMut<Target>,
 ) {
-    if keys.just_pressed(KeyCode::Escape) {
-        target.0 = None;
-    }
-    if !mouse.just_pressed(MouseButton::Left) {
+    if !mouse.just_pressed(MouseButton::Left) || ui.0 {
         return;
     }
     // Weapons and rods have their own click handling.
@@ -141,6 +140,7 @@ pub fn mine(
     mut map: ResMut<ChunkMap>,
     mut damage: ResMut<Damage>,
     mut target: ResMut<Target>,
+    ui: Res<UiHovered>,
     player: Single<(&Transform, &Inventory, &Progress), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
     mut broken: MessageWriter<ObjectBroken>,
@@ -149,7 +149,9 @@ pub fn mine(
 ) {
     let (tf, inv, progress) = *player;
     let pos = tf.translation.truncate();
-    let held_cell = cursor.cell.filter(|_| mouse.pressed(MouseButton::Left));
+    let held_cell = cursor
+        .cell
+        .filter(|_| mouse.pressed(MouseButton::Left) && !ui.0);
     let cell = match target.0.or(held_cell) {
         Some(c) if in_reach(pos, c) => c,
         _ => {
@@ -204,14 +206,13 @@ pub fn use_object(
     assets: Res<ShapeAssets>,
     mut map: ResMut<ChunkMap>,
     mut clock: ResMut<GameTime>,
-    mut spawn: ResMut<SpawnPoint>,
-    mut toast: ResMut<Toast>,
-    mut open: ResMut<OpenContainer>,
+    (mut spawn, mut toast, mut open): (ResMut<SpawnPoint>, ResMut<Toast>, ResMut<OpenContainer>),
     mut player: Single<(&Transform, &mut Inventory), With<Player>>,
     mut used: MessageWriter<ObjectUsed>,
+    ui: Res<UiHovered>,
     mut commands: Commands,
 ) {
-    if !use_pressed(&mouse, &input, &keys) {
+    if !use_pressed(&mouse, &input, &keys) || (ui.0 && mouse.just_pressed(MouseButton::Right)) {
         return;
     }
     let (tf, inv) = &mut *player;
@@ -288,9 +289,10 @@ pub fn place(
     mut map: ResMut<ChunkMap>,
     mut player: Single<(&Transform, &mut Inventory, &mut Stats), With<Player>>,
     mut placed: MessageWriter<ObjectPlaced>,
+    ui: Res<UiHovered>,
     mut commands: Commands,
 ) {
-    if !use_pressed(&mouse, &input, &keys) {
+    if !use_pressed(&mouse, &input, &keys) || (ui.0 && mouse.just_pressed(MouseButton::Right)) {
         return;
     }
     let (tf, inv, stats) = &mut *player;
