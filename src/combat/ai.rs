@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::core::{Behavior, CreatureDef, ObjectDef, Registry, Rng, TerrainDef};
 use crate::player::Player;
 use crate::stats::{Creature, Damage, Stats};
-use crate::world::{CELL, ChunkMap, PLAYER_R, slide, solid_half};
+use crate::world::{CELL, ChunkMap, clear_line, slide, solid_half};
 
 const BITE_RANGE: f32 = CELL * 0.9;
 const BITE_COOLDOWN: f32 = 1.0;
@@ -55,7 +55,7 @@ pub fn think(
         let speed = if hostile {
             if to_player.length() <= BITE_RANGE {
                 ai.dir = Vec2::ZERO;
-                if ai.bite <= 0.0 {
+                if ai.bite <= 0.0 && clear_line(&map, &terrain, &objects, pos, target) {
                     ai.bite = BITE_COOLDOWN;
                     damage.write(Damage {
                         target: player_entity,
@@ -78,9 +78,10 @@ pub fn think(
             stats.speed * 0.5
         };
         let delta = ai.dir * speed * dt;
+        let r = def.radius * CELL;
         let mut p = pos;
-        p = slide(p, delta.with_y(0.0), PLAYER_R, solid);
-        p = slide(p, delta.with_x(0.0), PLAYER_R, solid);
+        p = slide(p, delta.with_y(0.0), r, solid);
+        p = slide(p, delta.with_x(0.0), r, solid);
         // Bumped into something while wandering: pick a new direction sooner.
         if !hostile && (p - pos).length() < delta.length() * 0.5 {
             ai.timer = 0.0;

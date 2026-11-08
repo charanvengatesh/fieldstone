@@ -350,6 +350,13 @@ pub struct CreatureDef {
     /// Absent for creatures that never spawn naturally (the player, bosses placed by scripts).
     #[serde(default)]
     pub spawn: Option<SpawnDef>,
+    /// Collision half-size in cells.
+    #[serde(default = "creature_radius")]
+    pub radius: f32,
+}
+
+fn creature_radius() -> f32 {
+    0.26
 }
 def!(CreatureDef, "creatures.ron");
 

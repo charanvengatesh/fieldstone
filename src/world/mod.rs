@@ -29,6 +29,23 @@ pub fn solid_half(
     (o.solid && o.radius > 0.0).then_some(o.radius * CELL)
 }
 
+/// Whether a straight line between two points crosses no solid box (sampled every ~8 units).
+pub fn clear_line(
+    map: &ChunkMap,
+    terrain: &Registry<TerrainDef>,
+    objects: &Registry<ObjectDef>,
+    from: Vec2,
+    to: Vec2,
+) -> bool {
+    let steps = ((to - from).length() / 8.0).ceil().max(1.0) as i32;
+    (1..steps).all(|i| {
+        let p = from.lerp(to, i as f32 / steps as f32);
+        let cell = cell_of(p);
+        solid_half(map, terrain, objects, cell)
+            .is_none_or(|h| (p - center_of(cell)).abs().max_element() >= h)
+    })
+}
+
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {

@@ -8,7 +8,7 @@ use crate::fx::Swing;
 use crate::items::inventory::Inventory;
 use crate::player::{Cursor, Player};
 use crate::stats::{Creature, Damage, Stats};
-use crate::world::{CELL, ChunkMap, cell_of, center_of, solid_half};
+use crate::world::{CELL, ChunkMap, cell_of, center_of, clear_line, solid_half};
 
 const PROJECTILE_SPEED: f32 = 420.0;
 const ARC_HALF_ANGLE: f32 = 1.1;
@@ -32,6 +32,7 @@ pub fn attack(
     cursor: Res<Cursor>,
     items: Res<Registry<ItemDef>>,
     objects: Res<Registry<ObjectDef>>,
+    terrain: Res<Registry<TerrainDef>>,
     shapes: Res<Registry<ShapeDef>>,
     assets: Res<ShapeAssets>,
     map: Res<ChunkMap>,
@@ -99,6 +100,7 @@ pub fn attack(
                 let to = mtf.translation.truncate() - origin;
                 if to.length() <= range * CELL
                     && dir.angle_to(to.normalize_or_zero()).abs() <= ARC_HALF_ANGLE
+                    && clear_line(&map, &terrain, &objects, origin, mtf.translation.truncate())
                 {
                     damage.write(Damage {
                         target: e,
