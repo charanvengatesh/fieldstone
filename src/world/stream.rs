@@ -83,6 +83,9 @@ fn unload(map: &mut ChunkMap, saved: &mut SavedChunks, pos: IVec2, commands: &mu
     if let Some(e) = map.entities.remove(&pos) {
         commands.entity(e).despawn();
     }
+    if let Some(e) = map.water.remove(&pos) {
+        commands.entity(e).despawn();
+    }
     let origin = pos * CHUNK;
     for y in 0..CHUNK {
         for x in 0..CHUNK {
@@ -102,6 +105,7 @@ pub fn draw(
     palette: Res<Registry<ColorDef>>,
     assets: Res<ShapeAssets>,
     material: Res<TerrainMaterial>,
+    water: Option<Res<crate::water::WaterHandle>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
@@ -109,10 +113,15 @@ pub fn draw(
         .iter()
         .map(|(_, t)| palette_color(&palette, &t.color).to_linear().to_f32_array())
         .collect();
+    let wet: Vec<bool> = terrain
+        .iter()
+        .map(|(_, t)| t.fish_table.is_some())
+        .collect();
     let ChunkMap {
         chunks,
         entities,
         objects: obj_entities,
+        water: water_entities,
     } = &mut *map;
     let dirty: Vec<IVec2> = chunks
         .iter()
@@ -128,6 +137,44 @@ pub fn draw(
                 .map(|ch| ch.tiles[local_index(c)].terrain)
         };
         let mesh = meshes.add(terrain_mesh(pos, &tiles, &colors, neighbor));
+        if let Some(water) = &water {
+            let wm = crate::water::water_mesh(
+                pos,
+                &tiles,
+                |t| wet.get(t as usize).copied().unwrap_or(false),
+                |t| {
+                    colors
+                        .get(t as usize)
+                        .copied()
+                        .unwrap_or([0.0, 0.0, 1.0, 1.0])
+                },
+                neighbor,
+            );
+            match (wm, water_entities.get(&pos)) {
+                (Some(m), Some(&e)) => {
+                    commands.entity(e).insert(Mesh2d(meshes.add(m)));
+                }
+                (Some(m), None) => {
+                    let e = commands
+                        .spawn((
+                            crate::water::WaterMesh,
+                            Mesh2d(meshes.add(m)),
+                            MeshMaterial2d(water.0.clone()),
+                            Transform::from_translation(
+                                (center_of(pos * CHUNK) - CELL / 2.0).extend(0.3),
+                            ),
+                        ))
+                        .id();
+                    water_entities.insert(pos, e);
+                }
+                (None, Some(_)) => {
+                    if let Some(e) = water_entities.remove(&pos) {
+                        commands.entity(e).despawn();
+                    }
+                }
+                (None, None) => {}
+            }
+        }
         let chunk = &tiles;
         let origin = center_of(pos * CHUNK) - CELL / 2.0;
         let new_objects: Vec<(IVec2, u16)> = (0..TILES)

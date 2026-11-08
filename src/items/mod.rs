@@ -16,6 +16,7 @@ impl Plugin for ItemsPlugin {
             .init_resource::<container::OpenContainer>()
             .add_message::<interact::ObjectUsed>()
             .add_message::<drops::SpawnDrop>()
+            .add_message::<drops::PickedUp>()
             .add_message::<interact::ObjectBroken>()
             .add_message::<interact::ObjectPlaced>()
             .add_message::<craft::CraftRequest>()

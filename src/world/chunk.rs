@@ -40,6 +40,8 @@ pub struct ChunkMap {
     pub entities: HashMap<IVec2, Entity>,
     /// Entity drawing the object on a cell, if the cell holds one and its chunk is loaded.
     pub objects: HashMap<IVec2, Entity>,
+    /// Water overlay entity per chunk, when the chunk touches water.
+    pub water: HashMap<IVec2, Entity>,
 }
 
 pub fn chunk_of(cell: IVec2) -> IVec2 {

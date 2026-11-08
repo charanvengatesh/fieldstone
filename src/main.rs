@@ -13,8 +13,10 @@ mod items;
 mod player;
 mod script;
 mod smoke;
+mod sound;
 mod stats;
 mod ui;
+mod water;
 mod world;
 
 use bevy::prelude::*;
@@ -60,7 +62,13 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((ui::UiPlugin, daylight::DaylightPlugin, fx::FxPlugin));
+        .add_plugins((
+            ui::UiPlugin,
+            daylight::DaylightPlugin,
+            fx::FxPlugin,
+            water::WaterPlugin,
+            sound::SoundPlugin,
+        ));
     }
     core::packs::load_all(&mut app);
     setup_world(&mut app, &options);

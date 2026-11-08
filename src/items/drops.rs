@@ -27,6 +27,14 @@ pub struct SpawnDrop {
     pub at: Vec2,
 }
 
+/// A stack (or part of one) entered the inventory.
+#[derive(Message)]
+#[allow(dead_code)] // item and count are for scripts and stats later
+pub struct PickedUp {
+    pub item: u16,
+    pub n: u32,
+}
+
 /// Rolls a loot table into drop messages. `salt` keeps rolls deterministic per cell and hit.
 pub fn roll_loot(
     table: &LootDef,
@@ -84,6 +92,7 @@ pub fn collect(
     items: Res<Registry<ItemDef>>,
     mut player: Single<(&Transform, &mut Inventory), With<Player>>,
     mut drops: Query<(Entity, &mut Transform, &mut Drop), Without<Player>>,
+    mut picked: MessageWriter<PickedUp>,
     mut commands: Commands,
 ) {
     let (ptf, inv) = &mut *player;
@@ -99,7 +108,14 @@ pub fn collect(
         }
         tf.translation.z = 1.5 + (d.age * 3.0).sin() * 0.01;
         if dist < PICKUP {
+            let before = d.n;
             d.n = inv.add(d.item, d.n, &items);
+            if before > d.n {
+                picked.write(PickedUp {
+                    item: d.item,
+                    n: before - d.n,
+                });
+            }
             if d.n == 0 {
                 commands.entity(e).despawn();
             }

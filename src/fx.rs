@@ -209,8 +209,8 @@ pub fn waves(
         return;
     };
     let origin = player.translation.truncate();
-    while *acc > 0.04 {
-        *acc -= 0.04;
+    while *acc > 0.12 {
+        *acc -= 0.12;
         let at = origin + Vec2::new(rng.range(-16.0, 16.0), rng.range(-10.0, 10.0)) * CELL;
         let cell = (at / CELL).round().as_ivec2();
         let Some(t) = map.tile(cell) else { continue };
