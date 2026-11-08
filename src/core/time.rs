@@ -20,6 +20,11 @@ impl GameTime {
     }
 }
 
-pub fn tick(time: Res<Time>, mut clock: ResMut<GameTime>) {
+pub fn tick(time: Res<Time>, ending: Res<super::Ending>, mut clock: ResMut<GameTime>) {
+    if ending.0.is_some() {
+        // Eternal noon.
+        clock.secs = clock.day() as f64 * DAY_SECS + DAY_SECS * 0.25;
+        return;
+    }
     clock.secs += time.delta_secs_f64();
 }

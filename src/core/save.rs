@@ -8,8 +8,10 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use super::settings::Keys;
 use super::time::GameTime;
 use super::{ItemDef, ObjectDef, Registry, TerrainDef};
+use crate::items::container::Containers;
 use crate::items::inventory::{Inventory, Stack};
 use crate::player::Player;
 use crate::stats::{Progress, Stats};
@@ -17,6 +19,10 @@ use crate::world::chunk::{TILES, Tile};
 use crate::world::{ChunkMap, worldgen::WorldGen};
 
 pub const SAVE_PATH: &str = "saves/world.ron";
+
+/// Set by the pause menu: `.0` save now, `.1` exit after saving.
+#[derive(Resource, Default)]
+pub struct SaveRequest(pub bool, pub bool);
 
 /// Modified chunks that are currently unloaded (or were loaded from disk and not yet streamed in).
 #[derive(Resource, Default)]
@@ -33,6 +39,9 @@ struct SaveFile {
     /// `(xp, level, skills)`.
     #[serde(default)]
     progress: Option<(f32, u32, Vec<(String, f32)>)>,
+    /// Chest contents: cell and slots as `(item id, count)`.
+    #[serde(default)]
+    containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
     /// String ids referenced by `chunks`; index 0 is reserved for "no object".
     ids: Vec<String>,
     /// Chunk coordinate and, per tile, `(terrain id index, object id index)`.
@@ -40,7 +49,10 @@ struct SaveFile {
 }
 
 pub fn save(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
+    mut request: ResMut<SaveRequest>,
+    containers: Res<Containers>,
     wg: Res<WorldGen>,
     time: Res<GameTime>,
     map: Res<ChunkMap>,
@@ -50,9 +62,10 @@ pub fn save(
     items: Res<Registry<ItemDef>>,
     player: Single<(&Transform, &Inventory, &Stats, &Progress), With<Player>>,
 ) {
-    if !keys.just_pressed(KeyCode::F5) {
+    if !keys.just(&input, &keys.save) && !request.0 {
         return;
     }
+    request.0 = false;
     let (tf, inv, stats, progress) = *player;
     let mut ids: Vec<String> = vec![String::new()];
     let mut intern = |s: &str| -> u16 {
@@ -93,6 +106,19 @@ pub fn save(
             .collect(),
         hp: Some(stats.hp),
         progress: Some((progress.xp, progress.level, progress.skills.clone())),
+        containers: containers
+            .0
+            .iter()
+            .map(|(c, slots)| {
+                (
+                    (c.x, c.y),
+                    slots
+                        .iter()
+                        .map(|s| s.map(|s| (items.id_of(s.item).to_owned(), s.n)))
+                        .collect(),
+                )
+            })
+            .collect(),
         ids,
         chunks,
     };
@@ -117,6 +143,7 @@ pub struct Loaded {
     pub inventory: Vec<Option<(String, u32)>>,
     pub hp: Option<f32>,
     pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
+    pub containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
     pub chunks: SavedChunks,
 }
 
@@ -148,6 +175,7 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
         inventory: file.inventory,
         hp: file.hp,
         progress: file.progress,
+        containers: file.containers,
         chunks: SavedChunks(chunks),
     })
 }
@@ -157,6 +185,7 @@ pub fn restore_player(
     mut commands: Commands,
     pending: Option<Res<PendingPlayer>>,
     items: Res<Registry<ItemDef>>,
+    mut containers: ResMut<Containers>,
     mut player: Single<(&mut Transform, &mut Inventory, &mut Stats, &mut Progress), With<Player>>,
 ) {
     let Some(p) = pending else {
@@ -178,6 +207,18 @@ pub fn restore_player(
         stats.attack += *level as f32;
     }
     stats.hp = p.hp.unwrap_or(stats.max_hp).min(stats.max_hp);
+    for ((x, y), slots) in &p.containers {
+        containers.0.insert(
+            IVec2::new(*x, *y),
+            slots
+                .iter()
+                .map(|s| {
+                    s.as_ref()
+                        .and_then(|(id, n)| items.idx(id).map(|item| Stack { item, n: *n }))
+                })
+                .collect(),
+        );
+    }
     commands.remove_resource::<PendingPlayer>();
 }
 
@@ -187,4 +228,5 @@ pub struct PendingPlayer {
     pub inventory: Vec<Option<(String, u32)>>,
     pub hp: Option<f32>,
     pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
+    pub containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
 }

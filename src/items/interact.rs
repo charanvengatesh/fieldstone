@@ -9,8 +9,12 @@ use bevy::prelude::*;
 use super::drops::{SpawnDrop, roll_loot};
 use super::inventory::{HOTBAR, Inventory};
 use crate::art::ShapeAssets;
-use crate::core::{ItemDef, LootDef, ObjectDef, Registry, ShapeDef, TerrainDef, Use};
+use crate::core::settings::Keys;
+use crate::core::time::{DAY_SECS, GameTime};
+use crate::core::{ItemDef, LootDef, ObjectDef, Registry, ShapeDef, TerrainDef, Toast, Use};
+use crate::items::container::OpenContainer;
 use crate::player::{Cursor, Player};
+use crate::stats::SpawnPoint;
 use crate::stats::{GainXp, Progress, Stats};
 use crate::world::stream::{clear_object, put_object};
 use crate::world::worldgen::WorldGen;
@@ -43,22 +47,36 @@ pub struct ObjectPlaced {
     pub object: u16,
 }
 
-/// Right click or `F`.
-pub fn use_pressed(mouse: &ButtonInput<MouseButton>, keys: &ButtonInput<KeyCode>) -> bool {
-    mouse.just_pressed(MouseButton::Right) || keys.just_pressed(KeyCode::KeyF)
+/// Fired when an object is used and swaps into another (doors, shrine stages).
+#[derive(Message)]
+pub struct ObjectUsed {
+    pub cell: IVec2,
+    pub from: u16,
+    pub to: u16,
+}
+
+/// Right click or the bound use key.
+pub fn use_pressed(
+    mouse: &ButtonInput<MouseButton>,
+    input: &ButtonInput<KeyCode>,
+    keys: &Keys,
+) -> bool {
+    mouse.just_pressed(MouseButton::Right) || keys.just(input, &keys.use_item)
 }
 
 pub fn select_slot(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
     mut wheel: MessageReader<MouseWheel>,
     mut acc: Local<f32>,
     mut inv: Single<&mut Inventory, With<Player>>,
 ) {
-    use KeyCode::*;
-    const DIGITS: [KeyCode; HOTBAR] = [
-        Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Digit0,
-    ];
-    if let Some(i) = DIGITS.iter().position(|k| keys.just_pressed(*k)) {
+    if let Some(i) = keys
+        .hotbar
+        .iter()
+        .take(HOTBAR)
+        .position(|k| input.just_pressed(*k))
+    {
         inv.selected = i;
     }
     // Trackpads emit many tiny pixel deltas; accumulate and step at a threshold.
@@ -174,9 +192,93 @@ pub fn mine(
 }
 
 /// Right click / `F`: eat the held food, or place the held object on the hovered cell.
+/// F / right click on a chest, door, bed or shrine acts on the object instead of the held item.
+pub fn use_object(
+    mouse: Res<ButtonInput<MouseButton>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
+    cursor: Res<Cursor>,
+    items: Res<Registry<ItemDef>>,
+    objects: Res<Registry<ObjectDef>>,
+    shapes: Res<Registry<ShapeDef>>,
+    assets: Res<ShapeAssets>,
+    mut map: ResMut<ChunkMap>,
+    mut clock: ResMut<GameTime>,
+    mut spawn: ResMut<SpawnPoint>,
+    mut toast: ResMut<Toast>,
+    mut open: ResMut<OpenContainer>,
+    mut player: Single<(&Transform, &mut Inventory), With<Player>>,
+    mut used: MessageWriter<ObjectUsed>,
+    mut commands: Commands,
+) {
+    if !use_pressed(&mouse, &input, &keys) {
+        return;
+    }
+    let (tf, inv) = &mut *player;
+    let pos = tf.translation.truncate();
+    let Some(cell) = cursor.cell.filter(|c| in_reach(pos, *c)) else {
+        return;
+    };
+    let Some(obj) = map.tile(cell).and_then(|t| t.object) else {
+        return;
+    };
+    let def = objects.at(obj);
+    if def.storage > 0 {
+        open.0 = if open.0 == Some(cell) {
+            None
+        } else {
+            Some(cell)
+        };
+        return;
+    }
+    if def.bed {
+        spawn.0 = pos;
+        if clock.day_frac() >= 0.5 {
+            clock.secs = (clock.day() + 1) as f64 * DAY_SECS;
+            toast.show("You sleep until dawn. Respawn point set.", 4.0);
+        } else {
+            toast.show(
+                "Respawn point set. Sleep here at night to skip to dawn.",
+                4.0,
+            );
+        }
+        return;
+    }
+    if let Some(next_id) = def.use_swaps.as_deref() {
+        let Some(next) = objects.idx(next_id) else {
+            warn!("object '{}' swaps to unknown '{next_id}'", def.id);
+            return;
+        };
+        if let Some(need) = def.use_consumes.as_deref() {
+            let holding = inv.held().is_some_and(|s| items.id_of(s.item) == need);
+            if !holding {
+                let name = items.get(need).map_or(need.to_owned(), |i| i.name.clone());
+                toast.show(format!("Needs {name} in hand."), 3.0);
+                return;
+            }
+            inv.consume_held();
+        }
+        put_object(
+            &mut map,
+            cell,
+            next,
+            &objects,
+            &shapes,
+            &assets,
+            &mut commands,
+        );
+        used.write(ObjectUsed {
+            cell,
+            from: obj,
+            to: next,
+        });
+    }
+}
+
 pub fn place(
     mouse: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
     cursor: Res<Cursor>,
     items: Res<Registry<ItemDef>>,
     objects: Res<Registry<ObjectDef>>,
@@ -188,11 +290,21 @@ pub fn place(
     mut placed: MessageWriter<ObjectPlaced>,
     mut commands: Commands,
 ) {
-    if !use_pressed(&mouse, &keys) {
+    if !use_pressed(&mouse, &input, &keys) {
         return;
     }
     let (tf, inv, stats) = &mut *player;
     let pos = tf.translation.truncate();
+    // An interactive object under the cursor took the click.
+    if cursor
+        .cell
+        .filter(|c| in_reach(pos, *c))
+        .and_then(|c| map.tile(c))
+        .and_then(|t| t.object)
+        .is_some_and(|o| objects.at(o).interactive())
+    {
+        return;
+    }
     let Some(held) = inv.held() else { return };
     if let Use::Eat { hp, stamina } = items.at(held.item).usage {
         stats.hp = (stats.hp + hp).min(stats.max_hp);

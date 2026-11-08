@@ -1,5 +1,6 @@
 (
     name: "base",
+    format: 1,
     depends: [],
-    scripts: [],
+    scripts: ["scripts/shrine.lua"],
 )

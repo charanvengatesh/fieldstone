@@ -1,3 +1,4 @@
+pub mod container;
 pub mod craft;
 pub mod drops;
 pub mod interact;
@@ -11,6 +12,9 @@ impl Plugin for ItemsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<interact::Damage>()
             .init_resource::<interact::Target>()
+            .init_resource::<container::Containers>()
+            .init_resource::<container::OpenContainer>()
+            .add_message::<interact::ObjectUsed>()
             .add_message::<drops::SpawnDrop>()
             .add_message::<interact::ObjectBroken>()
             .add_message::<interact::ObjectPlaced>()
@@ -22,7 +26,9 @@ impl Plugin for ItemsPlugin {
                     interact::select_slot,
                     interact::pick_target,
                     interact::mine,
+                    interact::use_object,
                     interact::place,
+                    container::upkeep,
                     craft::craft,
                     drops::spawn,
                     drops::collect,

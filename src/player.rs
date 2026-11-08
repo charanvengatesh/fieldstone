@@ -6,6 +6,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::art::ShapeAssets;
 use crate::combat::weapon::Cooldown;
+use crate::core::settings::{Keys, Settings};
 use crate::core::{CreatureDef, ItemDef, ObjectDef, Registry, ShapeDef, TerrainDef};
 use crate::items::interact::{REACH, Target};
 use crate::items::inventory::Inventory;
@@ -14,7 +15,6 @@ use crate::world::{CELL, ChunkMap, PLAYER_R, cell_of, center_of, slide, solid_ha
 
 /// Stamina per second while sprinting.
 const SPRINT_COST: f32 = 12.0;
-pub const ZOOM: f32 = 0.6;
 const ZOOM_RANGE: (f32, f32) = (0.3, 1.1);
 
 #[derive(Component)]
@@ -36,11 +36,12 @@ pub fn spawn(
     shapes: Res<Registry<ShapeDef>>,
     creatures: Res<Registry<CreatureDef>>,
     assets: Res<ShapeAssets>,
+    settings: Res<Settings>,
 ) {
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
-            scale: ZOOM,
+            scale: settings.zoom.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1),
             ..OrthographicProjection::default_2d()
         }),
     ));
@@ -75,7 +76,8 @@ pub fn spawn(
 /// the player walks toward it (trackpad flow: click a far tree and arrive). Each axis resolves
 /// separately so the player stops flush against solids and slides along them.
 pub fn movement(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
     time: Res<Time>,
     map: Res<ChunkMap>,
     terrain: Res<Registry<TerrainDef>>,
@@ -83,16 +85,12 @@ pub fn movement(
     mut target: ResMut<Target>,
     mut player: Single<(&mut Transform, &mut Stats), With<Player>>,
 ) {
-    use KeyCode::*;
     let (tf, stats) = &mut *player;
-    let axis = |neg: [KeyCode; 2], pos: [KeyCode; 2]| {
-        keys.any_pressed(pos) as i8 as f32 - keys.any_pressed(neg) as i8 as f32
+    let axis = |neg: &[KeyCode], pos: &[KeyCode]| {
+        keys.pressed(&input, pos) as i8 as f32 - keys.pressed(&input, neg) as i8 as f32
     };
-    let mut dir = Vec2::new(
-        axis([KeyA, ArrowLeft], [KeyD, ArrowRight]),
-        axis([KeyS, ArrowDown], [KeyW, ArrowUp]),
-    )
-    .normalize_or_zero();
+    let mut dir =
+        Vec2::new(axis(&keys.left, &keys.right), axis(&keys.down, &keys.up)).normalize_or_zero();
     let pos = tf.translation.truncate();
     if dir != Vec2::ZERO {
         target.0 = None;
@@ -102,8 +100,7 @@ pub fn movement(
             dir = to.normalize_or_zero();
         }
     }
-    let sprinting =
-        keys.any_pressed([ShiftLeft, ShiftRight]) && dir != Vec2::ZERO && stats.stamina > 0.0;
+    let sprinting = keys.pressed(&input, &keys.sprint) && dir != Vec2::ZERO && stats.stamina > 0.0;
     let speed = if sprinting {
         stats.stamina = (stats.stamina - SPRINT_COST * time.delta_secs()).max(0.0);
         stats.speed * 2.0
@@ -176,8 +173,10 @@ pub fn follow(
 /// Pinch on a trackpad or `-` / `=` on the keyboard.
 pub fn zoom(
     mut pinches: MessageReader<PinchGesture>,
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
     time: Res<Time>,
+    mut settings: ResMut<Settings>,
     mut proj: Single<&mut Projection, With<Camera2d>>,
 ) {
     let Projection::Orthographic(o) = &mut **proj else {
@@ -187,14 +186,15 @@ pub fn zoom(
     for p in pinches.read() {
         factor *= 1.0 - p.0;
     }
-    if keys.pressed(KeyCode::Minus) {
+    if keys.pressed(&input, &keys.zoom_out) {
         factor *= 1.0 + 1.5 * time.delta_secs();
     }
-    if keys.pressed(KeyCode::Equal) {
+    if keys.pressed(&input, &keys.zoom_in) {
         factor /= 1.0 + 1.5 * time.delta_secs();
     }
     if factor != 1.0 {
         o.scale = (o.scale * factor).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+        settings.zoom = o.scale;
     }
 }
 

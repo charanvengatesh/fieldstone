@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use super::*;
+use crate::core::settings::Keys;
 use crate::core::{ObjectDef, RecipeDef};
 use crate::items::craft::{CraftRequest, can_craft, nearby_stations};
 use crate::items::inventory::Inventory;
@@ -128,8 +129,12 @@ pub fn spawn(
         });
 }
 
-pub fn toggle(keys: Res<ButtonInput<KeyCode>>, mut vis: Single<&mut Visibility, With<CraftPanel>>) {
-    if keys.just_pressed(KeyCode::KeyC) {
+pub fn toggle(
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
+    mut vis: Single<&mut Visibility, With<CraftPanel>>,
+) {
+    if keys.just(&input, &keys.craft) {
         flip(&mut vis);
     }
 }

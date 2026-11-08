@@ -2,6 +2,7 @@ pub mod defs;
 pub mod packs;
 pub mod registry;
 pub mod save;
+pub mod settings;
 pub mod time;
 
 use bevy::prelude::*;
@@ -49,12 +50,50 @@ impl Rng {
     }
 }
 
+/// Gameplay stops while true; the clock and every gameplay set are gated on it.
+#[derive(Resource, Default)]
+pub struct Paused(pub bool);
+
+pub fn not_paused(paused: Res<Paused>) -> bool {
+    !paused.0
+}
+
+/// A short line shown top-center for a few seconds (bed, shrine, scripts).
+#[derive(Resource, Default)]
+pub struct Toast {
+    pub text: String,
+    pub left: f32,
+}
+
+impl Toast {
+    pub fn show(&mut self, text: impl Into<String>, secs: f32) {
+        self.text = text.into();
+        self.left = secs;
+    }
+}
+
+/// Set when the shrine (or a script) ends the game: day locks at noon, a card shows.
+#[derive(Resource, Default)]
+pub struct Ending(pub Option<String>);
+
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<time::GameTime>()
             .init_resource::<Rng>()
-            .add_systems(Update, time::tick);
+            .init_resource::<Paused>()
+            .init_resource::<Toast>()
+            .init_resource::<Ending>()
+            .add_systems(Update, (time::tick, toast_tick).run_if(not_paused));
+    }
+}
+
+pub fn toast_tick(time: Res<Time>, mut toast: ResMut<Toast>) {
+    if toast.left > 0.0 {
+        toast.left -= time.delta_secs();
+        if toast.left <= 0.0 {
+            toast.text.clear();
+        }
     }
 }

@@ -3,8 +3,12 @@
 use bevy::prelude::*;
 
 use super::*;
+use crate::core::ObjectDef;
+use crate::core::settings::Keys;
+use crate::items::container::{Containers, OpenContainer};
 use crate::items::inventory::{HOTBAR, Inventory, SLOTS};
 use crate::player::Player;
+use crate::world::ChunkMap;
 
 #[derive(Component)]
 pub struct InventoryPanel;
@@ -32,7 +36,22 @@ pub fn spawn(mut commands: Commands) {
             for i in HOTBAR..SLOTS {
                 let e = spawn_slot(p, i);
                 p.commands().entity(e).observe(
-                    move |_: On<PointerClick>, mut inv: Single<&mut Inventory, With<Player>>| {
+                    move |_: On<PointerClick>,
+                          open: Res<OpenContainer>,
+                          map: Res<ChunkMap>,
+                          objects: Res<Registry<ObjectDef>>,
+                          mut containers: ResMut<Containers>,
+                          mut inv: Single<&mut Inventory, With<Player>>| {
+                        if super::container::push_to_open(
+                            i,
+                            &open,
+                            &map,
+                            &objects,
+                            &mut containers,
+                            &mut inv,
+                        ) {
+                            return;
+                        }
                         let sel = inv.selected;
                         inv.slots.swap(i, sel);
                     },
@@ -42,11 +61,16 @@ pub fn spawn(mut commands: Commands) {
 }
 
 pub fn toggle(
-    keys: Res<ButtonInput<KeyCode>>,
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
+    mut open: ResMut<OpenContainer>,
     mut vis: Single<&mut Visibility, With<InventoryPanel>>,
 ) {
-    if keys.just_pressed(KeyCode::KeyE) {
+    if keys.just(&input, &keys.inventory) {
         flip(&mut vis);
+        if **vis == Visibility::Hidden {
+            open.0 = None;
+        }
     }
 }
 

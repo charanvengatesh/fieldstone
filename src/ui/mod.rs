@@ -1,6 +1,8 @@
+pub mod container;
 pub mod craft_menu;
 pub mod hud;
 pub mod inventory;
+pub mod pause;
 
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
@@ -139,20 +141,33 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (hud::spawn, inventory::spawn, craft_menu::spawn))
-            .add_systems(
-                Update,
-                (
-                    hud::update,
-                    hud::bars,
-                    hud::status,
-                    hud::title,
-                    hud::debug,
-                    inventory::toggle,
-                    inventory::paint,
-                    craft_menu::toggle,
-                    craft_menu::paint,
-                ),
-            );
+        app.add_systems(
+            Startup,
+            (
+                hud::spawn,
+                inventory::spawn,
+                craft_menu::spawn,
+                container::spawn,
+                pause::spawn,
+            ),
+        )
+        .add_systems(
+            Update,
+            (
+                hud::update,
+                hud::bars,
+                hud::status,
+                hud::title,
+                hud::toast,
+                hud::ending,
+                hud::debug,
+                inventory::toggle,
+                inventory::paint,
+                container::paint.after(inventory::toggle),
+                craft_menu::toggle,
+                craft_menu::paint,
+                pause::toggle,
+            ),
+        );
     }
 }

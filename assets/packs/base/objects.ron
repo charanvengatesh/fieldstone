@@ -29,5 +29,14 @@
     (id: "wheat_1", shape: "wheat_1", hp: 0.3, solid: false, xp: 0.0, on: Some(["tilled"]), grows_into: Some(("wheat_2", 90.0))),
     (id: "wheat_2", shape: "wheat_2", hp: 0.3, solid: false, xp: 0.0, grows_into: Some(("wheat_3", 90.0))),
     (id: "wheat_3", shape: "wheat_3", hp: 0.3, solid: false, xp: 2.0, drops: Some("wheat")),
+    (id: "chest",       shape: "chest",       hp: 2.0, drops: Some("chest"), storage: 20),
+    (id: "bed",         shape: "bed",         hp: 1.5, drops: Some("bed"), bed: true, solid: false),
+    (id: "door_closed", shape: "door_closed", hp: 2.0, drops: Some("door"), use_swaps: Some("door_open")),
+    (id: "door_open",   shape: "door_open",   hp: 2.0, drops: Some("door"), use_swaps: Some("door_closed"), solid: false),
+    // Shrine: place it, then bring three sun cores. The base script ends the game at the third.
+    (id: "shrine_0", shape: "shrine_0", hp: 6.0, drops: Some("shrine"), tool: Some("pickaxe"), use_swaps: Some("shrine_1"), use_consumes: Some("sun_core")),
+    (id: "shrine_1", shape: "shrine_1", hp: 6.0, drops: Some("shrine"), tool: Some("pickaxe"), use_swaps: Some("shrine_2"), use_consumes: Some("sun_core"), light: Some(4.0)),
+    (id: "shrine_2", shape: "shrine_2", hp: 6.0, drops: Some("shrine"), tool: Some("pickaxe"), use_swaps: Some("shrine_3"), use_consumes: Some("sun_core"), light: Some(6.0)),
+    (id: "shrine_3", shape: "shrine_3", hp: 9.0, drops: Some("shrine"), tool: Some("pickaxe"), light: Some(14.0)),
     (id: "furnace",    shape: "furnace",    hp: 4.0, drops: Some("furnace"), station: Some("furnace"), tool: Some("pickaxe")),
 ]

@@ -14,7 +14,7 @@ use crate::core::time::GameTime;
 use crate::core::{CreatureDef, ItemDef, Registry, ShapeDef};
 use crate::items::craft::Crafted;
 use crate::items::drops::SpawnDrop;
-use crate::items::interact::{ObjectBroken, ObjectPlaced};
+use crate::items::interact::{ObjectBroken, ObjectPlaced, ObjectUsed};
 use crate::player::Player;
 use crate::stats::Died;
 use crate::world::{CELL, center_of};
@@ -25,12 +25,16 @@ callback_labels!(
     OnCraft => "on_craft",
     OnDeath => "on_death",
     OnDayStart => "on_day_start",
+    OnObjectUsed => "on_object_used",
 );
 
 /// What scripts asked for since the last frame.
 enum Request {
     GiveItem(String, u32),
     SpawnCreature(String, f32, f32),
+    ShowText(String, f32),
+    Win(String),
+    SetDayFrac(f32),
 }
 
 static QUEUE: Mutex<Vec<Request>> = Mutex::new(Vec::new());
@@ -75,7 +79,12 @@ pub fn register_api(world: &mut World) {
         .register("spawn_creature", |id: String, x: i64, y: i64| {
             push(Request::SpawnCreature(id, x as f32, y as f32))
         })
-        .register("is_night", || NIGHT.load(Ordering::Relaxed));
+        .register("is_night", || NIGHT.load(Ordering::Relaxed))
+        .register("show_text", |msg: String, secs: f64| {
+            push(Request::ShowText(msg, secs as f32))
+        })
+        .register("win", |msg: String| push(Request::Win(msg)))
+        .register("set_day_frac", |f: f64| push(Request::SetDayFrac(f as f32)));
 }
 
 /// Applies queued script requests.
@@ -85,6 +94,9 @@ pub fn apply_requests(
     shapes: Res<Registry<ShapeDef>>,
     assets: Res<crate::art::ShapeAssets>,
     player: Single<&Transform, With<Player>>,
+    mut toast: ResMut<crate::core::Toast>,
+    mut ending: ResMut<crate::core::Ending>,
+    mut clock: ResMut<GameTime>,
     mut drops: MessageWriter<SpawnDrop>,
     mut commands: Commands,
 ) {
@@ -115,6 +127,15 @@ pub fn apply_requests(
                 }
                 None => warn!("script: unknown creature '{id}'"),
             },
+            Request::ShowText(msg, secs) => toast.show(msg, secs.max(0.5)),
+            Request::Win(msg) => {
+                info!("[script] win: {msg}");
+                ending.0 = Some(msg);
+            }
+            Request::SetDayFrac(f) => {
+                let day = clock.day() as f64;
+                clock.secs = (day + f.clamp(0.0, 0.999) as f64) * crate::core::time::DAY_SECS;
+            }
         }
     }
 }
@@ -129,6 +150,7 @@ pub fn bridge(
     mut placed: MessageReader<ObjectPlaced>,
     mut crafted: MessageReader<Crafted>,
     mut died: MessageReader<Died>,
+    mut used: MessageReader<ObjectUsed>,
     mut last_day: Local<Option<u32>>,
     mut out: MessageWriter<ScriptCallbackMessage>,
 ) {
@@ -145,6 +167,17 @@ pub fn bridge(
         out.write(ScriptCallbackMessage::new_for_all_scripts(
             OnObjectPlaced,
             vec![i(p.cell.x), i(p.cell.y), s(objects.id_of(p.object))],
+        ));
+    }
+    for u in used.read() {
+        out.write(ScriptCallbackMessage::new_for_all_scripts(
+            OnObjectUsed,
+            vec![
+                i(u.cell.x),
+                i(u.cell.y),
+                s(objects.id_of(u.from)),
+                s(objects.id_of(u.to)),
+            ],
         ));
     }
     for c in crafted.read() {
@@ -188,6 +221,7 @@ impl Plugin for ScriptPlugin {
                     event_handler::<OnCraft, LuaScriptingPlugin>,
                     event_handler::<OnDeath, LuaScriptingPlugin>,
                     event_handler::<OnDayStart, LuaScriptingPlugin>,
+                    event_handler::<OnObjectUsed, LuaScriptingPlugin>,
                     apply_requests,
                 )
                     .chain()

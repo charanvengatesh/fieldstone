@@ -10,6 +10,8 @@ use super::defs::*;
 use super::registry::Registry;
 
 pub const PACK_ROOTS: [&str; 2] = ["assets/packs", "mods"];
+/// Highest pack format this build understands.
+pub const PACK_FORMAT: u32 = 1;
 
 /// Packs that were loaded, in order. Scripts are consumed by the scripting layer later.
 #[derive(Resource, Default, Debug)]
@@ -46,6 +48,12 @@ pub fn load_all(app: &mut App) {
     let w = app.world_mut();
     for (dir, meta) in &packs {
         info!("loading pack '{}' from {}", meta.name, dir.display());
+        if meta.format > PACK_FORMAT {
+            warn!(
+                "pack '{}' uses format {} but this build knows {}; some fields may be ignored",
+                meta.name, meta.format, PACK_FORMAT
+            );
+        }
         merge::<ColorDef>(w, dir);
         merge::<ShapeDef>(w, dir);
         merge::<TerrainDef>(w, dir);
@@ -112,6 +120,7 @@ mod tests {
             PathBuf::new(),
             PackDef {
                 name: name.into(),
+                format: 1,
                 depends: depends.iter().map(|s| s.to_string()).collect(),
                 scripts: vec![],
             },

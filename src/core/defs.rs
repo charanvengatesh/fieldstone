@@ -26,6 +26,9 @@ pub type Rgb = [u8; 3];
 #[derive(Deserialize, Default, Debug, Clone)]
 pub struct PackDef {
     pub name: String,
+    /// Pack format this pack was written for; the engine warns when it is newer than it knows.
+    #[serde(default = "one_u32")]
+    pub format: u32,
     #[serde(default)]
     pub depends: Vec<String>,
     #[serde(default)]
@@ -132,6 +135,25 @@ pub struct ObjectDef {
     /// Crops: `(next object id, seconds)`. Growth doubles next to water.
     #[serde(default)]
     pub grows_into: Option<(String, f32)>,
+    /// Container slots; 0 means not a container.
+    #[serde(default)]
+    pub storage: u32,
+    /// Using it (F / right click) swaps it for this object: doors, shrine stages.
+    #[serde(default)]
+    pub use_swaps: Option<String>,
+    /// The swap needs this item held, and eats one.
+    #[serde(default)]
+    pub use_consumes: Option<String>,
+    /// Using it sets the respawn point and, at night, sleeps until dawn.
+    #[serde(default)]
+    pub bed: bool,
+}
+
+impl ObjectDef {
+    /// Whether F / right click on this object does something itself (instead of placing).
+    pub fn interactive(&self) -> bool {
+        self.storage > 0 || self.use_swaps.is_some() || self.bed
+    }
 }
 def!(ObjectDef, "objects.ron");
 

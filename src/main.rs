@@ -64,6 +64,10 @@ fn main() {
     }
     core::packs::load_all(&mut app);
     setup_world(&mut app, &options);
+    let settings = core::settings::load();
+    app.insert_resource(core::settings::Keys::from_names(&settings.keys))
+        .insert_resource(settings)
+        .init_resource::<core::save::SaveRequest>();
     app.insert_resource(ClearColor(Color::srgb_u8(40, 80, 160)))
         .add_plugins((
             core::CorePlugin,
@@ -89,7 +93,8 @@ fn main() {
                 stats::StatsSet,
                 script::ScriptSet,
             )
-                .chain(),
+                .chain()
+                .run_if(core::not_paused),
         )
         .add_systems(Update, (core::save::save, core::save::restore_player))
         .run();
@@ -145,12 +150,14 @@ fn setup_world(app: &mut App, options: &Options) {
             inventory: l.inventory.clone(),
             hp: l.hp,
             progress: l.progress.clone(),
+            containers: l.containers.clone(),
         },
         None => PendingPlayer {
             pos: spawn,
             inventory: vec![],
             hp: None,
             progress: None,
+            containers: vec![],
         },
     };
     let (time, chunks) = loaded.map_or((GameTime::default(), SavedChunks::default()), |l| {

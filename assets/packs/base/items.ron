@@ -15,6 +15,11 @@
     (id: "wall_stone", name: "Stone Wall", shape: "wall_stone", use: Place("wall_stone")),
     (id: "workbench",  name: "Workbench",  shape: "workbench",  use: Place("workbench"), stack_max: 1),
     (id: "furnace",    name: "Furnace",    shape: "furnace",    use: Place("furnace"), stack_max: 1),
+    (id: "chest",      name: "Chest",      shape: "chest",      use: Place("chest"), stack_max: 4),
+    (id: "bed",        name: "Bed",        shape: "bed",        use: Place("bed"), stack_max: 1),
+    (id: "door",       name: "Door",       shape: "door_closed", use: Place("door_closed"), stack_max: 8),
+    (id: "shrine",     name: "Sun Shrine", shape: "shrine_0",   use: Place("shrine_0"), stack_max: 1),
+    (id: "sun_core",   name: "Sun Core",   shape: "sun_core",   stack_max: 3),
 
     (id: "pickaxe_wood",  name: "Wooden Pickaxe", shape: "pickaxe_wood",  stack_max: 1, use: Tool(tag: "pickaxe", power: 1)),
     (id: "pickaxe_stone", name: "Stone Pickaxe",  shape: "pickaxe_stone", stack_max: 1, use: Tool(tag: "pickaxe", power: 2)),
