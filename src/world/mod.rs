@@ -1,3 +1,4 @@
+pub mod blend;
 pub mod chunk;
 pub mod collide;
 pub mod stream;

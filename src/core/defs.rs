@@ -150,6 +150,10 @@ pub struct ObjectDef {
     /// Using it sets the respawn point and, at night, sleeps until dawn.
     #[serde(default)]
     pub bed: bool,
+    /// Visual offset from the cell center, in cells, picked per cell. Natural things wander;
+    /// built things stay aligned.
+    #[serde(default)]
+    pub jitter: f32,
 }
 
 impl ObjectDef {

@@ -1,8 +1,9 @@
-// Water overlay. The mesh carries the water color in rgb and the bilinear "waterness" weight
-// in alpha; this shader cuts the shoreline at 0.5, foams the edge, and ripples the surface.
+// Water overlay. The mesh carries the water color in rgb and the smooth "waterness" weight in
+// alpha; this shader cuts the shoreline at 0.5, draws a thin foam line, brightens the shallows,
+// and moves a quiet caustic pattern with sparse sparkles over the surface.
 
 struct WaterParams {
-    // x: seconds, y: ripple strength, z: foam width, w: unused
+    // x: seconds, y: ripple strength, z: foam width (weight units), w: unused
     params: vec4<f32>,
 };
 
@@ -33,6 +34,13 @@ fn noise(p: vec2<f32>) -> f32 {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// Two noise layers drifting against each other; their product makes soft caustic cells.
+fn caustic(p: vec2<f32>, t: f32) -> f32 {
+    let a = noise(p * 1.7 + vec2<f32>(t * 0.05, t * 0.035));
+    let b = noise(p * 1.9 - vec2<f32>(t * 0.04, -t * 0.045) + 7.3);
+    return a * b;
+}
+
 @fragment
 fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t = water.params.x;
@@ -41,21 +49,24 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let p = in.world_position.xy / 25.0;
     let w = in.color.a;
 
-    // Two drifting noise layers make slow swells; a fine sine adds the glittery ripple.
-    let n1 = noise(p * 0.9 + vec2<f32>(t * 0.08, t * 0.05));
-    let n2 = noise(p * 2.3 - vec2<f32>(t * 0.11, -t * 0.07));
-    let swell = (n1 * 0.6 + n2 * 0.4) - 0.5;
-    let ripple = sin(p.x * 3.1 + p.y * 2.2 + t * 1.6 + swell * 6.0);
-    let glint = smoothstep(0.86, 1.0, ripple) * 0.35;
-    var rgb = in.color.rgb * (1.0 + swell * 0.35 * strength + ripple * 0.06 * strength) + vec3<f32>(glint);
+    // Surface: gentle brightness variation, no bands.
+    let c = caustic(p, t);
+    let swell = (noise(p * 0.35 + vec2<f32>(t * 0.02, 0.0)) - 0.5) * 0.10;
+    var rgb = in.color.rgb * (1.0 + swell * strength) + vec3<f32>(c * 0.18 * strength);
 
-    // Shoreline: cut at the contour, foam just inside it, slight brightening in the shallows.
-    let edge = smoothstep(0.47, 0.53, w);
-    let foam_band = smoothstep(0.5, 0.5 + foam_w, w) * (1.0 - smoothstep(0.5 + foam_w, 0.5 + foam_w * 2.4, w));
-    let foam_wave = 0.5 + 0.5 * sin(t * 2.2 + p.x * 4.0 + p.y * 3.0 + n2 * 5.0);
-    let foam = foam_band * (0.45 + 0.55 * foam_wave);
-    let shallows = (1.0 - smoothstep(0.5, 0.85, w)) * 0.12;
-    rgb = mix(rgb + shallows, vec3<f32>(0.93, 0.97, 1.0), foam * 0.85);
+    // Sparse sparkles that come and go.
+    let s = noise(p * 6.0 + vec2<f32>(t * 0.3, -t * 0.2));
+    let sparkle = smoothstep(0.90, 0.98, s) * (0.5 + 0.5 * sin(t * 3.0 + p.x * 9.0 + p.y * 7.0));
+    rgb = rgb + vec3<f32>(sparkle * 0.35);
+
+    // Shoreline: cut at the contour, a thin foam line just inside it that breathes, and a
+    // lighter shelf fading into deeper water.
+    let edge = smoothstep(0.48, 0.52, w);
+    let breathe = 0.6 + 0.4 * sin(t * 1.3 + p.x * 1.5 + p.y * 1.1 + c * 4.0);
+    let line = smoothstep(0.5, 0.5 + foam_w * 0.4, w) * (1.0 - smoothstep(0.5 + foam_w * 0.4, 0.5 + foam_w * 1.6, w));
+    let shelf = (1.0 - smoothstep(0.52, 0.78, w)) * 0.16;
+    rgb = rgb + vec3<f32>(shelf);
+    rgb = mix(rgb, vec3<f32>(0.94, 0.97, 1.0), line * (0.55 + 0.35 * breathe));
 
     return vec4<f32>(rgb, edge);
 }

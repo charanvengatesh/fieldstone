@@ -203,47 +203,35 @@ pub fn draw(
             }
         }
         for (cell, obj) in new_objects {
-            let shape = shapes.idx(&objects.at(obj).shape);
+            let def = objects.at(obj);
+            let shape = shapes.idx(&def.shape);
             let e = crate::art::spawn_shape(
                 &mut commands,
                 &assets,
                 shape,
-                Transform::from_translation(center_of(cell).extend(1.0)),
+                Transform::from_translation(object_pos(cell, def).extend(1.0)),
             );
             obj_entities.insert(cell, e);
         }
     }
 }
 
-/// Sub-quads per dual cell edge.
-const SUB: i32 = 4;
 /// Width of the anti-alias band between terrains, in weight units (0.5 is the boundary).
-const EDGE: f32 = 0.10;
+const EDGE: f32 = 0.06;
 
-/// Terrain drawn on the dual grid. Each dual cell spans the centers of four neighboring tiles;
-/// inside it, every terrain among those four gets a bilinear weight and the heaviest one wins,
-/// with a thin blend at the 0.5 contour. The contour of a bilinear field is a curve, so shores
-/// round off and diagonals cut cleanly instead of stepping. Grain is hashed on a shared
-/// lattice so it is continuous across cells and chunks.
+/// Ground mesh on the dual grid: each cell spans four tile centers and is tessellated into
+/// `SUB x SUB` quads whose vertices take the heaviest terrain of the smooth field in
+/// [`super::blend`], with a thin blend at the contour. Grain is hashed on a shared lattice so
+/// it is continuous across cells and chunks.
 fn terrain_mesh(
     pos: IVec2,
     tiles: &[Tile; TILES],
     colors: &[[f32; 4]],
     tile_at: impl Fn(IVec2) -> Option<u16>,
 ) -> Mesh {
+    use super::blend::{SUB, terrain_lookup, weights_at};
     let origin = pos * CHUNK;
-    let terrain_of = |cell: IVec2| -> u16 {
-        let local = cell - origin;
-        let inside = (0..CHUNK).contains(&local.x) && (0..CHUNK).contains(&local.y);
-        if inside {
-            tiles[(local.y * CHUNK + local.x) as usize].terrain
-        } else {
-            tile_at(cell).unwrap_or_else(|| {
-                let l = local.clamp(IVec2::ZERO, IVec2::splat(CHUNK - 1));
-                tiles[(l.y * CHUNK + l.x) as usize].terrain
-            })
-        }
-    };
+    let terrain_of = terrain_lookup(pos, tiles, &tile_at);
     let color = |t: u16| {
         colors
             .get(t as usize)
@@ -261,50 +249,28 @@ fn terrain_mesh(
     for ty in 0..CHUNK {
         for tx in 0..CHUNK {
             let cell = origin + IVec2::new(tx, ty);
-            // Corner terrains of this dual cell: the tile itself and its +x, +y, +xy neighbors.
-            let t = [
-                terrain_of(cell),
-                terrain_of(cell + IVec2::X),
-                terrain_of(cell + IVec2::Y),
-                terrain_of(cell + IVec2::ONE),
-            ];
             let b = positions.len() as u32;
             for sy in 0..=SUB {
                 for sx in 0..=SUB {
                     let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
-                    let w = [(1.0 - u) * (1.0 - v), u * (1.0 - v), (1.0 - u) * v, u * v];
-                    // Weight per distinct terrain; higher terrain index wins exact ties.
-                    let mut best: (u16, f32) = (t[0], -1.0);
-                    let mut second: (u16, f32) = (t[0], -1.0);
-                    for k in 0..4 {
-                        if (0..k).any(|m| t[m] == t[k]) {
-                            continue;
+                    let p = cell.as_vec2() + Vec2::new(u, v);
+                    let w = weights_at(p, &terrain_of);
+                    let a = color(w[0].0);
+                    let mut c = match w.get(1) {
+                        None => a,
+                        Some(second) => {
+                            let bcol = color(second.0);
+                            let m = smooth((w[0].1 - second.1) / (2.0 * EDGE) + 0.5);
+                            [
+                                bcol[0] + (a[0] - bcol[0]) * m,
+                                bcol[1] + (a[1] - bcol[1]) * m,
+                                bcol[2] + (a[2] - bcol[2]) * m,
+                                1.0,
+                            ]
                         }
-                        let weight: f32 =
-                            (0..4).filter(|&m| t[m] == t[k]).map(|m| w[m]).sum::<f32>()
-                                + t[k] as f32 * 1e-4;
-                        if weight > best.1 {
-                            second = best;
-                            best = (t[k], weight);
-                        } else if weight > second.1 {
-                            second = (t[k], weight);
-                        }
-                    }
-                    let a = color(best.0);
-                    let mut c = if second.1 < 0.0 {
-                        a
-                    } else {
-                        let bcol = color(second.0);
-                        let m = smooth((best.1 - second.1) / (2.0 * EDGE) + 0.5);
-                        [
-                            bcol[0] + (a[0] - bcol[0]) * m,
-                            bcol[1] + (a[1] - bcol[1]) * m,
-                            bcol[2] + (a[2] - bcol[2]) * m,
-                            1.0,
-                        ]
                     };
-                    let g = 0.97
-                        + 0.06 * crate::core::hash01(11, cell.x * SUB + sx, cell.y * SUB + sy, 5);
+                    let g = 0.975
+                        + 0.05 * crate::core::hash01(11, cell.x * SUB + sx, cell.y * SUB + sy, 5);
                     for channel in c.iter_mut().take(3) {
                         *channel *= g;
                     }
@@ -357,12 +323,24 @@ pub fn put_object(
     if map.set_object(cell, Some(object)).is_none() {
         return;
     }
-    let shape = shapes.idx(&objects.at(object).shape);
+    let def = objects.at(object);
+    let shape = shapes.idx(&def.shape);
     let e = crate::art::spawn_shape(
         commands,
         assets,
         shape,
-        Transform::from_translation(center_of(cell).extend(1.0)),
+        Transform::from_translation(object_pos(cell, def).extend(1.0)),
     );
     map.objects.insert(cell, e);
+}
+
+/// Where an object draws: the cell center nudged by its `jitter`, deterministic per cell, so
+/// forests and scattered decor stop lining up on the grid.
+pub fn object_pos(cell: IVec2, def: &ObjectDef) -> Vec2 {
+    if def.jitter <= 0.0 {
+        return center_of(cell);
+    }
+    let dx = crate::core::hash01(5, cell.x, cell.y, 21) - 0.5;
+    let dy = crate::core::hash01(5, cell.x, cell.y, 22) - 0.5;
+    center_of(cell) + Vec2::new(dx, dy) * 2.0 * def.jitter * CELL
 }

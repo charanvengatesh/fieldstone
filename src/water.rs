@@ -35,7 +35,7 @@ pub struct WaterMesh;
 
 pub fn setup(mut commands: Commands, mut materials: ResMut<Assets<WaterMaterial>>) {
     commands.insert_resource(WaterHandle(materials.add(WaterMaterial {
-        params: Vec4::new(0.0, 1.0, 0.07, 0.0),
+        params: Vec4::new(0.0, 1.0, 0.035, 0.0),
     })));
 }
 
@@ -49,10 +49,8 @@ pub fn tick(
     }
 }
 
-const SUB: i32 = 3;
-
-/// Water overlay for one chunk, or `None` if the chunk touches no water. `is_water(terrain)`
-/// and `color(terrain)` describe terrains; `tile_at` resolves cells outside the chunk.
+/// Water overlay for one chunk, or `None` if the chunk touches no water. Alpha carries the
+/// smooth water weight from [`crate::world::blend`], so the shore matches the ground mesh.
 pub fn water_mesh(
     pos: IVec2,
     tiles: &[Tile; TILES],
@@ -60,68 +58,57 @@ pub fn water_mesh(
     color: impl Fn(u16) -> [f32; 4],
     tile_at: impl Fn(IVec2) -> Option<u16>,
 ) -> Option<Mesh> {
+    use crate::world::blend::{SUB, terrain_lookup, weights_at};
     let origin = pos * CHUNK;
-    let terrain_of = |cell: IVec2| -> u16 {
-        let local = cell - origin;
-        let inside = (0..CHUNK).contains(&local.x) && (0..CHUNK).contains(&local.y);
-        if inside {
-            tiles[(local.y * CHUNK + local.x) as usize].terrain
-        } else {
-            tile_at(cell).unwrap_or_else(|| {
-                let l = local.clamp(IVec2::ZERO, IVec2::splat(CHUNK - 1));
-                tiles[(l.y * CHUNK + l.x) as usize].terrain
-            })
-        }
-    };
+    let terrain_of = terrain_lookup(pos, tiles, &tile_at);
     let mut positions = Vec::new();
     let mut cols = Vec::new();
     let mut idx = Vec::new();
     for ty in 0..CHUNK {
         for tx in 0..CHUNK {
             let cell = origin + IVec2::new(tx, ty);
-            let t = [
-                terrain_of(cell),
-                terrain_of(cell + IVec2::X),
-                terrain_of(cell + IVec2::Y),
-                terrain_of(cell + IVec2::ONE),
-            ];
-            let wet = [
-                is_water(t[0]),
-                is_water(t[1]),
-                is_water(t[2]),
-                is_water(t[3]),
-            ];
-            if !wet.iter().any(|w| *w) {
+            // Skip cells with no water within the kernel's reach.
+            let near_water = (-2..=2)
+                .any(|dy| (-2..=2).any(|dx| is_water(terrain_of(cell + IVec2::new(dx, dy)))));
+            if !near_water {
                 continue;
             }
-            // Average water color among the wet corners (deep and shallow blend naturally).
-            let mut base = [0.0f32; 4];
-            let mut count = 0.0;
-            for k in 0..4 {
-                if wet[k] {
-                    let c = color(t[k]);
-                    for ch in 0..3 {
-                        base[ch] += c[ch];
-                    }
-                    count += 1.0;
-                }
-            }
-            for ch in base.iter_mut().take(3) {
-                *ch /= count;
-            }
             let b = positions.len() as u32;
+            let mut any = false;
             for sy in 0..=SUB {
                 for sx in 0..=SUB {
                     let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
-                    let w = [(1.0 - u) * (1.0 - v), u * (1.0 - v), (1.0 - u) * v, u * v];
-                    let weight: f32 = (0..4).filter(|&k| wet[k]).map(|k| w[k]).sum();
+                    let p = cell.as_vec2() + Vec2::new(u, v);
+                    let w = weights_at(p, &terrain_of);
+                    let mut weight = 0.0;
+                    let mut rgb = [0.0f32; 3];
+                    for (t, k) in &w {
+                        if is_water(*t) {
+                            weight += k;
+                            let c = color(*t);
+                            for ch in 0..3 {
+                                rgb[ch] += c[ch] * k;
+                            }
+                        }
+                    }
+                    if weight > 0.0 {
+                        for ch in rgb.iter_mut() {
+                            *ch /= weight;
+                        }
+                    }
+                    any |= weight > 0.3;
                     positions.push([
                         (tx as f32 + 0.5 + u) * CELL,
                         (ty as f32 + 0.5 + v) * CELL,
                         0.0,
                     ]);
-                    cols.push([base[0], base[1], base[2], weight]);
+                    cols.push([rgb[0], rgb[1], rgb[2], weight]);
                 }
+            }
+            if !any {
+                positions.truncate(b as usize);
+                cols.truncate(b as usize);
+                continue;
             }
             let wv = (SUB + 1) as u32;
             for sy in 0..SUB as u32 {
