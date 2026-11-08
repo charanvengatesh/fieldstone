@@ -10,7 +10,7 @@ off a base. Everything you see is a vector shape; everything you interact with i
 |-------|--------|
 | WASD / arrow keys | Move |
 | Shift | Sprint |
-| Left click (hold) | Mine the object under the cursor with the held tool |
+| Left click (hold) | Mine the outlined object under the cursor; a bar shows progress. Reach is 6 cells |
 | Left click | Swing or shoot the held weapon toward the cursor |
 | Left click | With a hoe: till grass. With a rod: cast at water, click again on the bite |
 | Right click | Place the held block or station, or eat the held food |
@@ -26,7 +26,7 @@ off a base. Everything you see is a vector shape; everything you interact with i
 cargo run                                   # first build takes a few minutes (Bevy)
 cargo run --features bevy/dynamic_linking   # faster rebuilds while iterating
 cargo test                                  # registry, chunk math, collision, inventory tests
-cargo run -- --headless-smoke               # 600 frames without a window, exits 0 if nothing panics
+cargo run -- --headless-smoke               # no window: scripted input mines an object and places a wall, exits non-zero on failure
 cargo run -- --new                          # ignore the save file and start a fresh world
 cargo run -- --seed 42                      # fix the world seed
 ```

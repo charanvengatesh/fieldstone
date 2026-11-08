@@ -12,6 +12,7 @@ mod fx;
 mod items;
 mod player;
 mod script;
+mod smoke;
 mod stats;
 mod ui;
 mod world;
@@ -38,7 +39,9 @@ fn main() {
     let mut app = App::new();
     if headless {
         app.add_plugins((
-            MinimalPlugins,
+            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
+                std::time::Duration::from_millis(16),
+            )),
             bevy::log::LogPlugin::default(),
             AssetPlugin::default(),
             bevy::input::InputPlugin,
@@ -46,16 +49,8 @@ fn main() {
         ))
         .init_asset::<Mesh>()
         .init_asset::<ColorMaterial>()
-        .add_systems(
-            Update,
-            |mut n: Local<u32>, mut exit: MessageWriter<AppExit>| {
-                *n += 1;
-                if *n >= 600 {
-                    info!("smoke test ran 600 frames");
-                    exit.write(AppExit::Success);
-                }
-            },
-        );
+        .init_resource::<smoke::Smoke>()
+        .add_systems(Update, smoke::drive.before(player::PlayerSet));
     } else {
         app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {

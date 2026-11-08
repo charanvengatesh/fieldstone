@@ -14,9 +14,9 @@ use crate::world::stream::{clear_object, put_object};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CELL, ChunkMap, PLAYER_R, center_of, overlapping_cells};
 
-pub const REACH: f32 = CELL * 4.0;
+pub const REACH: f32 = CELL * 6.0;
 /// Damage per second from bare hands or a tool whose power exactly meets the hardness.
-const BASE_DPS: f32 = 1.0;
+const BASE_DPS: f32 = 1.5;
 
 /// Remaining hit points of objects currently being mined.
 #[derive(Resource, Default)]

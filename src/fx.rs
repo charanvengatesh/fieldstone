@@ -7,7 +7,8 @@ use crate::art::ShapeAssets;
 use crate::core::time::GameTime;
 use crate::core::{ObjectDef, Registry, Rng, ShapeDef};
 use crate::daylight::darkness;
-use crate::items::interact::ObjectBroken;
+use crate::items::interact::{Damage, ObjectBroken, REACH};
+use crate::player::{Cursor, Player};
 use crate::world::chunk::{CHUNK, TILES};
 use crate::world::{CELL, ChunkMap, center_of};
 
@@ -180,13 +181,52 @@ pub fn glows(
     }
 }
 
+/// Outline on the hovered cell (bright when in reach) and a shrinking bar while mining.
+pub fn hover(
+    cursor: Res<Cursor>,
+    damage: Res<Damage>,
+    map: Res<ChunkMap>,
+    objects: Res<Registry<ObjectDef>>,
+    player: Single<&Transform, With<Player>>,
+    mut gizmos: Gizmos,
+) {
+    let Some(cell) = cursor.0 else { return };
+    let center = center_of(cell);
+    let near = player.translation.truncate().distance(center) <= REACH;
+    let color = if near {
+        Color::srgba(1.0, 1.0, 1.0, 0.9)
+    } else {
+        Color::srgba(1.0, 1.0, 1.0, 0.25)
+    };
+    gizmos.rect_2d(
+        Isometry2d::from_translation(center),
+        Vec2::splat(CELL - 2.0),
+        color,
+    );
+    if let Some(hp) = damage.0.get(&cell)
+        && let Some(def) = map.tile(cell).and_then(|t| t.object).map(|o| objects.at(o))
+    {
+        let frac = (hp / def.hp).clamp(0.0, 1.0);
+        let y = center.y - CELL * 0.65;
+        let half = CELL * 0.5;
+        gizmos.line_2d(
+            Vec2::new(center.x - half, y),
+            Vec2::new(center.x - half + CELL * frac, y),
+            Color::srgb(1.0, 0.85, 0.3),
+        );
+    }
+}
+
 pub struct FxPlugin;
 
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Glows>()
             .add_systems(Startup, setup)
-            .add_systems(Update, (slash, break_particles, glows, tick).in_set(FxSet));
+            .add_systems(
+                Update,
+                (slash, break_particles, glows, tick, hover).in_set(FxSet),
+            );
     }
 }
 
