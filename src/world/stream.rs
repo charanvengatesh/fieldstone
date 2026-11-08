@@ -86,6 +86,9 @@ fn unload(map: &mut ChunkMap, saved: &mut SavedChunks, pos: IVec2, commands: &mu
     if let Some(e) = map.water.remove(&pos) {
         commands.entity(e).despawn();
     }
+    for e in map.layers.remove(&pos).unwrap_or_default() {
+        commands.entity(e).despawn();
+    }
     let origin = pos * CHUNK;
     for y in 0..CHUNK {
         for x in 0..CHUNK {
@@ -106,6 +109,7 @@ pub fn draw(
     assets: Res<ShapeAssets>,
     material: Res<TerrainMaterial>,
     water: Option<Res<crate::water::WaterHandle>>,
+    ground: Option<Res<crate::ground::GroundHandles>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
@@ -122,6 +126,7 @@ pub fn draw(
         entities,
         objects: obj_entities,
         water: water_entities,
+        layers,
     } = &mut *map;
     let dirty: Vec<IVec2> = chunks
         .iter()
@@ -137,6 +142,31 @@ pub fn draw(
                 .map(|ch| ch.tiles[local_index(c)].terrain)
         };
         let mesh = meshes.add(terrain_mesh(pos, &tiles, &colors, neighbor));
+        if let Some(ground) = &ground {
+            for e in layers.remove(&pos).unwrap_or_default() {
+                commands.entity(e).despawn();
+            }
+            let origin_v = (center_of(pos * CHUNK) - CELL / 2.0).extend(0.0);
+            let spawned: Vec<Entity> = crate::ground::layer_meshes(pos, &tiles, &colors, neighbor)
+                .into_iter()
+                .enumerate()
+                .map(|(k, (_, m))| {
+                    commands
+                        .spawn((
+                            crate::ground::GroundLayer,
+                            Mesh2d(meshes.add(m)),
+                            MeshMaterial2d(ground.layer.clone()),
+                            Transform::from_translation(
+                                origin_v + Vec3::Z * (0.01 + 0.005 * k as f32),
+                            ),
+                        ))
+                        .id()
+                })
+                .collect();
+            if !spawned.is_empty() {
+                layers.insert(pos, spawned);
+            }
+        }
         if let Some(water) = &water {
             let wm = crate::water::water_mesh(
                 pos,
@@ -191,14 +221,20 @@ pub fn draw(
                 commands.entity(e).insert(Mesh2d(mesh));
             }
             None => {
-                let e = commands
-                    .spawn((
-                        ChunkMesh(pos),
-                        Mesh2d(mesh),
-                        MeshMaterial2d(material.0.clone()),
-                        Transform::from_translation(origin.extend(0.0)),
-                    ))
-                    .id();
+                let mut e = commands.spawn((
+                    ChunkMesh(pos),
+                    Mesh2d(mesh),
+                    Transform::from_translation(origin.extend(0.0)),
+                ));
+                match &ground {
+                    Some(g) => {
+                        e.insert(MeshMaterial2d(g.base.clone()));
+                    }
+                    None => {
+                        e.insert(MeshMaterial2d(material.0.clone()));
+                    }
+                }
+                let e = e.id();
                 entities.insert(pos, e);
             }
         }
@@ -256,7 +292,7 @@ fn terrain_mesh(
                     let p = cell.as_vec2() + Vec2::new(u, v);
                     let w = weights_at(p, &terrain_of);
                     let a = color(w[0].0);
-                    let mut c = match w.get(1) {
+                    let c = match w.get(1) {
                         None => a,
                         Some(second) => {
                             let bcol = color(second.0);
@@ -269,11 +305,6 @@ fn terrain_mesh(
                             ]
                         }
                     };
-                    let g = 0.975
-                        + 0.05 * crate::core::hash01(11, cell.x * SUB + sx, cell.y * SUB + sy, 5);
-                    for channel in c.iter_mut().take(3) {
-                        *channel *= g;
-                    }
                     positions.push([
                         (tx as f32 + 0.5 + u) * CELL,
                         (ty as f32 + 0.5 + v) * CELL,

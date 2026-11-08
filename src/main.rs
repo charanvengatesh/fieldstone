@@ -9,6 +9,7 @@ mod daylight;
 mod farm;
 mod fish;
 mod fx;
+mod ground;
 mod hints;
 mod items;
 mod player;
@@ -68,6 +69,7 @@ fn main() {
             daylight::DaylightPlugin,
             fx::FxPlugin,
             water::WaterPlugin,
+            ground::GroundPlugin,
             sound::SoundPlugin,
             hints::HintsPlugin,
         ));

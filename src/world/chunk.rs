@@ -42,6 +42,8 @@ pub struct ChunkMap {
     pub objects: HashMap<IVec2, Entity>,
     /// Water overlay entity per chunk, when the chunk touches water.
     pub water: HashMap<IVec2, Entity>,
+    /// Per-terrain edge layers per chunk (see `ground.rs`).
+    pub layers: HashMap<IVec2, Vec<Entity>>,
 }
 
 pub fn chunk_of(cell: IVec2) -> IVec2 {

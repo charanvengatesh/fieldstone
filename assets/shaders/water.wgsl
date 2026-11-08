@@ -61,7 +61,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Shoreline: cut at the contour, a thin foam line just inside it that breathes, and a
     // lighter shelf fading into deeper water.
-    let edge = smoothstep(0.48, 0.52, w);
+    let aa = max(fwidth(w), 0.002) * 0.9;
+    let edge = smoothstep(0.5 - aa, 0.5 + aa, w);
     let breathe = 0.6 + 0.4 * sin(t * 1.3 + p.x * 1.5 + p.y * 1.1 + c * 4.0);
     let line = smoothstep(0.5, 0.5 + foam_w * 0.4, w) * (1.0 - smoothstep(0.5 + foam_w * 0.4, 0.5 + foam_w * 1.6, w));
     let shelf = (1.0 - smoothstep(0.52, 0.78, w)) * 0.16;
