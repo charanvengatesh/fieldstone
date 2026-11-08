@@ -6,7 +6,9 @@ A mod is a folder in here with the same layout as `assets/packs/base/`. Every fi
 mods/my-mod/
   pack.ron        (name: "my-mod", format: 1, enabled: true, depends: ["base"], scripts: [])
   palette.ron     new or overridden colors
-  shapes.ron      vector art recipes
+  shapes.ron      shape recipes (also the source of generated pixel art)
+  sprites.ron     PNG strips per visual id: frames, fps, anchor
+  tiles/<terrain>.png   4x4 sheet of 16 px tiles per terrain (and _0.._3 frames for water)
   terrain.ron     ground types
   objects.ron     trees, ores, walls, stations
   items.ron
@@ -36,6 +38,11 @@ functions and the engine calls them:
 | `on_death(creature_id, x, y)` | `"player"` when the player dies |
 | `on_day_start(day)` | fires at each dawn after the first |
 | `on_object_used(x, y, from_id, to_id)` | an object with `use_swaps` was used (doors, shrine stages) |
+
+Pixel art: a sprite PNG is a horizontal strip of equal frames; a tile sheet is a 4x4 grid where
+tile index = corner mask (bit 0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right). Anything
+you do not provide is generated from the shape recipe, so a mod can start with shapes and swap
+in PNGs one at a time.
 
 Coordinates are cell indices (one cell is 25 world units). Scripts load once at startup; there is no
 hot reload yet. `give_item` drops the items at the player's feet rather than inserting them.

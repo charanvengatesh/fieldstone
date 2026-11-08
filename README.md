@@ -1,8 +1,9 @@
 # Fieldstone
 
 A small, data-driven, moddable top-down survival game in Rust and Bevy. Wander a procedurally
-generated field, chop trees, mine ore, craft tools at a workbench, smelt at a furnace, and wall
-off a base. Everything you see is a vector shape; everything you interact with is defined in RON.
+generated field, chop trees, mine ore, craft tools at a workbench, smelt at a furnace, cook at a
+campfire, and wall off a base. Art is 16 px pixel sprites and tiles, generated from shape
+recipes until a pack drops in real PNGs; everything you interact with is defined in RON.
 
 ## Controls
 
@@ -20,17 +21,18 @@ Built for a trackpad first: nothing needs holding or a right button.
 | F or right click | Use the held item (place, plant, eat), or use the object under the cursor: open a chest, open a door, sleep in a bed, feed the shrine |
 | Esc | Pause menu: resume, save, save and quit |
 | 1-0, two-finger scroll | Select hotbar slot |
-| Pinch, or - / = | Zoom |
+| Pinch, or - / = | Zoom (whole pixel scales in pixel mode) |
 | E | Inventory (click a slot to swap it with the selected hotbar slot) |
 | C | Crafting menu (click a lit recipe to craft) |
 | F5 | Save to `saves/world.ron` (loaded automatically next start) |
 | F3 | Debug readout |
 
-Every key is rebindable in `settings.ron`, written next to the executable on first run.
+Every key is rebindable in `settings.ron`, written next to the executable on first run. The same
+file holds `render` (`Pixel` or `Vector`), `pixel_scale` and `volume`.
 
 ## Goal
 
-Survive, build, and end the night: craft a Sun Shrine (stone and gold at a workbench), forge
+Eat (the amber bar is food), survive, build, and end the night: craft a Sun Shrine (stone and gold at a workbench), forge
 three Sun Cores (gold, iron and coal at a furnace), and feed them to the shrine. The quest is a
 Lua script in the base pack, so a mod can replace it.
 
@@ -49,8 +51,8 @@ cargo build --release                       # optimized binary in target/release
 ## Layout
 
 - `src/core/` — content schemas (`defs.rs`), id registries, pack loader, clock, save/load
-- `src/world/` — chunked tile storage, noise world generation, streaming and meshes, collision
-- `src/art.rs` — shape recipes to `Mesh2d` entities; the only rendering code
+- `src/world/` — chunked tile storage, noise world generation, streaming, tile sheets and meshes, collision
+- `src/art.rs` — visuals: pixel sprites generated from shape recipes (or PNGs), vector meshes
 - `src/player.rs` — input, movement, camera follow, cursor cell
 - `src/items/` — inventory, drops, mining and placing, crafting
 - `src/stats.rs` — health, stamina, damage, death, experience and skills
@@ -64,7 +66,7 @@ cargo build --release                       # optimized binary in target/release
 - `src/sound.rs` — procedural sound effects
 - `src/hints.rs` — one-shot guidance from `hints.ron`
 - `src/ui/` — hotbar, inventory panel, crafting panel, debug text
-- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, fish, hints, worldgen, scripts
+- `assets/packs/base/` — the base content pack: palette, shapes, sprites, terrain, objects, items, recipes, loot, creatures, fish, hints, worldgen, scripts
 - `mods/` — additional packs; `example-crystal` (new ore, items, Lua) and `example-autumn` (palette-only recolor); see `mods/README.md`
 
 ## Content and mods
@@ -81,6 +83,8 @@ release. Each zip holds the binary plus `assets/` and `mods/`; run it from insid
 
 ## Roadmap
 
-- v0.5 (this): pause and settings, chests, bed and doors, shrine quest, water shader, sound,
-  hints, release builds, pack format version, two example mods
-- v0.6: hunger, multi-tile structures, stack splitting, crop timer persistence, more biomes
+- v0.6.0 (this): pixel renderer, generated sprites and tile sheets with PNG overrides, hunger
+  and cooking, deer and bats
+- v0.6.1: multi-tile structures, connected walls, stack splitting, structure stamps
+- v0.6.2: biomes by temperature, rivers, ruins, map screen
+- v0.6.3: hot reload, additive worldgen patches, wider script API, generated API docs
