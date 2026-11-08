@@ -22,6 +22,8 @@ pub struct HpBar;
 #[derive(Component)]
 pub struct StaminaBar;
 #[derive(Component)]
+pub struct FoodBar;
+#[derive(Component)]
 pub struct LevelText;
 #[derive(Component)]
 pub struct StatusText;
@@ -115,6 +117,7 @@ pub fn spawn(mut commands: Commands) {
             p.spawn((LevelText, small("", 13.0, TEXT_DIM)));
             bar(p, HpBar, Color::srgb(0.88, 0.30, 0.34));
             bar(p, StaminaBar, Color::srgb(0.40, 0.78, 0.36));
+            bar(p, FoodBar, Color::srgb(0.92, 0.66, 0.28));
         });
     commands
         .spawn(Node {
@@ -235,11 +238,13 @@ pub fn update(
 
 pub fn bars(
     player: Single<(&Stats, &Progress), With<Player>>,
-    mut hp: Single<&mut Node, (With<HpBar>, Without<StaminaBar>)>,
-    mut stamina: Single<&mut Node, (With<StaminaBar>, Without<HpBar>)>,
+    mut hp: Single<&mut Node, (With<HpBar>, Without<StaminaBar>, Without<FoodBar>)>,
+    mut stamina: Single<&mut Node, (With<StaminaBar>, Without<HpBar>, Without<FoodBar>)>,
+    mut food: Single<&mut Node, (With<FoodBar>, Without<HpBar>, Without<StaminaBar>)>,
     mut level: Single<&mut Text, With<LevelText>>,
 ) {
     let (s, p) = *player;
+    food.width = Val::Percent((s.food / crate::stats::FOOD_MAX * 100.0).clamp(0.0, 100.0));
     hp.width = Val::Percent((s.hp / s.max_hp * 100.0).clamp(0.0, 100.0));
     stamina.width = Val::Percent((s.stamina / s.max_stamina.max(1.0) * 100.0).clamp(0.0, 100.0));
     level.0 = format!("Lv {}   {:.0} / {:.0} xp", p.level, p.xp, p.next_level_xp());

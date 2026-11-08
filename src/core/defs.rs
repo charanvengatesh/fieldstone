@@ -215,8 +215,12 @@ pub enum Use {
         projectile: Option<String>,
     },
     Eat {
+        #[serde(default)]
         hp: f32,
+        #[serde(default)]
         stamina: f32,
+        #[serde(default)]
+        food: f32,
     },
     Seed(String),
     Rod {
@@ -340,6 +344,8 @@ pub struct StatsDef {
 pub enum Behavior {
     /// Wanders; never attacks.
     Passive,
+    /// Wanders; runs from the player when hurt or approached within `flee` cells.
+    Skittish { flee: f32 },
     /// Wanders until the player is within `aggro` cells, then chases and bites.
     Hostile { aggro: f32 },
 }

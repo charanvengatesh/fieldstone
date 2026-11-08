@@ -12,6 +12,10 @@
     (id: "axe_stone",     inputs: [("stone", 3), ("stick", 2)],      output: ("axe_stone", 1),     station: Some("workbench")),
     (id: "furnace",       inputs: [("stone", 8)],                    output: ("furnace", 1),       station: Some("workbench")),
 
+    (id: "campfire",      inputs: [("stick", 3), ("stone", 1)],      output: ("campfire", 1)),
+    (id: "meat_cooked",   inputs: [("meat", 1)],                     output: ("meat_cooked", 1),   station: Some("fire")),
+    (id: "fish_cooked",   inputs: [("fish_perch", 1)],               output: ("fish_cooked", 1),   station: Some("fire")),
+    (id: "fish_cooked_b", inputs: [("fish_carp", 1)],                output: ("fish_cooked", 1),   station: Some("fire")),
     (id: "torch",         inputs: [("stick", 1), ("coal", 1)],       output: ("torch", 4)),
     (id: "sword_wood",    inputs: [("plank", 2), ("stick", 1)],      output: ("sword_wood", 1),    station: Some("workbench")),
     (id: "sword_stone",   inputs: [("stone", 2), ("stick", 1)],      output: ("sword_stone", 1),   station: Some("workbench")),

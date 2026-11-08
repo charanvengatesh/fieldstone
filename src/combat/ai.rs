@@ -52,6 +52,8 @@ pub fn think(
         }
         let hostile = ai.calm <= 0.0
             && matches!(def.ai, Behavior::Hostile { aggro } if to_player.length() <= aggro * CELL);
+        let fleeing = matches!(def.ai, Behavior::Skittish { flee }
+            if to_player.length() <= flee * CELL || (stats.hp < stats.max_hp && to_player.length() <= flee * 2.5 * CELL));
         let speed = if hostile {
             if to_player.length() <= BITE_RANGE {
                 ai.dir = Vec2::ZERO;
@@ -66,6 +68,10 @@ pub fn think(
                 ai.dir = to_player.normalize_or_zero();
             }
             stats.speed
+        } else if fleeing {
+            ai.dir = (-to_player).normalize_or_zero();
+            ai.timer = 0.0;
+            stats.speed * 1.3
         } else {
             if ai.timer <= 0.0 {
                 ai.timer = rng.range(1.0, 3.0);

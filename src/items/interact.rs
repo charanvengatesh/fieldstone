@@ -314,9 +314,10 @@ pub fn place(
     let (tf, inv, stats) = &mut *player;
     let pos = tf.translation.truncate();
     let Some(held) = inv.held() else { return };
-    if let Use::Eat { hp, stamina } = items.at(held.item).usage {
+    if let Use::Eat { hp, stamina, food } = items.at(held.item).usage {
         stats.hp = (stats.hp + hp).min(stats.max_hp);
         stats.stamina = (stats.stamina + stamina).min(stats.max_stamina);
+        stats.food = (stats.food + food).min(crate::stats::FOOD_MAX);
         inv.consume_held();
         return;
     }

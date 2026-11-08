@@ -2,6 +2,7 @@
 // toast is showing. Mods can add hints or redefine these by id.
 [
     (id: "start",    when: After(7.0),         text: "Click a tree to chop it. You walk there yourself.", secs: 7.0),
+    (id: "food",     when: After(60.0),        text: "The amber bar is food. Berries, mushrooms, fish, or cook meat at a campfire (3 sticks + 1 stone).", secs: 8.0),
     (id: "logs",     when: HasItem("log"),     text: "Logs! Press C to craft planks, then sticks, then a workbench.", secs: 7.0),
     (id: "bench",    when: HasItem("workbench"), text: "Press F on open ground to place the workbench, then craft next to it.", secs: 7.0),
     (id: "placed",   when: Placed("workbench"), text: "Tools need a workbench nearby. Try a pickaxe for the ore in the hills.", secs: 7.0),

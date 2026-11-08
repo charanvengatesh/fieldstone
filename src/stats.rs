@@ -10,11 +10,18 @@ use crate::world::worldgen::WorldGen;
 
 pub const STAMINA_REGEN: f32 = 8.0;
 pub const HP_REGEN: f32 = 0.5;
+pub const FOOD_MAX: f32 = 100.0;
+pub const FOOD_START: f32 = 80.0;
+/// Food points lost per second of game time.
+pub const FOOD_DRAIN: f32 = 1.0 / 8.0;
+pub const HUNGRY: f32 = 25.0;
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct Stats {
     pub hp: f32,
     pub max_hp: f32,
+    /// 0..100; only the player drains it.
+    pub food: f32,
     pub stamina: f32,
     pub max_stamina: f32,
     pub attack: f32,
@@ -27,6 +34,7 @@ impl From<StatsDef> for Stats {
         Self {
             hp: d.hp,
             max_hp: d.hp,
+            food: FOOD_START,
             stamina: d.stamina,
             max_stamina: d.stamina,
             attack: d.attack,
@@ -136,11 +144,52 @@ pub fn apply_damage(
     }
 }
 
-pub fn regen(time: Res<Time>, mut q: Query<&mut Stats>) {
-    for mut s in &mut q {
-        if s.hp > 0.0 {
-            s.stamina = (s.stamina + STAMINA_REGEN * time.delta_secs()).min(s.max_stamina);
+pub fn regen(time: Res<Time>, mut q: Query<(&mut Stats, Has<Player>)>) {
+    for (mut s, is_player) in &mut q {
+        if s.hp <= 0.0 {
+            continue;
+        }
+        let hungry = is_player && s.food < HUNGRY;
+        let stamina_rate = if hungry {
+            STAMINA_REGEN * 0.5
+        } else {
+            STAMINA_REGEN
+        };
+        s.stamina = (s.stamina + stamina_rate * time.delta_secs()).min(s.max_stamina);
+        if !hungry {
             s.hp = (s.hp + HP_REGEN * time.delta_secs()).min(s.max_hp);
+        }
+    }
+}
+
+/// The player's food drains with game time; at zero, slow damage and a warning.
+pub fn hunger(
+    time: Res<Time>,
+    mut toast: ResMut<crate::core::Toast>,
+    mut warned: Local<bool>,
+    mut starve: Local<f32>,
+    mut player: Single<(Entity, &mut Stats), With<Player>>,
+    mut damage: MessageWriter<Damage>,
+) {
+    let (entity, stats) = &mut *player;
+    stats.food = (stats.food - FOOD_DRAIN * time.delta_secs()).max(0.0);
+    if stats.food <= 0.0 {
+        *starve += time.delta_secs();
+        if *starve >= 5.0 {
+            *starve = 0.0;
+            damage.write(Damage {
+                target: *entity,
+                amount: 1.0 + stats.defense,
+            });
+        }
+        if !*warned {
+            toast.show("You are starving. Eat something.", 4.0);
+            *warned = true;
+        }
+    } else {
+        *starve = 0.0;
+        if stats.food > HUNGRY {
+            *warned = false;
         }
     }
 }
@@ -271,7 +320,15 @@ impl Plugin for StatsPlugin {
             .add_message::<CalmHostiles>()
             .add_systems(
                 Update,
-                (apply_damage, on_death, gain_xp, regen, grace, hit_flash)
+                (
+                    apply_damage,
+                    on_death,
+                    gain_xp,
+                    regen,
+                    hunger,
+                    grace,
+                    hit_flash,
+                )
                     .chain()
                     .in_set(StatsSet),
             );

@@ -36,6 +36,8 @@ struct SaveFile {
     inventory: Vec<Option<(String, u32)>>,
     #[serde(default)]
     hp: Option<f32>,
+    #[serde(default)]
+    food: Option<f32>,
     /// `(xp, level, skills)`.
     #[serde(default)]
     progress: Option<(f32, u32, Vec<(String, f32)>)>,
@@ -119,6 +121,7 @@ pub fn save(
             .map(|s| s.map(|s| (items.id_of(s.item).to_owned(), s.n)))
             .collect(),
         hp: Some(stats.hp),
+        food: Some(stats.food),
         progress: Some((progress.xp, progress.level, progress.skills.clone())),
         containers: containers
             .0
@@ -163,6 +166,7 @@ pub struct Loaded {
     pub player: Vec2,
     pub inventory: Vec<Option<(String, u32)>>,
     pub hp: Option<f32>,
+    pub food: Option<f32>,
     pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
     pub containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
     pub spawn: Option<Vec2>,
@@ -200,6 +204,7 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
         player: Vec2::new(file.player.0, file.player.1) * scale,
         inventory: file.inventory,
         hp: file.hp,
+        food: file.food,
         progress: file.progress,
         containers: file.containers,
         spawn: file.spawn.map(|(x, y)| Vec2::new(x, y) * scale),
@@ -243,6 +248,7 @@ pub fn restore_player(
         stats.attack += *level as f32;
     }
     stats.hp = p.hp.unwrap_or(stats.max_hp).min(stats.max_hp);
+    stats.food = p.food.unwrap_or(crate::stats::FOOD_START);
     for ((x, y), slots) in &p.containers {
         containers.0.insert(
             IVec2::new(*x, *y),
@@ -276,6 +282,7 @@ pub struct PendingPlayer {
     pub pos: Vec2,
     pub inventory: Vec<Option<(String, u32)>>,
     pub hp: Option<f32>,
+    pub food: Option<f32>,
     pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
     pub containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
     pub spawn: Option<Vec2>,
