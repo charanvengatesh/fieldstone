@@ -9,6 +9,7 @@ mod daylight;
 mod farm;
 mod fish;
 mod fx;
+mod hints;
 mod items;
 mod player;
 mod script;
@@ -68,6 +69,7 @@ fn main() {
             fx::FxPlugin,
             water::WaterPlugin,
             sound::SoundPlugin,
+            hints::HintsPlugin,
         ));
     }
     core::packs::load_all(&mut app);
@@ -127,6 +129,7 @@ fn setup_world(app: &mut App, options: &Options) {
         panic!("no terrain defined; is assets/packs/base present?");
     }
     world.get_resource_or_init::<Registry<ObjectDef>>();
+    world.get_resource_or_init::<Registry<core::HintDef>>();
     let gen_def = world
         .get_resource_or_init::<Registry<WorldGenDef>>()
         .iter()

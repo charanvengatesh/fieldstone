@@ -16,13 +16,22 @@ Built for a trackpad first: nothing needs holding or a right button.
 | Click with a weapon | Swing or shoot toward the cursor |
 | Click water with a rod | Cast; click again on the bite |
 | Click grass with a hoe | Till it |
-| F or right click | Use the held item: place a block or station, plant seeds, eat |
+| F or right click | Use the held item (place, plant, eat), or use the object under the cursor: open a chest, open a door, sleep in a bed, feed the shrine |
+| Esc | Pause menu: resume, save, save and quit |
 | 1-0, two-finger scroll | Select hotbar slot |
 | Pinch, or - / = | Zoom |
 | E | Inventory (click a slot to swap it with the selected hotbar slot) |
 | C | Crafting menu (click a lit recipe to craft) |
 | F5 | Save to `saves/world.ron` (loaded automatically next start) |
 | F3 | Debug readout |
+
+Every key is rebindable in `settings.ron`, written next to the executable on first run.
+
+## Goal
+
+Survive, build, and end the night: craft a Sun Shrine (stone and gold at a workbench), forge
+three Sun Cores (gold, iron and coal at a furnace), and feed them to the shrine. The quest is a
+Lua script in the base pack, so a mod can replace it.
 
 ## Run
 
@@ -33,6 +42,7 @@ cargo test                                  # registry, chunk math, collision, i
 cargo run -- --headless-smoke               # no window: scripted input mines an object and places a wall, exits non-zero on failure
 cargo run -- --new                          # ignore the save file and start a fresh world
 cargo run -- --seed 42                      # fix the world seed
+cargo build --release                       # optimized binary in target/release/
 ```
 
 ## Layout
@@ -48,10 +58,13 @@ cargo run -- --seed 42                      # fix the world seed
 - `src/farm.rs` — tilling and staged crop growth
 - `src/fish.rs` — casting, bites, fish tables
 - `src/script.rs` — Lua hooks and script-callable functions (`bevy_mod_scripting`)
-- `src/fx.rs` — slashes, break particles, night glows around lights
+- `src/fx.rs` — slashes, break particles, glints, night glows around lights
+- `src/water.rs` + `assets/shaders/water.wgsl` — animated water overlay
+- `src/sound.rs` — procedural sound effects
+- `src/hints.rs` — one-shot guidance from `hints.ron`
 - `src/ui/` — hotbar, inventory panel, crafting panel, debug text
-- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, fish, worldgen
-- `mods/` — drop additional packs here; see `mods/README.md`
+- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, fish, hints, worldgen, scripts
+- `mods/` — additional packs; `example-crystal` (new ore, items, Lua) and `example-autumn` (palette-only recolor); see `mods/README.md`
 
 ## Content and mods
 
@@ -60,10 +73,13 @@ colors, the generator config) and nothing concrete. A pack is a folder of RON fi
 `assets/packs/base` is just the first pack. Later packs override earlier records with the same id.
 Schemas live in `src/core/defs.rs`.
 
+## Releases
+
+Tagging `v*` builds macOS, Linux and Windows zips through GitHub Actions and attaches them to a
+release. Each zip holds the binary plus `assets/` and `mods/`; run it from inside the folder.
+
 ## Roadmap
 
-1. Survival loop: world, mining, inventory, crafting, building, saving (done)
-2. Combat and RPG stats: health, stamina, weapons, creatures, experience, day/night (done)
-3. Farming, fishing, Lua scripting hooks, example mod (done; see `mods/example-crystal`)
-4. Polish: slash and particle effects, torch glows, title card, CLI flags (done); audio and
-   rebindable keys are still open
+- v0.5 (this): pause and settings, chests, bed and doors, shrine quest, water shader, sound,
+  hints, release builds, pack format version, two example mods
+- v0.6: hunger, multi-tile structures, stack splitting, crop timer persistence, more biomes

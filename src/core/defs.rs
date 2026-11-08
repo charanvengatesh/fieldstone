@@ -29,6 +29,9 @@ pub struct PackDef {
     /// Pack format this pack was written for; the engine warns when it is newer than it knows.
     #[serde(default = "one_u32")]
     pub format: u32,
+    /// Set to `false` to keep a pack on disk without loading it.
+    #[serde(default = "yes")]
+    pub enabled: bool,
     #[serde(default)]
     pub depends: Vec<String>,
     #[serde(default)]
@@ -341,6 +344,31 @@ pub struct CreatureDef {
 }
 def!(CreatureDef, "creatures.ron");
 
+#[derive(Deserialize, Debug, Clone)]
+pub enum HintWhen {
+    /// Seconds since the game started.
+    After(f32),
+    HasItem(String),
+    Placed(String),
+    Night,
+    Day(u32),
+    Level(u32),
+}
+
+/// `hints.ron`: one-shot guidance lines shown top-center when their trigger first holds.
+#[derive(Deserialize, Debug, Clone)]
+pub struct HintDef {
+    pub id: String,
+    pub when: HintWhen,
+    pub text: String,
+    #[serde(default = "six")]
+    pub secs: f32,
+}
+def!(HintDef, "hints.ron");
+
+fn six() -> f32 {
+    6.0
+}
 fn any() -> TimeOfDay {
     TimeOfDay::Any
 }

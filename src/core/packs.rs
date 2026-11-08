@@ -38,6 +38,12 @@ pub fn load_all(app: &mut App) {
                 (p, meta)
             })
             .collect();
+        found.retain(|(p, meta)| {
+            if !meta.enabled {
+                info!("pack '{}' at {} is disabled", meta.name, p.display());
+            }
+            meta.enabled
+        });
         found.sort_by(|a, b| a.1.name.cmp(&b.1.name));
         packs.extend(order_by_depends(found));
     }
@@ -64,6 +70,7 @@ pub fn load_all(app: &mut App) {
         merge::<WorldGenDef>(w, dir);
         merge::<CreatureDef>(w, dir);
         merge::<FishTableDef>(w, dir);
+        merge::<HintDef>(w, dir);
     }
     app.insert_resource(LoadedPacks(packs));
 }
@@ -121,6 +128,7 @@ mod tests {
             PackDef {
                 name: name.into(),
                 format: 1,
+                enabled: true,
                 depends: depends.iter().map(|s| s.to_string()).collect(),
                 scripts: vec![],
             },
