@@ -25,7 +25,7 @@
         (object: "rock",     on: ["rock"],            density: 0.10),
         (object: "iron_ore", on: ["rock"],            density: 0.14, noise: Some((30.0, 0.15))),
         (object: "coal_ore", on: ["rock"],            density: 0.14, noise: Some((30.0, 0.15))),
-        (object: "gold_ore", on: ["rock"],            density: 0.06, noise: Some((45.0, 0.40))),
+        (object: "gold_ore", on: ["rock"],            density: 0.06, noise: Some((45.0, 0.30))),
         (object: "grass_tuft",   on: ["grass", "meadow"], density: 0.12),
         (object: "flower_white", on: ["meadow"],          density: 0.05),
         (object: "flower_red",   on: ["meadow", "grass"], density: 0.02),

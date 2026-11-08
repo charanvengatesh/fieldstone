@@ -10,6 +10,6 @@
         (item: "fish_carp",   weight: 3.0),
         (item: "fish_pike",   weight: 2.0, min_rod_power: 2),
         (item: "fish_eel",    weight: 2.0, time: Night),
-        (item: "gold_ore",    weight: 0.3, min_rod_power: 2),
+        (item: "gold_ore",    weight: 0.8, min_rod_power: 2),
     ]),
 ]

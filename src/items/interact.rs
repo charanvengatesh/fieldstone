@@ -362,3 +362,26 @@ pub fn place(
     inv.consume_held();
     placed.write(ObjectPlaced { cell, object: obj });
 }
+
+/// Drop key: tosses the held stack a short way in the facing direction.
+pub fn drop_held(
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<Keys>,
+    mut player: Single<(&Transform, &mut Inventory), With<Player>>,
+    mut drops: MessageWriter<SpawnDrop>,
+) {
+    if !keys.just(&input, &keys.drop) {
+        return;
+    }
+    let (tf, inv) = &mut *player;
+    let Some(stack) = inv.held() else { return };
+    let forward = tf.rotation.mul_vec3(Vec3::X).truncate();
+    drops.write(SpawnDrop {
+        item: stack.item,
+        n: stack.n,
+        // Just past the pickup magnet, so it stays put until you step toward it.
+        at: tf.translation.truncate() + forward * CELL * 2.2,
+    });
+    let sel = inv.selected;
+    inv.slots[sel] = None;
+}

@@ -25,6 +25,7 @@ impl Plugin for ItemsPlugin {
                 Update,
                 (
                     interact::select_slot,
+                    interact::drop_held,
                     interact::pick_target,
                     interact::mine,
                     interact::use_object,

@@ -150,16 +150,23 @@ fn setup_world(app: &mut App, options: &Options) {
     } else {
         core::save::load(terrain, objects)
     };
-    let seed = options.seed.unwrap_or_else(|| {
-        loaded.as_ref().map_or_else(
-            || {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(7, |d| d.as_secs() as u32)
-            },
-            |l| l.seed,
-        )
-    });
+    if options.seed.is_some() && loaded.is_some() {
+        warn!("--seed ignored: a save exists; use --new to start a fresh world with that seed");
+    }
+    let seed = loaded
+        .as_ref()
+        .map(|l| l.seed)
+        .or(options.seed)
+        .unwrap_or_else(|| {
+            None::<&core::save::Loaded>.map_or_else(
+                || {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map_or(7, |d| d.as_secs() as u32)
+                },
+                |l| l.seed,
+            )
+        });
     let wg = WorldGen::new(seed, &gen_def, terrain, objects);
     let spawn = spawn_point(&wg, terrain, objects);
     let pending = match &loaded {
@@ -169,6 +176,9 @@ fn setup_world(app: &mut App, options: &Options) {
             hp: l.hp,
             progress: l.progress.clone(),
             containers: l.containers.clone(),
+            spawn: l.spawn,
+            ending: l.ending.clone(),
+            growth: l.growth.clone(),
         },
         None => PendingPlayer {
             pos: spawn,
@@ -176,6 +186,9 @@ fn setup_world(app: &mut App, options: &Options) {
             hp: None,
             progress: None,
             containers: vec![],
+            spawn: None,
+            ending: None,
+            growth: vec![],
         },
     };
     let (time, chunks) = loaded.map_or((GameTime::default(), SavedChunks::default()), |l| {

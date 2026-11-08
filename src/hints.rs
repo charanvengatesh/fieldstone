@@ -22,14 +22,16 @@ pub fn run(
     mut shown: ResMut<Shown>,
     mut toast: ResMut<Toast>,
     mut elapsed: Local<f32>,
+    mut placed_seen: Local<Vec<u16>>,
     player: Single<(&Inventory, &Progress), With<Player>>,
 ) {
     *elapsed += time.delta_secs();
     let (inv, progress) = *player;
-    let placed_now: Vec<u16> = placed.read().map(|p| p.object).collect();
+    placed_seen.extend(placed.read().map(|p| p.object));
     if toast.left > 0.0 {
         return;
     }
+    let placed_now: Vec<u16> = std::mem::take(&mut *placed_seen);
     for (i, h) in hints.iter() {
         if shown.0.contains(&i) {
             continue;
@@ -45,9 +47,12 @@ pub fn run(
         if fire {
             shown.0.push(i);
             toast.show(h.text.clone(), h.secs);
-            return;
+            break;
         }
     }
+    // Keep placement facts around so a later hint can still match them.
+    placed_seen.extend(placed_now);
+    placed_seen.dedup();
 }
 
 pub struct HintsPlugin;

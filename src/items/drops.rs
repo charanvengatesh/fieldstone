@@ -102,7 +102,9 @@ pub fn collect(
         let p = tf.translation.truncate();
         let dist = p.distance(target);
         // Short grace period so a freshly dropped stack is visible before it flies in.
-        if d.age > 0.3 && dist < MAGNET {
+        if d.age > 0.3 && dist < MAGNET && d.age > 1.5
+            || (d.age > 0.3 && dist < MAGNET && d.age <= 1.5 && dist > CELL * 2.0)
+        {
             let step = (p - target).normalize_or_zero() * -(400.0 * time.delta_secs());
             tf.translation += step.extend(0.0);
         }

@@ -39,6 +39,15 @@ struct SaveFile {
     /// Chest contents: cell and slots as `(item id, count)`.
     #[serde(default)]
     containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
+    /// Bed respawn point.
+    #[serde(default)]
+    spawn: Option<(f32, f32)>,
+    /// Ending message once the shrine is complete.
+    #[serde(default)]
+    ending: Option<String>,
+    /// Crop timers: cell and game-time due.
+    #[serde(default)]
+    growth: Vec<((i32, i32), f64)>,
     /// String ids referenced by `chunks`; index 0 is reserved for "no object".
     ids: Vec<String>,
     /// Chunk coordinate and, per tile, `(terrain id index, object id index)`.
@@ -50,6 +59,10 @@ pub fn save(
     keys: Res<Keys>,
     mut request: ResMut<SaveRequest>,
     containers: Res<Containers>,
+    spawn: Res<crate::stats::SpawnPoint>,
+    ending: Res<super::Ending>,
+    growth: Res<crate::farm::Growth>,
+    mut exit: MessageWriter<AppExit>,
     wg: Res<WorldGen>,
     time: Res<GameTime>,
     map: Res<ChunkMap>,
@@ -116,6 +129,9 @@ pub fn save(
                 )
             })
             .collect(),
+        spawn: Some((spawn.0.x, spawn.0.y)),
+        ending: ending.0.clone(),
+        growth: growth.0.iter().map(|(c, t)| ((c.x, c.y), *t)).collect(),
         ids,
         chunks,
     };
@@ -130,6 +146,10 @@ pub fn save(
         Ok(()) => info!("saved to {}", path.display()),
         Err(e) => error!("save failed: {e}"),
     }
+    if request.1 {
+        request.1 = false;
+        exit.write(AppExit::Success);
+    }
 }
 
 /// Seed and saved state read before the world is built, if a save exists.
@@ -141,6 +161,9 @@ pub struct Loaded {
     pub hp: Option<f32>,
     pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
     pub containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
+    pub spawn: Option<Vec2>,
+    pub ending: Option<String>,
+    pub growth: Vec<(IVec2, f64)>,
     pub chunks: SavedChunks,
 }
 
@@ -174,6 +197,13 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
         hp: file.hp,
         progress: file.progress,
         containers: file.containers,
+        spawn: file.spawn.map(|(x, y)| Vec2::new(x, y)),
+        ending: file.ending,
+        growth: file
+            .growth
+            .into_iter()
+            .map(|((x, y), t)| (IVec2::new(x, y), t))
+            .collect(),
         chunks: SavedChunks(chunks),
     })
 }
@@ -184,6 +214,9 @@ pub fn restore_player(
     pending: Option<Res<PendingPlayer>>,
     items: Res<Registry<ItemDef>>,
     mut containers: ResMut<Containers>,
+    mut spawn_point: ResMut<crate::stats::SpawnPoint>,
+    mut ending: ResMut<super::Ending>,
+    mut growth: ResMut<crate::farm::Growth>,
     mut player: Single<(&mut Transform, &mut Inventory, &mut Stats, &mut Progress), With<Player>>,
 ) {
     let Some(p) = pending else {
@@ -217,6 +250,15 @@ pub fn restore_player(
                 .collect(),
         );
     }
+    if let Some(sp) = p.spawn {
+        spawn_point.0 = sp;
+    }
+    if p.ending.is_some() {
+        ending.0 = p.ending.clone();
+    }
+    for (c, t) in &p.growth {
+        growth.0.insert(*c, *t);
+    }
     commands.remove_resource::<PendingPlayer>();
 }
 
@@ -227,4 +269,7 @@ pub struct PendingPlayer {
     pub hp: Option<f32>,
     pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
     pub containers: Vec<((i32, i32), Vec<Option<(String, u32)>>)>,
+    pub spawn: Option<Vec2>,
+    pub ending: Option<String>,
+    pub growth: Vec<(IVec2, f64)>,
 }

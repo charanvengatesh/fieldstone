@@ -31,6 +31,8 @@ pub struct BindingNames {
     pub zoom_in: Vec<String>,
     pub zoom_out: Vec<String>,
     pub hotbar: Vec<String>,
+    #[serde(default = "default_drop")]
+    pub drop: Vec<String>,
 }
 
 impl Default for Settings {
@@ -54,6 +56,7 @@ impl Default for Settings {
                 zoom_in: v(&["Equal"]),
                 zoom_out: v(&["Minus"]),
                 hotbar: v(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]),
+                drop: v(&["Q"]),
             },
         }
     }
@@ -76,6 +79,7 @@ pub struct Keys {
     pub zoom_in: Vec<KeyCode>,
     pub zoom_out: Vec<KeyCode>,
     pub hotbar: Vec<KeyCode>,
+    pub drop: Vec<KeyCode>,
 }
 
 impl Keys {
@@ -96,6 +100,7 @@ impl Keys {
             zoom_in: p(&n.zoom_in),
             zoom_out: p(&n.zoom_out),
             hotbar: p(&n.hotbar),
+            drop: p(&n.drop),
         }
     }
     pub fn pressed(&self, input: &ButtonInput<KeyCode>, keys: &[KeyCode]) -> bool {
@@ -108,6 +113,10 @@ impl Keys {
 
 /// Accepts single letters, digits, and the common named keys. Unknown names are ignored with
 /// a warning so a typo never locks the player out.
+fn default_drop() -> Vec<String> {
+    vec!["Q".to_string()]
+}
+
 pub fn parse_key(name: &str) -> Option<KeyCode> {
     use KeyCode::*;
     let k = match name {
