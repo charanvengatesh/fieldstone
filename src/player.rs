@@ -141,14 +141,41 @@ pub fn movement(
     };
 }
 
-/// Faces the cursor so the eyes and the held item point where the player is looking.
-pub fn face_cursor(cursor: Res<Cursor>, mut tf: Single<&mut Transform, With<Player>>) {
-    if let Some(world) = cursor.world {
-        let to = world - tf.translation.truncate();
-        if to.length() > 2.0 {
-            tf.rotation = Quat::from_rotation_z(to.to_angle());
-        }
+/// Faces the cursor. Vector mode rotates the whole body; pixel mode picks one of four frames
+/// (right, up, left, down) and mirrors the hand to the facing side.
+pub fn face_cursor(
+    cursor: Res<Cursor>,
+    assets: Res<ShapeAssets>,
+    mut player: Single<(&mut Transform, Option<&mut Sprite>), With<Player>>,
+    mut hand: Single<&mut Transform, (With<HeldItem>, Without<Player>)>,
+) {
+    let (tf, sprite) = &mut *player;
+    let Some(world) = cursor.world else { return };
+    let to = world - tf.translation.truncate();
+    if to.length() <= 2.0 {
+        return;
     }
+    if !assets.pixel() {
+        tf.rotation = Quat::from_rotation_z(to.to_angle());
+        return;
+    }
+    tf.rotation = Quat::IDENTITY;
+    // Quadrant: 0 right, 1 up, 2 left, 3 down, matching the generated rotation strip.
+    let a = to.to_angle();
+    let quadrant = (((a + std::f32::consts::FRAC_PI_4).rem_euclid(std::f32::consts::TAU))
+        / std::f32::consts::FRAC_PI_2) as usize
+        % 4;
+    if let Some(sprite) = sprite
+        && let Some(atlas) = &mut sprite.texture_atlas
+    {
+        atlas.index = quadrant;
+    }
+    let side = match quadrant {
+        2 => -1.0,
+        _ => 1.0,
+    };
+    hand.translation.x = CELL * 0.42 * side;
+    hand.scale.x = side;
 }
 
 /// Redraws the item in hand when the selection changes.

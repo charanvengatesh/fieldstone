@@ -120,6 +120,9 @@ mod tests {
             overlapping_cells(Vec2::ZERO, PLAYER_R).collect::<Vec<_>>(),
             vec![IVec2::ZERO]
         );
-        assert_eq!(overlapping_cells(Vec2::splat(CELL / 2.0), PLAYER_R).count(), 4);
+        assert_eq!(
+            overlapping_cells(Vec2::splat(CELL / 2.0), PLAYER_R).count(),
+            4
+        );
     }
 }

@@ -73,8 +73,9 @@ pub fn spawn(
 ) {
     for (i, d) in reader.read().enumerate() {
         let jitter = Vec2::from_angle(i as f32 * 2.4) * CELL * 0.2;
-        let tf = Transform::from_translation((d.at + jitter).extend(1.5))
-            .with_scale(Vec3::splat(DROP_SCALE));
+        let scale = if assets.pixel() { 0.75 } else { DROP_SCALE };
+        let tf =
+            Transform::from_translation((d.at + jitter).extend(1.5)).with_scale(Vec3::splat(scale));
         let e = crate::art::spawn_shape(
             &mut commands,
             &assets,

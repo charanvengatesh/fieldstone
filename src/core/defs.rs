@@ -87,6 +87,33 @@ pub struct ShapeDef {
 }
 def!(ShapeDef, "shapes.ron");
 
+/// `sprites.ron`: pixel art for a visual id (the same ids `shape` fields use). Without `image`
+/// the engine rasterizes the shape of that id at 16 px per cell; with `frames > 1` and
+/// `rotate`, it renders the shape at 0, 90, 180 and 270 degrees into a strip (player facing).
+#[derive(Deserialize, Debug, Clone)]
+pub struct SpriteDef {
+    pub id: String,
+    /// Pack-relative PNG, a horizontal strip of `frames` equal frames.
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default = "one_u32")]
+    pub frames: u32,
+    /// Frames per second for looping animation; 0 means frames are picked by code (facing).
+    #[serde(default)]
+    pub fps: f32,
+    /// Generate `frames` by rotating the shape instead of loading an image.
+    #[serde(default)]
+    pub rotate: bool,
+    /// Pivot inside the frame, 0..1 from bottom-left; (0.5, 0.5) is centered.
+    #[serde(default = "center")]
+    pub anchor: [f32; 2],
+}
+def!(SpriteDef, "sprites.ron");
+
+fn center() -> [f32; 2] {
+    [0.5, 0.5]
+}
+
 /// `terrain.ron`: the ground layer of a tile.
 #[derive(Deserialize, Debug, Clone)]
 pub struct TerrainDef {

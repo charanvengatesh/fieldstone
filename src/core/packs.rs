@@ -62,6 +62,7 @@ pub fn load_all(app: &mut App) {
         }
         merge::<ColorDef>(w, dir);
         merge::<ShapeDef>(w, dir);
+        merge::<SpriteDef>(w, dir);
         merge::<TerrainDef>(w, dir);
         merge::<ObjectDef>(w, dir);
         merge::<ItemDef>(w, dir);
