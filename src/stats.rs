@@ -75,6 +75,8 @@ pub struct Damage {
 pub struct Died {
     pub entity: Entity,
     pub at: Vec2,
+    /// `None` for the player.
+    pub creature: Option<u16>,
 }
 
 /// Experience granted to the player.
@@ -91,11 +93,11 @@ pub struct HitFlash(pub f32);
 pub fn apply_damage(
     mut damage: MessageReader<Damage>,
     mut died: MessageWriter<Died>,
-    mut targets: Query<(&mut Stats, &Transform)>,
+    mut targets: Query<(&mut Stats, &Transform, Option<&Creature>, Has<Player>)>,
     mut commands: Commands,
 ) {
     for d in damage.read() {
-        let Ok((mut stats, tf)) = targets.get_mut(d.target) else {
+        let Ok((mut stats, tf, creature, is_player)) = targets.get_mut(d.target) else {
             continue;
         };
         if stats.hp <= 0.0 {
@@ -107,6 +109,7 @@ pub fn apply_damage(
             died.write(Died {
                 entity: d.target,
                 at: tf.translation.truncate(),
+                creature: creature.filter(|_| !is_player).map(|c| c.0),
             });
         }
     }

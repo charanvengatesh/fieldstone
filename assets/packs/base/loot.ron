@@ -1,7 +1,8 @@
 // Drop tables. Each entry rolls independently: `chance` to drop, then `min..=max` of the item.
 [
     (id: "tree",       entries: [ (item: "log", min: 1, max: 3), (item: "stick", min: 1, max: 2, chance: 0.6) ]),
-    (id: "bush",       entries: [ (item: "stick", min: 1, max: 2, chance: 0.7), (item: "berries", min: 1, max: 3) ]),
+    (id: "bush",       entries: [ (item: "stick", min: 1, max: 2, chance: 0.7), (item: "berries", min: 1, max: 3), (item: "wheat_seed", min: 1, max: 2, chance: 0.4) ]),
+    (id: "wheat",      entries: [ (item: "wheat", min: 1, max: 3), (item: "wheat_seed", min: 1, max: 2) ]),
     (id: "rock",       entries: [ (item: "stone", min: 1, max: 2) ]),
     (id: "iron_ore",   entries: [ (item: "iron_ore", min: 1, max: 2), (item: "stone", chance: 0.5) ]),
     (id: "coal_ore",   entries: [ (item: "coal", min: 1, max: 3), (item: "stone", chance: 0.5) ]),

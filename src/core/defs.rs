@@ -85,9 +85,12 @@ pub struct TerrainDef {
     pub color: String,
     #[serde(default = "yes")]
     pub walkable: bool,
+    /// Fish table id (`fish.ron`) if this is water you can fish in.
     #[serde(default)]
-    #[allow(dead_code)] // fishing (M3)
     pub fish_table: Option<String>,
+    /// Terrain this becomes when worked with a `hoe` tool.
+    #[serde(default)]
+    pub till: Option<String>,
 }
 def!(TerrainDef, "terrain.ron");
 
@@ -117,6 +120,12 @@ pub struct ObjectDef {
     /// Experience granted to the breaker.
     #[serde(default = "onef")]
     pub xp: f32,
+    /// Terrain ids this may be placed on; `None` allows any walkable terrain.
+    #[serde(default)]
+    pub on: Option<Vec<String>>,
+    /// Crops: `(next object id, seconds)`. Growth doubles next to water.
+    #[serde(default)]
+    pub grows_into: Option<(String, f32)>,
 }
 def!(ObjectDef, "objects.ron");
 
@@ -224,6 +233,25 @@ pub struct WorldGenDef {
     pub scatter: Vec<Scatter>,
 }
 def!(WorldGenDef, "worldgen.ron");
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct FishEntry {
+    pub item: String,
+    #[serde(default = "onef")]
+    pub weight: f32,
+    #[serde(default)]
+    pub min_rod_power: u8,
+    #[serde(default = "any")]
+    pub time: TimeOfDay,
+}
+
+/// `fish.ron`: what bites in a body of water, keyed by `TerrainDef::fish_table`.
+#[derive(Deserialize, Debug, Clone)]
+pub struct FishTableDef {
+    pub id: String,
+    pub entries: Vec<FishEntry>,
+}
+def!(FishTableDef, "fish.ron");
 
 #[derive(Deserialize, Debug, Clone, Copy)]
 pub struct StatsDef {

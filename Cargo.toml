@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 bevy = "0.20.1"
+bevy_mod_scripting = { version = "0.23", features = ["lua54"] }
 noise = "0.9"
 ron = "0.12"
 serde = { version = "1", features = ["derive"] }

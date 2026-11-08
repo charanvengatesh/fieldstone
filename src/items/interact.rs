@@ -55,7 +55,7 @@ pub fn select_slot(
     }
 }
 
-fn in_reach(player: Vec2, cell: IVec2) -> bool {
+pub fn in_reach(player: Vec2, cell: IVec2) -> bool {
     player.distance(center_of(cell)) <= REACH
 }
 
@@ -155,8 +155,14 @@ pub fn place(
         return;
     };
     let Some(tile) = map.tile(cell) else { return };
+    let ground = terrain.at(tile.terrain);
     let blocked = tile.object.is_some()
-        || !terrain.at(tile.terrain).walkable
+        || !ground.walkable
+        || objects
+            .at(obj)
+            .on
+            .as_ref()
+            .is_some_and(|allowed| !allowed.iter().any(|t| t == &ground.id))
         || (objects.at(obj).solid && overlapping_cells(pos, PLAYER_R).any(|c| c == cell));
     if blocked {
         return;

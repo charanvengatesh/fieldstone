@@ -22,6 +22,10 @@
     (id: "gold",        rgb: (232, 190, 64)),
     (id: "ember",       rgb: (240, 120, 40)),
 
+    (id: "wheat",       rgb: (222, 190, 90)),
+    (id: "sprout",      rgb: (120, 190, 80)),
+    (id: "fish",        rgb: (120, 150, 190)),
+    (id: "fish_dark",   rgb: (70, 95, 130)),
     (id: "pebble",      rgb: (208, 208, 212)),
     (id: "pebble_dark", rgb: (118, 118, 132)),
     (id: "white",       rgb: (240, 240, 240)),

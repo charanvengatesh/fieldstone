@@ -18,6 +18,8 @@ pub struct HpBar;
 pub struct StaminaBar;
 #[derive(Component)]
 pub struct LevelText;
+#[derive(Component)]
+pub struct StatusText;
 
 const BAR_W: f32 = 180.0;
 
@@ -86,6 +88,21 @@ pub fn spawn(mut commands: Commands) {
             bar(p, StaminaBar, Color::srgb(0.35, 0.75, 0.3));
         });
     commands.spawn((
+        StatusText,
+        Text::new(""),
+        TextFont {
+            font_size: FontSize::Px(18.0),
+            ..default()
+        },
+        Node {
+            position_type: PositionType::Absolute,
+            bottom: Val::Px(12.0 + SLOT + 12.0),
+            left: Val::Percent(50.0),
+            margin: UiRect::left(Val::Px(-40.0)),
+            ..default()
+        },
+    ));
+    commands.spawn((
         DebugText,
         Text::new(""),
         TextFont {
@@ -120,6 +137,13 @@ pub fn bars(
     hp.width = Val::Percent((s.hp / s.max_hp * 100.0).clamp(0.0, 100.0));
     stamina.width = Val::Percent((s.stamina / s.max_stamina.max(1.0) * 100.0).clamp(0.0, 100.0));
     level.0 = format!("Lv {}  {:.0}/{:.0} xp", p.level, p.xp, p.next_level_xp());
+}
+
+pub fn status(
+    fishing: Res<crate::fish::FishingStatus>,
+    mut text: Single<&mut Text, With<StatusText>>,
+) {
+    text.0 = fishing.0.unwrap_or("").to_owned();
 }
 
 pub fn debug(

@@ -55,6 +55,7 @@ pub fn load_all(app: &mut App) {
         merge::<LootDef>(w, dir);
         merge::<WorldGenDef>(w, dir);
         merge::<CreatureDef>(w, dir);
+        merge::<FishTableDef>(w, dir);
     }
     app.insert_resource(LoadedPacks(packs));
 }

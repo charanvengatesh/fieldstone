@@ -12,6 +12,7 @@ off a base. Everything you see is a vector shape; everything you interact with i
 | Shift | Sprint |
 | Left click (hold) | Mine the object under the cursor with the held tool |
 | Left click | Swing or shoot the held weapon toward the cursor |
+| Left click | With a hoe: till grass. With a rod: cast at water, click again on the bite |
 | Right click | Place the held block or station, or eat the held food |
 | 1-0, mouse wheel | Select hotbar slot |
 | E | Inventory (click a slot to swap it with the selected hotbar slot) |
@@ -38,8 +39,11 @@ cargo run -- --headless-smoke               # 600 frames without a window, exits
 - `src/stats.rs` — health, stamina, damage, death, experience and skills
 - `src/combat/` — weapons (melee arcs, projectiles), creature AI, natural spawning
 - `src/daylight.rs` — day/night tint
+- `src/farm.rs` — tilling and staged crop growth
+- `src/fish.rs` — casting, bites, fish tables
+- `src/script.rs` — Lua hooks and script-callable functions (`bevy_mod_scripting`)
 - `src/ui/` — hotbar, inventory panel, crafting panel, debug text
-- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, worldgen
+- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, fish, worldgen
 - `mods/` — drop additional packs here; see `mods/README.md`
 
 ## Content and mods
@@ -53,5 +57,5 @@ Schemas live in `src/core/defs.rs`.
 
 1. Survival loop: world, mining, inventory, crafting, building, saving (done)
 2. Combat and RPG stats: health, stamina, weapons, creatures, experience, day/night (done)
-3. Farming, fishing, Lua scripting hooks, example mod
+3. Farming, fishing, Lua scripting hooks, example mod (done; see `mods/example-crystal`)
 4. Polish: animation, particles, lighting, audio, menus

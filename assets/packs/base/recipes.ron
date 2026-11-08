@@ -18,6 +18,11 @@
     (id: "bow",           inputs: [("stick", 3), ("hide", 1)],       output: ("bow", 1),           station: Some("workbench")),
     (id: "sword_iron",    inputs: [("iron_ingot", 2), ("stick", 1)], output: ("sword_iron", 1),    station: Some("workbench")),
 
+    (id: "hoe_wood",      inputs: [("plank", 2), ("stick", 2)],      output: ("hoe_wood", 1),      station: Some("workbench")),
+    (id: "rod_wood",      inputs: [("stick", 3), ("hide", 1)],       output: ("rod_wood", 1),      station: Some("workbench")),
+    (id: "rod_iron",      inputs: [("stick", 2), ("iron_ingot", 1), ("hide", 1)], output: ("rod_iron", 1), station: Some("workbench")),
+    (id: "bread",         inputs: [("wheat", 3)],                    output: ("bread", 1),         station: Some("furnace")),
+
     (id: "iron_ingot",    inputs: [("iron_ore", 1), ("coal", 1)],    output: ("iron_ingot", 1),    station: Some("furnace")),
     (id: "pickaxe_iron",  inputs: [("iron_ingot", 3), ("stick", 2)], output: ("pickaxe_iron", 1),  station: Some("workbench")),
     (id: "axe_iron",      inputs: [("iron_ingot", 3), ("stick", 2)], output: ("axe_iron", 1),      station: Some("workbench")),

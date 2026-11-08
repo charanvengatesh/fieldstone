@@ -6,8 +6,11 @@ mod art;
 mod combat;
 mod core;
 mod daylight;
+mod farm;
+mod fish;
 mod items;
 mod player;
+mod script;
 mod stats;
 mod ui;
 mod world;
@@ -63,7 +66,10 @@ fn main() {
             player::PlayerPlugin,
             items::ItemsPlugin,
             combat::CombatPlugin,
+            farm::FarmPlugin,
+            fish::FishPlugin,
             stats::StatsPlugin,
+            script::ScriptPlugin,
         ))
         .configure_sets(
             Update,
@@ -72,7 +78,10 @@ fn main() {
                 world::WorldSet,
                 items::ItemsSet,
                 combat::CombatSet,
+                farm::FarmSet,
+                fish::FishSet,
                 stats::StatsSet,
+                script::ScriptSet,
             )
                 .chain(),
         )

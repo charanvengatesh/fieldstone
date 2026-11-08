@@ -1,0 +1,28 @@
+// Replaces the base generator config: same as base plus a crystal vein rule.
+[(
+    id: "default",
+    height_scale: 90.0,
+    moisture_scale: 140.0,
+    bands: [
+        (-0.38, "deep_water"),
+        (-0.22, "water"),
+        (-0.12, "sand"),
+        (0.30, "grass"),
+        (2.0, "rock"),
+    ],
+    wet: [
+        ("grass", "forest", 0.12),
+        ("grass", "meadow", -0.25),
+    ],
+    scatter: [
+        (object: "tree",        on: ["forest"],          density: 0.28),
+        (object: "tree",        on: ["grass"],           density: 0.03),
+        (object: "bush",        on: ["grass", "meadow"], density: 0.03),
+        (object: "rock",        on: ["grass", "meadow"], density: 0.015),
+        (object: "rock",        on: ["rock"],            density: 0.10),
+        (object: "crystal_ore", on: ["rock"],            density: 0.10, noise: Some((50.0, 0.45))),
+        (object: "iron_ore",    on: ["rock"],            density: 0.14, noise: Some((30.0, 0.15))),
+        (object: "coal_ore",    on: ["rock"],            density: 0.14, noise: Some((30.0, 0.15))),
+        (object: "gold_ore",    on: ["rock"],            density: 0.06, noise: Some((45.0, 0.40))),
+    ],
+)]

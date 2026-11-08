@@ -20,4 +20,28 @@ Packs load in dependency order (`assets/packs/*` first, then `mods/*`). A record
 already exists replaces the earlier one, so a mod can retune a base item by redefining it.
 Schemas are documented in `src/core/defs.rs`.
 
-Scripting hooks (Lua) arrive in a later milestone; `scripts` in `pack.ron` is reserved for them.
+## Scripts
+
+`scripts` in `pack.ron` lists Lua files (paths relative to the pack). Define any of these
+functions and the engine calls them:
+
+| Hook | Arguments |
+|------|-----------|
+| `on_script_loaded()` | |
+| `on_object_broken(x, y, object_id)` | cell and the object that broke |
+| `on_object_placed(x, y, object_id)` | |
+| `on_craft(recipe_id)` | |
+| `on_death(creature_id, x, y)` | `"player"` when the player dies |
+| `on_day_start(day)` | fires at each dawn after the first |
+
+Functions scripts can call:
+
+| Function | Effect |
+|----------|--------|
+| `log(message)` | writes to the game log |
+| `give_item(item_id, count)` | drops items at the player's feet |
+| `spawn_creature(creature_id, x, y)` | spawns a creature on a cell |
+| `is_night()` | `true` during the dark half of the day |
+
+See `mods/example-crystal/` for a complete mod: a new ore in the world generator, items,
+recipes, a light source, and a script that reacts to mining and placing.
