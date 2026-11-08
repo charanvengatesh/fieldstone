@@ -1,0 +1,18 @@
+// `station` names a tag from objects.ron that must be within two cells of the player.
+[
+    (id: "planks",        inputs: [("log", 1)],                      output: ("plank", 4)),
+    (id: "sticks",        inputs: [("plank", 1)],                    output: ("stick", 4)),
+    (id: "workbench",     inputs: [("plank", 4), ("stick", 2)],      output: ("workbench", 1)),
+
+    (id: "wall_wood",     inputs: [("plank", 2)],                    output: ("wall_wood", 1),     station: Some("workbench")),
+    (id: "wall_stone",    inputs: [("stone", 2)],                    output: ("wall_stone", 1),    station: Some("workbench")),
+    (id: "pickaxe_wood",  inputs: [("plank", 3), ("stick", 2)],      output: ("pickaxe_wood", 1),  station: Some("workbench")),
+    (id: "axe_wood",      inputs: [("plank", 3), ("stick", 2)],      output: ("axe_wood", 1),      station: Some("workbench")),
+    (id: "pickaxe_stone", inputs: [("stone", 3), ("stick", 2)],      output: ("pickaxe_stone", 1), station: Some("workbench")),
+    (id: "axe_stone",     inputs: [("stone", 3), ("stick", 2)],      output: ("axe_stone", 1),     station: Some("workbench")),
+    (id: "furnace",       inputs: [("stone", 8)],                    output: ("furnace", 1),       station: Some("workbench")),
+
+    (id: "iron_ingot",    inputs: [("iron_ore", 1), ("coal", 1)],    output: ("iron_ingot", 1),    station: Some("furnace")),
+    (id: "pickaxe_iron",  inputs: [("iron_ingot", 3), ("stick", 2)], output: ("pickaxe_iron", 1),  station: Some("workbench")),
+    (id: "axe_iron",      inputs: [("iron_ingot", 3), ("stick", 2)], output: ("axe_iron", 1),      station: Some("workbench")),
+]

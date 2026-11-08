@@ -1,0 +1,24 @@
+// Inventory items. `use` decides what left/right click does with it held.
+[
+    (id: "log",      name: "Log",      shape: "log"),
+    (id: "stick",    name: "Stick",    shape: "stick"),
+    (id: "plank",    name: "Plank",    shape: "plank"),
+    (id: "stone",    name: "Stone",    shape: "stone"),
+    (id: "iron_ore", name: "Iron Ore", shape: "iron_chunk"),
+    (id: "coal",     name: "Coal",     shape: "coal_lump"),
+    (id: "gold_ore", name: "Gold Ore", shape: "gold_nugget"),
+    (id: "iron_ingot", name: "Iron Ingot", shape: "ingot"),
+    (id: "berries",  name: "Berries",  shape: "berries", use: Eat(hp: 2.0, stamina: 10.0)),
+
+    (id: "wall_wood",  name: "Wood Wall",  shape: "wall_wood",  use: Place("wall_wood")),
+    (id: "wall_stone", name: "Stone Wall", shape: "wall_stone", use: Place("wall_stone")),
+    (id: "workbench",  name: "Workbench",  shape: "workbench",  use: Place("workbench"), stack_max: 1),
+    (id: "furnace",    name: "Furnace",    shape: "furnace",    use: Place("furnace"), stack_max: 1),
+
+    (id: "pickaxe_wood",  name: "Wooden Pickaxe", shape: "pickaxe_wood",  stack_max: 1, use: Tool(tag: "pickaxe", power: 1)),
+    (id: "pickaxe_stone", name: "Stone Pickaxe",  shape: "pickaxe_stone", stack_max: 1, use: Tool(tag: "pickaxe", power: 2)),
+    (id: "pickaxe_iron",  name: "Iron Pickaxe",   shape: "pickaxe_iron",  stack_max: 1, use: Tool(tag: "pickaxe", power: 3)),
+    (id: "axe_wood",      name: "Wooden Axe",     shape: "axe_wood",      stack_max: 1, use: Tool(tag: "axe", power: 1)),
+    (id: "axe_stone",     name: "Stone Axe",      shape: "axe_stone",     stack_max: 1, use: Tool(tag: "axe", power: 2)),
+    (id: "axe_iron",      name: "Iron Axe",       shape: "axe_iron",      stack_max: 1, use: Tool(tag: "axe", power: 3)),
+]

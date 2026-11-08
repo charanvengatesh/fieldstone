@@ -1,39 +1,140 @@
-//! Fieldstone: steer a stone across a green field and lay walls on the grid.
+//! Fieldstone: a small, data-driven, moddable top-down survival game.
+// Bevy systems take many parameters and nested tuples by design.
+#![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
-mod hud;
+mod art;
+mod core;
+mod items;
 mod player;
+mod ui;
 mod world;
 
 use bevy::prelude::*;
 
+use crate::core::save::{PendingPlayer, SavedChunks};
+use crate::core::time::GameTime;
+use crate::core::{ObjectDef, Registry, TerrainDef, WorldGenDef};
+use crate::world::cell_of;
+use crate::world::worldgen::WorldGen;
+
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins.set(WindowPlugin {
+    let headless = std::env::args().any(|a| a == "--headless-smoke");
+    let mut app = App::new();
+    if headless {
+        app.add_plugins((
+            MinimalPlugins,
+            bevy::log::LogPlugin::default(),
+            AssetPlugin::default(),
+            bevy::input::InputPlugin,
+            TransformPlugin,
+        ))
+        .init_asset::<Mesh>()
+        .init_asset::<ColorMaterial>()
+        .add_systems(
+            Update,
+            |mut n: Local<u32>, mut exit: MessageWriter<AppExit>| {
+                *n += 1;
+                if *n >= 600 {
+                    info!("smoke test ran 600 frames");
+                    exit.write(AppExit::Success);
+                }
+            },
+        );
+    } else {
+        app.add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Fieldstone".into(),
                 ..default()
             }),
             ..default()
         }))
-        .insert_resource(ClearColor(Color::srgb(
-            75.0 / 255.0,
-            150.0 / 255.0,
-            50.0 / 255.0,
-        )))
-        .init_resource::<world::Blocks>()
-        .init_resource::<world::Cursor>()
-        .add_systems(Startup, (player::spawn, world::spawn_border, hud::spawn))
-        .add_systems(
+        .add_plugins(ui::UiPlugin);
+    }
+    core::packs::load_all(&mut app);
+    setup_world(&mut app);
+    app.insert_resource(ClearColor(Color::srgb_u8(40, 80, 160)))
+        .add_plugins((
+            core::CorePlugin,
+            art::ArtPlugin,
+            world::WorldPlugin,
+            player::PlayerPlugin,
+            items::ItemsPlugin,
+        ))
+        .configure_sets(
             Update,
-            (
-                player::movement,
-                player::follow,
-                world::track_cursor,
-                world::build,
-                hud::update,
-                world::draw_grid,
-            )
-                .chain(),
+            (player::PlayerSet, world::WorldSet, items::ItemsSet).chain(),
         )
+        .add_systems(Update, (core::save::save, core::save::restore_player))
         .run();
+}
+
+/// Builds the generator from `worldgen.ron` and either a save file or a fresh seed.
+fn setup_world(app: &mut App) {
+    let world = app.world_mut();
+    for kind in [
+        "terrain", "objects", "items", "shapes", "palette", "worldgen",
+    ] {
+        let _ = kind;
+    }
+    let terrain = world.get_resource_or_init::<Registry<TerrainDef>>().len();
+    if terrain == 0 {
+        panic!("no terrain defined; is assets/packs/base present?");
+    }
+    world.get_resource_or_init::<Registry<ObjectDef>>();
+    let gen_def = world
+        .get_resource_or_init::<Registry<WorldGenDef>>()
+        .iter()
+        .last()
+        .map(|(_, d)| d.clone())
+        .expect("worldgen.ron must define one record");
+    let terrain = world.resource::<Registry<TerrainDef>>();
+    let objects = world.resource::<Registry<ObjectDef>>();
+    let loaded = core::save::load(terrain, objects);
+    let seed = loaded.as_ref().map_or_else(
+        || {
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(7, |d| d.as_secs() as u32)
+        },
+        |l| l.seed,
+    );
+    let wg = WorldGen::new(seed, &gen_def, terrain, objects);
+    let pending = match &loaded {
+        Some(l) => PendingPlayer {
+            pos: l.player,
+            inventory: l.inventory.clone(),
+        },
+        None => PendingPlayer {
+            pos: spawn_point(&wg, terrain),
+            inventory: vec![],
+        },
+    };
+    let (time, chunks) = loaded.map_or((GameTime::default(), SavedChunks::default()), |l| {
+        (l.time, l.chunks)
+    });
+    info!("world seed {seed}");
+    app.insert_resource(wg)
+        .insert_resource(time)
+        .insert_resource(chunks)
+        .insert_resource(pending);
+}
+
+/// Nearest walkable, empty cell to the origin, searched in growing rings.
+fn spawn_point(wg: &WorldGen, terrain: &Registry<TerrainDef>) -> Vec2 {
+    for r in 0..200i32 {
+        for dy in -r..=r {
+            for dx in -r..=r {
+                if dx.abs() != r && dy.abs() != r {
+                    continue;
+                }
+                let c = IVec2::new(dx, dy);
+                let t = wg.tile(c);
+                if terrain.at(t.terrain).walkable && t.object.is_none() {
+                    return world::center_of(c);
+                }
+            }
+        }
+    }
+    let _ = cell_of;
+    Vec2::ZERO
 }

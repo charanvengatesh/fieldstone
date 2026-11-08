@@ -5,6 +5,9 @@ edition = "2024"
 
 [dependencies]
 bevy = "0.20.1"
+noise = "0.9"
+ron = "0.12"
+serde = { version = "1", features = ["derive"] }
 
 # Bevy's recommended dev profile: light opt for our code, full opt for deps.
 [profile.dev]

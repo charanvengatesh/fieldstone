@@ -1,0 +1,28 @@
+// Named colors. Every other file refers to these by id, so a mod can restyle the whole game here.
+[
+    (id: "grass",       rgb: (84, 160, 58)),
+    (id: "meadow",      rgb: (104, 176, 70)),
+    (id: "forest",      rgb: (52, 118, 48)),
+    (id: "sand",        rgb: (214, 194, 128)),
+    (id: "water",       rgb: (62, 118, 196)),
+    (id: "deep_water",  rgb: (38, 82, 160)),
+    (id: "rock",        rgb: (118, 120, 126)),
+    (id: "tilled",      rgb: (104, 70, 42)),
+
+    (id: "stone",       rgb: (150, 152, 158)),
+    (id: "dark_stone",  rgb: (92, 94, 100)),
+    (id: "bark",        rgb: (88, 58, 32)),
+    (id: "wood",        rgb: (156, 110, 60)),
+    (id: "plank",       rgb: (190, 146, 86)),
+    (id: "leaf",        rgb: (44, 128, 52)),
+    (id: "leaf_light",  rgb: (78, 160, 72)),
+    (id: "berry",       rgb: (200, 48, 72)),
+    (id: "iron",        rgb: (176, 142, 120)),
+    (id: "coal",        rgb: (38, 38, 44)),
+    (id: "gold",        rgb: (232, 190, 64)),
+    (id: "ember",       rgb: (240, 120, 40)),
+
+    (id: "pebble",      rgb: (208, 208, 212)),
+    (id: "pebble_dark", rgb: (118, 118, 132)),
+    (id: "white",       rgb: (240, 240, 240)),
+]

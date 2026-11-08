@@ -1,0 +1,11 @@
+// Ground layer. `color` is a palette id.
+[
+    (id: "deep_water", color: "deep_water", walkable: false, fish_table: Some("deep")),
+    (id: "water",      color: "water",      walkable: false, fish_table: Some("shallow")),
+    (id: "sand",       color: "sand"),
+    (id: "grass",      color: "grass"),
+    (id: "meadow",     color: "meadow"),
+    (id: "forest",     color: "forest"),
+    (id: "rock",       color: "rock"),
+    (id: "tilled",     color: "tilled"),
+]
