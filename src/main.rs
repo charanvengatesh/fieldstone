@@ -68,13 +68,17 @@ fn main() {
         .init_resource::<smoke::Smoke>()
         .add_systems(Update, smoke::drive.before(player::PlayerSet));
     } else {
-        app.add_plugins(DefaultPlugins.set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "Fieldstone".into(),
-                ..default()
-            }),
-            ..default()
-        }))
+        app.add_plugins(
+            DefaultPlugins
+                .set(WindowPlugin {
+                    primary_window: Some(Window {
+                        title: "Fieldstone".into(),
+                        ..default()
+                    }),
+                    ..default()
+                })
+                .set(ImagePlugin::default_nearest()),
+        )
         .add_plugins((
             ui::UiPlugin,
             daylight::DaylightPlugin,

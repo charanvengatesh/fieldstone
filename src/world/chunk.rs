@@ -6,8 +6,8 @@ use bevy::prelude::*;
 
 pub const CHUNK: i32 = 32;
 pub const TILES: usize = (CHUNK * CHUNK) as usize;
-/// World units per cell.
-pub const CELL: f32 = 25.0;
+/// World units per cell. One texel of 16 px pixel art is one world unit.
+pub const CELL: f32 = 16.0;
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Tile {
@@ -109,6 +109,6 @@ mod tests {
         for c in [IVec2::ZERO, IVec2::new(-300, 17)] {
             assert_eq!(cell_of(center_of(c)), c);
         }
-        assert_eq!(cell_of(Vec2::new(12.4, -12.4)), IVec2::ZERO);
+        assert_eq!(cell_of(Vec2::new(CELL * 0.49, -CELL * 0.49)), IVec2::ZERO);
     }
 }

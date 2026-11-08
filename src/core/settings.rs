@@ -8,10 +8,29 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Resource, Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
+    /// Vector mode camera scale (world units per screen pixel).
     pub zoom: f32,
+    /// Pixel mode: screen pixels per texel, 1..=6.
+    #[serde(default = "three")]
+    pub pixel_scale: u32,
+    #[serde(default)]
+    pub render: RenderMode,
     /// 0.0 .. 1.0
     pub volume: f32,
     pub keys: BindingNames,
+}
+
+/// `Pixel` draws sprites and tile sheets at a whole-number scale; `Vector` is the original
+/// shape renderer, kept through 0.6 for comparison and for packs without art.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RenderMode {
+    #[default]
+    Pixel,
+    Vector,
+}
+
+fn three() -> u32 {
+    3
 }
 
 /// Key names as written in the file; parsed into [`Keys`] at startup.
@@ -40,6 +59,8 @@ impl Default for Settings {
         let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
         Self {
             zoom: 0.6,
+            pixel_scale: 3,
+            render: RenderMode::Pixel,
             volume: 0.8,
             keys: BindingNames {
                 up: v(&["W", "Up"]),

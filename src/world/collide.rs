@@ -81,16 +81,16 @@ mod tests {
             Vec2::new(CELL - wall, 0.0)
         ));
         assert!(close(
-            slide(Vec2::new(50.0, 0.0), Vec2::X * -10.0, PLAYER_R, &b),
+            slide(Vec2::new(2.0 * CELL, 0.0), Vec2::X * -10.0, PLAYER_R, &b),
             Vec2::new(CELL + wall, 0.0)
         ));
         let b = full(&[IVec2::ZERO]);
         assert!(close(
-            slide(Vec2::new(0.0, 25.0), Vec2::Y * -10.0, PLAYER_R, &b),
+            slide(Vec2::new(0.0, CELL), Vec2::Y * -10.0, PLAYER_R, &b),
             Vec2::new(0.0, wall)
         ));
         assert!(close(
-            slide(Vec2::new(0.0, -25.0), Vec2::Y * 10.0, PLAYER_R, &b),
+            slide(Vec2::new(0.0, -CELL), Vec2::Y * 10.0, PLAYER_R, &b),
             Vec2::new(0.0, -wall)
         ));
     }
@@ -120,6 +120,6 @@ mod tests {
             overlapping_cells(Vec2::ZERO, PLAYER_R).collect::<Vec<_>>(),
             vec![IVec2::ZERO]
         );
-        assert_eq!(overlapping_cells(Vec2::splat(12.5), PLAYER_R).count(), 4);
+        assert_eq!(overlapping_cells(Vec2::splat(CELL / 2.0), PLAYER_R).count(), 4);
     }
 }

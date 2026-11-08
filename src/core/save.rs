@@ -28,6 +28,9 @@ pub struct SavedChunks(pub HashMap<IVec2, [Tile; TILES]>);
 #[derive(Serialize, Deserialize, Default)]
 struct SaveFile {
     seed: u32,
+    /// World units per cell when this file was written; positions are rescaled on load.
+    #[serde(default = "legacy_cell")]
+    cell_size: f32,
     time: GameTime,
     player: (f32, f32),
     inventory: Vec<Option<(String, u32)>>,
@@ -107,6 +110,7 @@ pub fn save(
     }
     let file = SaveFile {
         seed: wg.seed,
+        cell_size: crate::world::CELL,
         time: *time,
         player: (tf.translation.x, tf.translation.y),
         inventory: inv
@@ -189,15 +193,16 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
         chunks.insert(IVec2::new(x, y), arr);
     }
     info!("loaded {}", path.display());
+    let scale = crate::world::CELL / file.cell_size;
     Some(Loaded {
         seed: file.seed,
         time: file.time,
-        player: Vec2::new(file.player.0, file.player.1),
+        player: Vec2::new(file.player.0, file.player.1) * scale,
         inventory: file.inventory,
         hp: file.hp,
         progress: file.progress,
         containers: file.containers,
-        spawn: file.spawn.map(|(x, y)| Vec2::new(x, y)),
+        spawn: file.spawn.map(|(x, y)| Vec2::new(x, y) * scale),
         ending: file.ending,
         growth: file
             .growth
@@ -260,6 +265,10 @@ pub fn restore_player(
         growth.0.insert(*c, *t);
     }
     commands.remove_resource::<PendingPlayer>();
+}
+
+fn legacy_cell() -> f32 {
+    25.0
 }
 
 #[derive(Resource)]

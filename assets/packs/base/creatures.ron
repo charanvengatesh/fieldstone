@@ -1,25 +1,25 @@
 // The player and every mob. `speed` is world units per second (one cell is 25).
 // `spawn` lists where and when a creature appears naturally; omit it for things that never do.
 [
-    (id: "player", shape: "player", stats: (hp: 20.0, stamina: 60.0, attack: 1.0, defense: 0.0, speed: 120.0)),
+    (id: "player", shape: "player", stats: (hp: 20.0, stamina: 60.0, attack: 1.0, defense: 0.0, speed: 76.8)),
 
     (id: "boar", shape: "boar",
-        stats: (hp: 8.0, attack: 2.0, speed: 90.0),
+        stats: (hp: 8.0, attack: 2.0, speed: 57.6),
         ai: Passive, drops: Some("boar"), xp: 6.0, radius: 0.32,
         spawn: Some((on: ["grass", "meadow", "forest"], time: Day, weight: 1.0))),
 
     (id: "slime", shape: "slime",
-        stats: (hp: 5.0, attack: 2.0, speed: 60.0),
+        stats: (hp: 5.0, attack: 2.0, speed: 38.4),
         ai: Hostile(aggro: 6.0), drops: Some("slime"), xp: 4.0,
         spawn: Some((on: ["grass", "meadow", "sand"], time: Night, weight: 2.0))),
 
     (id: "wolf", shape: "wolf",
-        stats: (hp: 12.0, attack: 4.0, defense: 1.0, speed: 150.0),
+        stats: (hp: 12.0, attack: 4.0, defense: 1.0, speed: 96),
         ai: Hostile(aggro: 9.0), drops: Some("wolf"), xp: 12.0, radius: 0.34,
         spawn: Some((on: ["forest", "grass"], time: Night, weight: 1.0))),
 
     (id: "rock_crab", shape: "rock_crab",
-        stats: (hp: 10.0, attack: 3.0, defense: 2.0, speed: 50.0),
+        stats: (hp: 10.0, attack: 3.0, defense: 2.0, speed: 32),
         ai: Hostile(aggro: 4.0), drops: Some("rock_crab"), xp: 8.0, radius: 0.3,
         spawn: Some((on: ["rock"], time: Any, weight: 1.0))),
 ]

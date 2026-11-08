@@ -6,7 +6,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::art::ShapeAssets;
 use crate::combat::weapon::Cooldown;
-use crate::core::settings::{Keys, Settings};
+use crate::core::settings::{Keys, RenderMode, Settings};
 use crate::core::{CreatureDef, ItemDef, ObjectDef, Registry, ShapeDef, TerrainDef};
 use crate::items::interact::{REACH, Target};
 use crate::items::inventory::Inventory;
@@ -41,7 +41,10 @@ pub fn spawn(
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
-            scale: settings.zoom.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1),
+            scale: match settings.render {
+                RenderMode::Pixel => 1.0 / settings.pixel_scale.clamp(1, 6) as f32,
+                RenderMode::Vector => settings.zoom.clamp(ZOOM_RANGE.0, ZOOM_RANGE.1),
+            },
             ..OrthographicProjection::default_2d()
         }),
     ));
@@ -178,11 +181,22 @@ pub fn show_held(
     }
 }
 
+/// The camera follows the player; in pixel mode it snaps to the texel grid so sprites never
+/// straddle screen pixels and shimmer.
 pub fn follow(
+    settings: Res<Settings>,
     player: Single<&Transform, (With<Player>, Without<Camera2d>)>,
-    mut cam: Single<&mut Transform, With<Camera2d>>,
+    mut cam: Single<(&mut Transform, &Projection), With<Camera2d>>,
 ) {
-    cam.translation = player.translation.with_z(cam.translation.z);
+    let (tf, proj) = &mut *cam;
+    let mut p = player.translation.truncate();
+    if settings.render == RenderMode::Pixel
+        && let Projection::Orthographic(o) = proj
+    {
+        let step = o.scale.max(1e-4);
+        p = (p / step).round() * step;
+    }
+    tf.translation = p.extend(tf.translation.z);
 }
 
 /// Pinch on a trackpad or `-` / `=` on the keyboard.
@@ -192,11 +206,38 @@ pub fn zoom(
     keys: Res<Keys>,
     time: Res<Time>,
     mut settings: ResMut<Settings>,
+    mut pinch_acc: Local<f32>,
     mut proj: Single<&mut Projection, With<Camera2d>>,
 ) {
     let Projection::Orthographic(o) = &mut **proj else {
         return;
     };
+    if settings.render == RenderMode::Pixel {
+        // Whole pixel scales only; a pinch accumulates until it is worth a step.
+        let mut delta = 0i32;
+        for p in pinches.read() {
+            *pinch_acc += p.0;
+        }
+        while *pinch_acc > 0.25 {
+            *pinch_acc -= 0.25;
+            delta += 1;
+        }
+        while *pinch_acc < -0.25 {
+            *pinch_acc += 0.25;
+            delta -= 1;
+        }
+        if keys.just(&input, &keys.zoom_in) {
+            delta += 1;
+        }
+        if keys.just(&input, &keys.zoom_out) {
+            delta -= 1;
+        }
+        if delta != 0 {
+            settings.pixel_scale = (settings.pixel_scale as i32 + delta).clamp(1, 6) as u32;
+            o.scale = 1.0 / settings.pixel_scale as f32;
+        }
+        return;
+    }
     let mut factor = 1.0;
     for p in pinches.read() {
         factor *= 1.0 - p.0;
