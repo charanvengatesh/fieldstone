@@ -193,7 +193,14 @@ pub fn mine(
     target.0 = None;
     clear_object(&mut map, cell, &mut commands);
     if let Some(table) = def.drops.as_deref().and_then(|id| loot.get(id)) {
-        roll_loot(table, &items, center_of(cell), wg.seed, 1, &mut drops);
+        roll_loot(
+            table,
+            &items,
+            center_of(cell),
+            wg.seed,
+            (time.elapsed_secs() * 1000.0) as u32,
+            &mut drops,
+        );
     }
     broken.write(ObjectBroken { cell, object: obj });
     xp.write(GainXp {
@@ -306,6 +313,13 @@ pub fn place(
     }
     let (tf, inv, stats) = &mut *player;
     let pos = tf.translation.truncate();
+    let Some(held) = inv.held() else { return };
+    if let Use::Eat { hp, stamina } = items.at(held.item).usage {
+        stats.hp = (stats.hp + hp).min(stats.max_hp);
+        stats.stamina = (stats.stamina + stamina).min(stats.max_stamina);
+        inv.consume_held();
+        return;
+    }
     // An interactive object under the cursor took the click.
     if cursor
         .cell
@@ -314,13 +328,6 @@ pub fn place(
         .and_then(|t| t.object)
         .is_some_and(|o| objects.at(o).interactive())
     {
-        return;
-    }
-    let Some(held) = inv.held() else { return };
-    if let Use::Eat { hp, stamina } = items.at(held.item).usage {
-        stats.hp = (stats.hp + hp).min(stats.max_hp);
-        stats.stamina = (stats.stamina + stamina).min(stats.max_stamina);
-        inv.consume_held();
         return;
     }
     let Some(cell) = cursor.cell.filter(|c| in_reach(pos, *c)) else {

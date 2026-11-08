@@ -36,6 +36,7 @@ pub fn cast_and_catch(
     tables: Res<Registry<FishTableDef>>,
     map: Res<ChunkMap>,
     mut status: ResMut<FishingStatus>,
+    mut toast: ResMut<crate::core::Toast>,
     ui: Res<crate::core::UiHovered>,
     mut player: Single<(Entity, &Transform, &Inventory, Option<&mut Fishing>), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
@@ -104,6 +105,9 @@ pub fn cast_and_catch(
                         .filter_map(|e| items.idx(&e.item).map(|i| (i, e.weight)))
                         .collect();
                     let total: f32 = candidates.iter().map(|c| c.1).sum();
+                    if total <= 0.0 {
+                        toast.show("Nothing bites. A stronger rod, or another hour.", 3.0);
+                    }
                     let mut pick = rng.range(0.0, total);
                     for (item, w) in candidates {
                         pick -= w;

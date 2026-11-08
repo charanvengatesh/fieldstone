@@ -104,7 +104,13 @@ pub struct Sounds {
     pub dawn: Handle<AudioSource>,
 }
 
-pub fn setup(mut commands: Commands, mut audio: ResMut<Assets<AudioSource>>) {
+pub fn setup(
+    mut commands: Commands,
+    mut audio: ResMut<Assets<AudioSource>>,
+    settings: Res<Settings>,
+    mut global: ResMut<bevy::audio::GlobalVolume>,
+) {
+    global.volume = Volume::Linear(settings.volume.clamp(0.0, 1.0));
     let mut add = |s: Vec<i16>| audio.add(wav(&s));
     commands.insert_resource(Sounds {
         hit: add(mix(&[

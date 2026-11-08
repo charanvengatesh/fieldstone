@@ -84,11 +84,15 @@ fn merge<T: Def + std::fmt::Debug>(world: &mut World, dir: &Path) {
         return;
     };
     let mut reg = world.get_resource_or_init::<Registry<T>>();
+    let mut overridden = Vec::new();
     for d in defs {
         if reg.get(d.id()).is_some() {
-            info!("{} overrides '{}'", path.display(), d.id());
+            overridden.push(d.id().to_owned());
         }
         reg.insert(d);
+    }
+    if !overridden.is_empty() {
+        info!("{} overrides {}", path.display(), overridden.join(", "));
     }
 }
 

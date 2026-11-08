@@ -25,6 +25,8 @@ jobs:
   release:
     needs: check
     if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
     strategy:
       matrix:
         include:
@@ -48,8 +50,13 @@ jobs:
         run: |
           mkdir -p dist/fieldstone
           cp -r assets mods README.md dist/fieldstone/
-          if [ "$RUNNER_OS" = "Windows" ]; then cp target/release/fieldstone.exe dist/fieldstone/; else cp target/release/fieldstone dist/fieldstone/; fi
-          cd dist && 7z a ../fieldstone-${{ matrix.name }}.zip fieldstone
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/release/fieldstone.exe dist/fieldstone/
+            cd dist && 7z a ../fieldstone-${{ matrix.name }}.zip fieldstone
+          else
+            cp target/release/fieldstone dist/fieldstone/
+            cd dist && zip -r ../fieldstone-${{ matrix.name }}.zip fieldstone
+          fi
       - uses: softprops/action-gh-release@v2
         with:
           files: fieldstone-${{ matrix.name }}.zip

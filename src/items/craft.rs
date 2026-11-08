@@ -67,13 +67,13 @@ pub fn craft(
         if !can_craft(r, inv, &items, &stations) {
             continue;
         }
-        for (id, n) in &r.inputs {
-            inv.remove(items.idx(id).unwrap(), *n);
-        }
         let Some(out) = items.idx(&r.output.0) else {
             warn!("recipe '{}' outputs unknown item '{}'", r.id, r.output.0);
             continue;
         };
+        for (id, n) in &r.inputs {
+            inv.remove(items.idx(id).unwrap(), *n);
+        }
         let left = inv.add(out, r.output.1, &items);
         if left > 0 {
             drops.write(SpawnDrop {

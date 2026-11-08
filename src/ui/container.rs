@@ -113,6 +113,7 @@ pub fn push_to_open(
     open: &OpenContainer,
     map: &ChunkMap,
     objects: &Registry<ObjectDef>,
+    items: &Registry<ItemDef>,
     containers: &mut Containers,
     inv: &mut Inventory,
 ) -> bool {
@@ -128,9 +129,30 @@ pub fn push_to_open(
         return true;
     };
     let slots = containers.slots_mut(cell, size);
-    if let Some(free) = slots.iter().position(|s| s.is_none()) {
-        slots[free] = Some(stack);
-        inv.slots[index] = None;
+    let max = items.at(stack.item).stack_max;
+    let mut left = stack.n;
+    for s in slots.iter_mut().flatten() {
+        if s.item == stack.item && s.n < max {
+            let take = left.min(max - s.n);
+            s.n += take;
+            left -= take;
+            if left == 0 {
+                break;
+            }
+        }
     }
+    if left > 0
+        && let Some(free) = slots.iter().position(|s| s.is_none())
+    {
+        slots[free] = Some(crate::items::inventory::Stack {
+            item: stack.item,
+            n: left,
+        });
+        left = 0;
+    }
+    inv.slots[index] = (left > 0).then_some(crate::items::inventory::Stack {
+        item: stack.item,
+        n: left,
+    });
     true
 }

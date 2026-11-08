@@ -37,6 +37,9 @@ functions and the engine calls them:
 | `on_day_start(day)` | fires at each dawn after the first |
 | `on_object_used(x, y, from_id, to_id)` | an object with `use_swaps` was used (doors, shrine stages) |
 
+Coordinates are cell indices (one cell is 25 world units). Scripts load once at startup; there is no
+hot reload yet. `give_item` drops the items at the player's feet rather than inserting them.
+
 Functions scripts can call:
 
 | Function | Effect |

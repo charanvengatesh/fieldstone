@@ -92,7 +92,11 @@ pub fn grow(
             let Some((_, secs)) = t.object.and_then(|o| objects.at(o).grows_into.as_ref()) else {
                 continue;
             };
-            let cell = pos * crate::world::chunk::CHUNK + IVec2::new(i as i32 % 32, i as i32 / 32);
+            let cell = pos * crate::world::chunk::CHUNK
+                + IVec2::new(
+                    i as i32 % crate::world::chunk::CHUNK,
+                    i as i32 / crate::world::chunk::CHUNK,
+                );
             if !growth.0.contains_key(&cell) {
                 let watered = (-1..=1).any(|dy| {
                     (-1..=1).any(|dx| {

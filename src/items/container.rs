@@ -59,3 +59,18 @@ pub fn upkeep(
     }
     let _ = REACH;
 }
+
+/// Hides the inventory panel again when the chest that forced it open goes away.
+pub fn follow_close(
+    open: Res<OpenContainer>,
+    mut was_open: Local<bool>,
+    mut panels: Query<&mut Visibility, With<crate::ui::inventory::InventoryPanel>>,
+) {
+    let now = open.0.is_some();
+    if *was_open && !now {
+        for mut v in &mut panels {
+            *v = Visibility::Hidden;
+        }
+    }
+    *was_open = now;
+}

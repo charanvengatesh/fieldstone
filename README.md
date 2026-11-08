@@ -13,7 +13,8 @@ Built for a trackpad first: nothing needs holding or a right button.
 | WASD / arrow keys | Move |
 | Shift | Sprint (uses stamina) |
 | Click an object | Target it: the player walks within reach and works it until it breaks. Click empty ground or press Esc to stop. Holding the button also works |
-| Click with a weapon | Swing or shoot toward the cursor |
+| Click with a weapon | Swing or shoot toward the cursor. Switch to a tool or empty slot to mine |
+| Q | Drop the held stack |
 | Click water with a rod | Cast; click again on the bite |
 | Click grass with a hoe | Till it |
 | F or right click | Use the held item (place, plant, eat), or use the object under the cursor: open a chest, open a door, sleep in a bed, feed the shrine |

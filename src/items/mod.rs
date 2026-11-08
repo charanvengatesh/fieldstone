@@ -31,6 +31,7 @@ impl Plugin for ItemsPlugin {
                     interact::use_object,
                     interact::place,
                     container::upkeep,
+                    container::follow_close,
                     craft::craft,
                     drops::spawn,
                     drops::collect,

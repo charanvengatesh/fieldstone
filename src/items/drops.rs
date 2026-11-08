@@ -11,6 +11,8 @@ use crate::world::CELL;
 const MAGNET: f32 = CELL * 1.5;
 const PICKUP: f32 = CELL * 0.4;
 const DROP_SCALE: f32 = 0.5;
+/// Seconds before a forgotten drop fades away.
+const LIFETIME: f32 = 300.0;
 
 #[derive(Component)]
 pub struct Drop {
@@ -99,6 +101,10 @@ pub fn collect(
     let target = ptf.translation.truncate();
     for (e, mut tf, mut d) in &mut drops {
         d.age += time.delta_secs();
+        if d.age > LIFETIME {
+            commands.entity(e).despawn();
+            continue;
+        }
         let p = tf.translation.truncate();
         let dist = p.distance(target);
         // Short grace period so a freshly dropped stack is visible before it flies in.

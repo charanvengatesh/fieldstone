@@ -40,6 +40,7 @@ pub fn spawn(mut commands: Commands) {
                           open: Res<OpenContainer>,
                           map: Res<ChunkMap>,
                           objects: Res<Registry<ObjectDef>>,
+                          items: Res<Registry<ItemDef>>,
                           mut containers: ResMut<Containers>,
                           mut inv: Single<&mut Inventory, With<Player>>| {
                         if super::container::push_to_open(
@@ -47,6 +48,7 @@ pub fn spawn(mut commands: Commands) {
                             &open,
                             &map,
                             &objects,
+                            &items,
                             &mut containers,
                             &mut inv,
                         ) {

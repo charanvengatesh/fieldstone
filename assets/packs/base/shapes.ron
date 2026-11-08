@@ -179,7 +179,7 @@
         Circle(r: 0.12, color: "ink_soft", at: (0.19, -0.11)),
     ]),
     (id: "shrine_3", parts: [
-        Circle(r: 0.60, color: "foam_soft"),
+        Circle(r: 0.54, color: "foam_soft"),
         Poly(sides: 8, r: 0.50, color: "ink"),
         Poly(sides: 8, r: 0.46, color: "dark_stone"),
         Poly(sides: 8, r: 0.32, color: "gold"),

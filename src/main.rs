@@ -35,6 +35,12 @@ fn main() {
     if let Err(e) = std::env::set_current_dir(&root) {
         eprintln!("could not enter {}: {e}", root.display());
     }
+    // A panic in a double-clicked binary prints nowhere; leave a note next to the game.
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("{info}\n");
+        eprintln!("{msg}");
+        let _ = std::fs::write(core::paths::user_dir().join("fieldstone-crash.log"), msg);
+    }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let headless = args.iter().any(|a| a == "--headless-smoke");
     let options = Options {
