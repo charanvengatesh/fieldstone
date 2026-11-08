@@ -113,6 +113,10 @@
         Circle(r: 0.10, color: "gold", at: (0.0, 0.38)),
         Circle(r: 0.09, color: "gold", at: (0.18, 0.22)),
     ]),
+    (id: "slash", parts: [
+        Rect(w: 0.9, h: 0.10, color: "white", rot: 25),
+        Rect(w: 0.9, h: 0.10, color: "white", rot: -25),
+    ]),
     (id: "arrow", parts: [
         Rect(w: 0.50, h: 0.05, color: "bark"),
         Poly(sides: 3, r: 0.08, color: "stone", at: (0.26, 0.0), rot: -90),

@@ -17,6 +17,10 @@ pub struct PartAssets {
 pub struct ShapeAssets {
     pub shapes: HashMap<u16, Vec<PartAssets>>,
     pub colors: HashMap<String, Color>,
+    /// One shared material per palette color, for effects that need a colored primitive.
+    pub materials: HashMap<String, Handle<ColorMaterial>>,
+    /// Unit circle (radius 1) for particles and glows; scale the transform.
+    pub unit_circle: Handle<Mesh>,
 }
 
 pub fn palette_color(palette: &Registry<ColorDef>, id: &str) -> Color {
@@ -48,7 +52,9 @@ pub fn build_shapes(
         assets
             .colors
             .insert(c.id.clone(), Color::srgb_u8(c.rgb[0], c.rgb[1], c.rgb[2]));
+        material(&c.id);
     }
+    assets.unit_circle = meshes.add(Circle::new(1.0));
     for (i, shape) in shapes.iter() {
         let parts = shape
             .parts
@@ -94,6 +100,7 @@ pub fn build_shapes(
             .collect();
         assets.shapes.insert(i, parts);
     }
+    assets.materials = mats;
 }
 
 /// Spawns a shape as children of a fresh entity at `transform`. Unknown shapes get an empty parent.

@@ -4,6 +4,7 @@ use bevy::prelude::*;
 
 use crate::art::ShapeAssets;
 use crate::core::{ItemDef, ObjectDef, Registry, ShapeDef, TerrainDef, Use};
+use crate::fx::Swing;
 use crate::items::inventory::Inventory;
 use crate::player::{Cursor, Player};
 use crate::stats::{Creature, Damage, Stats};
@@ -36,6 +37,7 @@ pub fn attack(
     mut player: Single<(&Transform, &Inventory, &mut Stats, &mut Cooldown), With<Player>>,
     mobs: Query<(Entity, &Transform), With<Creature>>,
     mut damage: MessageWriter<Damage>,
+    mut swings: MessageWriter<Swing>,
     mut commands: Commands,
 ) {
     let (tf, inv, stats, cd) = &mut *player;
@@ -81,6 +83,11 @@ pub fn attack(
             });
         }
         None => {
+            swings.write(Swing {
+                origin,
+                dir,
+                range: range * CELL,
+            });
             for (e, mtf) in &mobs {
                 let to = mtf.translation.truncate() - origin;
                 if to.length() <= range * CELL

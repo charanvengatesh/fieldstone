@@ -8,6 +8,7 @@ mod core;
 mod daylight;
 mod farm;
 mod fish;
+mod fx;
 mod items;
 mod player;
 mod script;
@@ -24,7 +25,16 @@ use crate::world::cell_of;
 use crate::world::worldgen::WorldGen;
 
 fn main() {
-    let headless = std::env::args().any(|a| a == "--headless-smoke");
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let headless = args.iter().any(|a| a == "--headless-smoke");
+    let options = Options {
+        fresh: args.iter().any(|a| a == "--new"),
+        seed: args
+            .iter()
+            .position(|a| a == "--seed")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|v| v.parse().ok()),
+    };
     let mut app = App::new();
     if headless {
         app.add_plugins((
@@ -54,10 +64,10 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins((ui::UiPlugin, daylight::DaylightPlugin));
+        .add_plugins((ui::UiPlugin, daylight::DaylightPlugin, fx::FxPlugin));
     }
     core::packs::load_all(&mut app);
-    setup_world(&mut app);
+    setup_world(&mut app, &options);
     app.insert_resource(ClearColor(Color::srgb_u8(40, 80, 160)))
         .add_plugins((
             core::CorePlugin,
@@ -89,8 +99,14 @@ fn main() {
         .run();
 }
 
+/// Command-line choices: `--new` ignores an existing save, `--seed N` fixes the world seed.
+struct Options {
+    fresh: bool,
+    seed: Option<u32>,
+}
+
 /// Builds the generator from `worldgen.ron` and either a save file or a fresh seed.
-fn setup_world(app: &mut App) {
+fn setup_world(app: &mut App, options: &Options) {
     let world = app.world_mut();
     for kind in [
         "terrain", "objects", "items", "shapes", "palette", "worldgen",
@@ -110,15 +126,21 @@ fn setup_world(app: &mut App) {
         .expect("worldgen.ron must define one record");
     let terrain = world.resource::<Registry<TerrainDef>>();
     let objects = world.resource::<Registry<ObjectDef>>();
-    let loaded = core::save::load(terrain, objects);
-    let seed = loaded.as_ref().map_or_else(
-        || {
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(7, |d| d.as_secs() as u32)
-        },
-        |l| l.seed,
-    );
+    let loaded = if options.fresh {
+        None
+    } else {
+        core::save::load(terrain, objects)
+    };
+    let seed = options.seed.unwrap_or_else(|| {
+        loaded.as_ref().map_or_else(
+            || {
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map_or(7, |d| d.as_secs() as u32)
+            },
+            |l| l.seed,
+        )
+    });
     let wg = WorldGen::new(seed, &gen_def, terrain, objects);
     let spawn = spawn_point(&wg, terrain);
     let pending = match &loaded {

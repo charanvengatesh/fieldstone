@@ -20,6 +20,8 @@ pub struct StaminaBar;
 pub struct LevelText;
 #[derive(Component)]
 pub struct StatusText;
+#[derive(Component)]
+pub struct TitleCard(pub f32);
 
 const BAR_W: f32 = 180.0;
 
@@ -102,6 +104,40 @@ pub fn spawn(mut commands: Commands) {
             ..default()
         },
     ));
+    commands
+        .spawn((
+            TitleCard(5.0),
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Percent(30.0),
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(-200.0)),
+                width: Val::Px(400.0),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: Val::Px(6.0),
+                ..default()
+            },
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Text::new("Fieldstone"),
+                TextFont {
+                    font_size: FontSize::Px(44.0),
+                    ..default()
+                },
+            ));
+            p.spawn((
+                Text::new(
+                    "WASD move  ·  click to mine or swing  ·  E inventory  ·  C craft  ·  F5 save",
+                ),
+                TextFont {
+                    font_size: FontSize::Px(14.0),
+                    ..default()
+                },
+                TextColor(Color::srgba(1.0, 1.0, 1.0, 0.8)),
+            ));
+        });
     commands.spawn((
         DebugText,
         Text::new(""),
@@ -137,6 +173,26 @@ pub fn bars(
     hp.width = Val::Percent((s.hp / s.max_hp * 100.0).clamp(0.0, 100.0));
     stamina.width = Val::Percent((s.stamina / s.max_stamina.max(1.0) * 100.0).clamp(0.0, 100.0));
     level.0 = format!("Lv {}  {:.0}/{:.0} xp", p.level, p.xp, p.next_level_xp());
+}
+
+pub fn title(
+    time: Res<Time>,
+    mut card: Single<(Entity, &mut TitleCard, &Children)>,
+    mut colors: Query<&mut TextColor>,
+    mut commands: Commands,
+) {
+    let (entity, title, children) = &mut *card;
+    title.0 -= time.delta_secs();
+    if title.0 <= 0.0 {
+        commands.entity(*entity).despawn();
+        return;
+    }
+    let alpha = title.0.min(1.0);
+    for child in children.iter() {
+        if let Ok(mut c) = colors.get_mut(child) {
+            c.0 = c.0.with_alpha(alpha);
+        }
+    }
 }
 
 pub fn status(

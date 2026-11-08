@@ -27,6 +27,8 @@ cargo run                                   # first build takes a few minutes (B
 cargo run --features bevy/dynamic_linking   # faster rebuilds while iterating
 cargo test                                  # registry, chunk math, collision, inventory tests
 cargo run -- --headless-smoke               # 600 frames without a window, exits 0 if nothing panics
+cargo run -- --new                          # ignore the save file and start a fresh world
+cargo run -- --seed 42                      # fix the world seed
 ```
 
 ## Layout
@@ -42,6 +44,7 @@ cargo run -- --headless-smoke               # 600 frames without a window, exits
 - `src/farm.rs` — tilling and staged crop growth
 - `src/fish.rs` — casting, bites, fish tables
 - `src/script.rs` — Lua hooks and script-callable functions (`bevy_mod_scripting`)
+- `src/fx.rs` — slashes, break particles, night glows around lights
 - `src/ui/` — hotbar, inventory panel, crafting panel, debug text
 - `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, fish, worldgen
 - `mods/` — drop additional packs here; see `mods/README.md`
@@ -58,4 +61,5 @@ Schemas live in `src/core/defs.rs`.
 1. Survival loop: world, mining, inventory, crafting, building, saving (done)
 2. Combat and RPG stats: health, stamina, weapons, creatures, experience, day/night (done)
 3. Farming, fishing, Lua scripting hooks, example mod (done; see `mods/example-crystal`)
-4. Polish: animation, particles, lighting, audio, menus
+4. Polish: slash and particle effects, torch glows, title card, CLI flags (done); audio and
+   rebindable keys are still open
