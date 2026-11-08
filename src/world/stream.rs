@@ -61,6 +61,13 @@ pub fn stream(
                 chunk.modified = true;
             }
             map.chunks.insert(pos, chunk);
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    if let Some(n) = map.chunks.get_mut(&(pos + IVec2::new(dx, dy))) {
+                        n.dirty = true;
+                    }
+                }
+            }
             loads += 1;
         }
     }
@@ -161,8 +168,13 @@ pub fn draw(
     }
 }
 
-/// Terrain as a soft gradient: each vertex takes the average of the four tiles meeting at that
-/// corner, with a little per-tile brightness jitter so flat areas do not read as a grid.
+/// Sub-quads per tile edge for the gradient; contours of bilinear blending are smooth curves.
+const SUB: i32 = 3;
+
+/// Terrain as a soft gradient. Each tile corner takes the average of the four tiles meeting
+/// there; the tile is then filled with a bilinear patch so transitions curve instead of
+/// stepping. Cells outside this chunk use the neighbor chunk when loaded and clamp to the
+/// nearest in-chunk tile otherwise (the neighbor re-meshes this chunk when it arrives).
 fn terrain_mesh(
     pos: IVec2,
     tiles: &[Tile; TILES],
@@ -170,75 +182,73 @@ fn terrain_mesh(
     tile_at: impl Fn(IVec2) -> Option<u16>,
 ) -> Mesh {
     let origin = pos * CHUNK;
-    let color_of = |cell: IVec2| -> [f32; 4] {
+    let base = |cell: IVec2| -> [f32; 4] {
         let local = cell - origin;
-        let terrain = if (0..CHUNK).contains(&local.x) && (0..CHUNK).contains(&local.y) {
-            Some(tiles[(local.y * CHUNK + local.x) as usize].terrain)
+        let inside = (0..CHUNK).contains(&local.x) && (0..CHUNK).contains(&local.y);
+        let terrain = if inside {
+            tiles[(local.y * CHUNK + local.x) as usize].terrain
         } else {
-            tile_at(cell)
+            tile_at(cell).unwrap_or_else(|| {
+                let l = local.clamp(IVec2::ZERO, IVec2::splat(CHUNK - 1));
+                tiles[(l.y * CHUNK + l.x) as usize].terrain
+            })
         };
-        let Some(t) = terrain else {
-            return [0.0, 0.0, 0.0, 1.0];
-        };
-        let base = colors
-            .get(t as usize)
+        colors
+            .get(terrain as usize)
             .copied()
-            .unwrap_or([1.0, 0.0, 1.0, 1.0]);
-        let jitter = 0.92 + 0.16 * crate::core::hash01(7, cell.x, cell.y, 3);
-        [base[0] * jitter, base[1] * jitter, base[2] * jitter, 1.0]
+            .unwrap_or([1.0, 0.0, 1.0, 1.0])
     };
-    // Corner color = mean of the four tiles touching it; corners are shared by (CHUNK+1)^2 points.
     let n = (CHUNK + 1) as usize;
     let mut corner = vec![[0.0f32; 4]; n * n];
     for cy in 0..=CHUNK {
         for cx in 0..=CHUNK {
             let mut acc = [0.0f32; 4];
             for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
-                let c = color_of(origin + IVec2::new(cx + dx, cy + dy));
-                for k in 0..4 {
+                let c = base(origin + IVec2::new(cx + dx, cy + dy));
+                for k in 0..3 {
                     acc[k] += c[k] * 0.25;
                 }
             }
-            corner[cy as usize * n + cx as usize] = acc;
+            let g = origin + IVec2::new(cx, cy);
+            let jitter = 0.975 + 0.05 * crate::core::hash01(7, g.x, g.y, 3);
+            corner[cy as usize * n + cx as usize] =
+                [acc[0] * jitter, acc[1] * jitter, acc[2] * jitter, 1.0];
         }
     }
-    let mut positions = Vec::with_capacity(TILES * 5);
-    let mut cols = Vec::with_capacity(TILES * 5);
-    let mut idx = Vec::with_capacity(TILES * 12);
-    for (i, _) in tiles.iter().enumerate() {
-        let (tx, ty) = (i as i32 % CHUNK, i as i32 / CHUNK);
-        let (x, y) = (tx as f32 * CELL, ty as f32 * CELL);
-        let c = |cx: i32, cy: i32| corner[cy as usize * n + cx as usize];
-        let center = color_of(origin + IVec2::new(tx, ty));
-        let b = positions.len() as u32;
-        positions.extend([
-            [x, y, 0.0],
-            [x + CELL, y, 0.0],
-            [x + CELL, y + CELL, 0.0],
-            [x, y + CELL, 0.0],
-            [x + CELL / 2.0, y + CELL / 2.0, 0.0],
-        ]);
-        cols.extend([
-            c(tx, ty),
-            c(tx + 1, ty),
-            c(tx + 1, ty + 1),
-            c(tx, ty + 1),
-            center,
-        ]);
-        idx.extend([
-            b,
-            b + 1,
-            b + 4,
-            b + 1,
-            b + 2,
-            b + 4,
-            b + 2,
-            b + 3,
-            b + 4,
-            b + 3,
-            b,
-            b + 4,
-        ]);
+    let lerp4 = |a: [f32; 4], b: [f32; 4], t: f32| {
+        [
+            a[0] + (b[0] - a[0]) * t,
+            a[1] + (b[1] - a[1]) * t,
+            a[2] + (b[2] - a[2]) * t,
+            1.0,
+        ]
+    };
+    let verts_per_tile = ((SUB + 1) * (SUB + 1)) as usize;
+    let mut positions = Vec::with_capacity(TILES * verts_per_tile);
+    let mut cols = Vec::with_capacity(TILES * verts_per_tile);
+    let mut idx = Vec::with_capacity(TILES * (SUB * SUB * 6) as usize);
+    for ty in 0..CHUNK {
+        for tx in 0..CHUNK {
+            let c00 = corner[ty as usize * n + tx as usize];
+            let c10 = corner[ty as usize * n + tx as usize + 1];
+            let c01 = corner[(ty + 1) as usize * n + tx as usize];
+            let c11 = corner[(ty + 1) as usize * n + tx as usize + 1];
+            let b = positions.len() as u32;
+            for sy in 0..=SUB {
+                for sx in 0..=SUB {
+                    let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
+                    positions.push([(tx as f32 + u) * CELL, (ty as f32 + v) * CELL, 0.0]);
+                    cols.push(lerp4(lerp4(c00, c10, u), lerp4(c01, c11, u), v));
+                }
+            }
+            let w = (SUB + 1) as u32;
+            for sy in 0..SUB as u32 {
+                for sx in 0..SUB as u32 {
+                    let i0 = b + sy * w + sx;
+                    idx.extend([i0, i0 + 1, i0 + w + 1, i0, i0 + w + 1, i0 + w]);
+                }
+            }
+        }
     }
     Mesh::new(
         PrimitiveTopology::TriangleList,
