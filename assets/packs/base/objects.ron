@@ -20,6 +20,10 @@
     (id: "mushroom",     shape: "mushroom",     hp: 0.1, solid: false, xp: 0.0, drops: Some("mushroom")),
     (id: "reeds",        shape: "reeds",        hp: 0.2, solid: false, xp: 0.0, drops: Some("reeds")),
     (id: "shell_deco",   shape: "shell_deco",   hp: 0.1, solid: false, xp: 0.0),
+    (id: "foam",         shape: "foam",         hp: 0.1, solid: false, xp: 0.0),
+    (id: "lily",         shape: "lily",         hp: 0.1, solid: false, xp: 0.0),
+    (id: "ripple",       shape: "ripple",       hp: 0.1, solid: false, xp: 0.0),
+    (id: "rock_wet",     shape: "rock_wet",     hp: 2.0, solid: true, radius: 0.25, xp: 0.5, drops: Some("rock")),
 
     // Crops: each stage grows into the next after `secs`; the last stage is harvested by hand.
     (id: "wheat_1", shape: "wheat_1", hp: 0.3, solid: false, xp: 0.0, on: Some(["tilled"]), grows_into: Some(("wheat_2", 90.0))),

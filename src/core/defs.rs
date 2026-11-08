@@ -221,6 +221,9 @@ pub struct Scatter {
     /// Optional low-frequency noise gate `(scale, threshold)`: only where noise > threshold.
     #[serde(default)]
     pub noise: Option<(f64, f64)>,
+    /// Only where one of these terrains touches the cell (8 neighbors): shoreline foam, reeds.
+    #[serde(default)]
+    pub near: Option<Vec<String>>,
 }
 
 /// `worldgen.ron`: a single record describing how terrain is generated from two noise fields

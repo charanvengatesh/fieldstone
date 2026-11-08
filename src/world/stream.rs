@@ -168,13 +168,15 @@ pub fn draw(
     }
 }
 
-/// Sub-quads per tile edge for the gradient; contours of bilinear blending are smooth curves.
-const SUB: i32 = 3;
+/// Sub-quads per tile edge.
+const SUB: i32 = 4;
+/// How far the blend between terrains reaches into a tile, in tiles (0.5 = fully blended).
+const BLEND: f32 = 0.22;
 
-/// Terrain as a soft gradient. Each tile corner takes the average of the four tiles meeting
-/// there; the tile is then filled with a bilinear patch so transitions curve instead of
-/// stepping. Cells outside this chunk use the neighbor chunk when loaded and clamp to the
-/// nearest in-chunk tile otherwise (the neighbor re-meshes this chunk when it arrives).
+/// Terrain with a narrow blended seam and fine grain. Each tile keeps its own color except
+/// inside `BLEND` of an edge, where it eases toward the four-tile corner average, so shores
+/// curve without the whole field turning to mush. Cells past a chunk edge use the neighbor
+/// chunk when loaded and clamp otherwise (the neighbor re-meshes this chunk when it arrives).
 fn terrain_mesh(
     pos: IVec2,
     tiles: &[Tile; TILES],
@@ -209,10 +211,7 @@ fn terrain_mesh(
                     acc[k] += c[k] * 0.25;
                 }
             }
-            let g = origin + IVec2::new(cx, cy);
-            let jitter = 0.975 + 0.05 * crate::core::hash01(7, g.x, g.y, 3);
-            corner[cy as usize * n + cx as usize] =
-                [acc[0] * jitter, acc[1] * jitter, acc[2] * jitter, 1.0];
+            corner[cy as usize * n + cx as usize] = [acc[0], acc[1], acc[2], 1.0];
         }
     }
     let lerp4 = |a: [f32; 4], b: [f32; 4], t: f32| {
@@ -223,12 +222,18 @@ fn terrain_mesh(
             1.0,
         ]
     };
+    let smooth = |x: f32| {
+        let x = x.clamp(0.0, 1.0);
+        x * x * (3.0 - 2.0 * x)
+    };
     let verts_per_tile = ((SUB + 1) * (SUB + 1)) as usize;
     let mut positions = Vec::with_capacity(TILES * verts_per_tile);
     let mut cols = Vec::with_capacity(TILES * verts_per_tile);
     let mut idx = Vec::with_capacity(TILES * (SUB * SUB * 6) as usize);
     for ty in 0..CHUNK {
         for tx in 0..CHUNK {
+            let cell = origin + IVec2::new(tx, ty);
+            let own = base(cell);
             let c00 = corner[ty as usize * n + tx as usize];
             let c10 = corner[ty as usize * n + tx as usize + 1];
             let c01 = corner[(ty + 1) as usize * n + tx as usize];
@@ -238,7 +243,24 @@ fn terrain_mesh(
                 for sx in 0..=SUB {
                     let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
                     positions.push([(tx as f32 + u) * CELL, (ty as f32 + v) * CELL, 0.0]);
-                    cols.push(lerp4(lerp4(c00, c10, u), lerp4(c01, c11, u), v));
+                    let seam = lerp4(lerp4(c00, c10, u), lerp4(c01, c11, u), v);
+                    // Distance to the nearest tile edge, 0 at the edge, 0.5 at the center.
+                    let edge = (0.5 - (u - 0.5).abs()).min(0.5 - (v - 0.5).abs());
+                    let w = 1.0 - smooth(edge / BLEND);
+                    let mut c = lerp4(own, seam, w);
+                    // Fine grain: a per-vertex speckle so flat ground has some tooth.
+                    let g = 0.965
+                        + 0.07
+                            * crate::core::hash01(
+                                11,
+                                cell.x * (SUB + 1) + sx,
+                                cell.y * (SUB + 1) + sy,
+                                5,
+                            );
+                    for channel in c.iter_mut().take(3) {
+                        *channel *= g;
+                    }
+                    cols.push(c);
                 }
             }
             let w = (SUB + 1) as u32;

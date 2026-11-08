@@ -32,6 +32,10 @@
         (object: "mushroom",     on: ["forest"],          density: 0.04),
         (object: "pebbles",      on: ["sand", "rock"],    density: 0.05),
         (object: "shell_deco",   on: ["sand"],            density: 0.03),
-        (object: "reeds",        on: ["sand"],            density: 0.06, noise: Some((12.0, 0.2))),
+        (object: "foam",         on: ["sand"],            density: 0.55, near: Some(["water", "deep_water"])),
+        (object: "reeds",        on: ["sand"],            density: 0.18, near: Some(["water"])),
+        (object: "lily",         on: ["water"],           density: 0.06, near: Some(["sand"])),
+        (object: "ripple",       on: ["water"],           density: 0.03),
+        (object: "rock_wet",     on: ["water"],           density: 0.012, near: Some(["sand"])),
     ],
 )]

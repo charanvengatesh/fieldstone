@@ -5,7 +5,7 @@ use bevy::prelude::*;
 
 use crate::art::ShapeAssets;
 use crate::core::time::GameTime;
-use crate::core::{ObjectDef, Registry, Rng, ShapeDef};
+use crate::core::{ObjectDef, Registry, Rng, ShapeDef, TerrainDef};
 use crate::daylight::darkness;
 use crate::items::interact::{Damage, ObjectBroken, REACH};
 use crate::player::{Cursor, Player};
@@ -19,6 +19,8 @@ pub struct Transient {
     pub total: f32,
     pub velocity: Vec2,
     pub scale: f32,
+    /// Non-uniform base scale to shrink from (dashes); `None` means uniform `scale`.
+    pub keep_aspect: Option<Vec2>,
 }
 
 /// Fired by melee attacks so a slash can be drawn.
@@ -60,7 +62,14 @@ pub fn tick(
         }
         let k = t.left / t.total;
         tf.translation += (t.velocity * time.delta_secs()).extend(0.0);
-        tf.scale = Vec3::splat(t.scale * k);
+        tf.scale = match t.keep_aspect {
+            // Glints grow a little before they fade, like a crest catching light.
+            Some(base) => {
+                let rise = (1.0 - k).min(0.3) / 0.3;
+                Vec3::new(base.x * (0.6 + 0.4 * rise) * k.sqrt(), base.y * k, 1.0)
+            }
+            None => Vec3::splat(t.scale * k),
+        };
     }
 }
 
@@ -84,6 +93,7 @@ pub fn slash(
             total: 0.15,
             velocity: s.dir * 60.0,
             scale: 1.0,
+            keep_aspect: None,
         });
     }
 }
@@ -124,6 +134,7 @@ pub fn break_particles(
                     total: 0.45,
                     velocity: dir * rng.range(40.0, 110.0),
                     scale: r,
+                    keep_aspect: None,
                 },
             ));
         }
@@ -181,6 +192,49 @@ pub fn glows(
     }
 }
 
+/// Drifting glints on water near the player: a few short bright dashes a second that
+/// stretch, slide and fade, so still water reads as moving.
+pub fn waves(
+    time: Res<Time>,
+    mut acc: Local<f32>,
+    mut rng: ResMut<Rng>,
+    map: Res<ChunkMap>,
+    terrain: Res<Registry<TerrainDef>>,
+    assets: Res<ShapeAssets>,
+    player: Single<&Transform, With<Player>>,
+    mut commands: Commands,
+) {
+    *acc += time.delta_secs();
+    let Some(material) = assets.materials.get("foam") else {
+        return;
+    };
+    let origin = player.translation.truncate();
+    while *acc > 0.04 {
+        *acc -= 0.04;
+        let at = origin + Vec2::new(rng.range(-16.0, 16.0), rng.range(-10.0, 10.0)) * CELL;
+        let cell = (at / CELL).round().as_ivec2();
+        let Some(t) = map.tile(cell) else { continue };
+        if terrain.at(t.terrain).fish_table.is_none() {
+            continue;
+        }
+        let len = rng.range(0.25, 0.6) * CELL;
+        commands.spawn((
+            Mesh2d(assets.unit_rect.clone()),
+            MeshMaterial2d(material.clone()),
+            Transform::from_translation(at.extend(0.5))
+                .with_scale(Vec3::new(len, 1.6, 1.0))
+                .with_rotation(Quat::from_rotation_z(rng.range(-0.25, 0.25))),
+            Transient {
+                left: 1.6,
+                total: 1.6,
+                velocity: Vec2::new(rng.range(6.0, 14.0), rng.range(-2.0, 2.0)),
+                scale: 1.0,
+                keep_aspect: Some(Vec2::new(len, 1.6)),
+            },
+        ));
+    }
+}
+
 /// Outline on the hovered cell (bright when in reach) and a shrinking bar while mining.
 pub fn hover(
     cursor: Res<Cursor>,
@@ -225,7 +279,7 @@ impl Plugin for FxPlugin {
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
-                (slash, break_particles, glows, tick, hover).in_set(FxSet),
+                (slash, break_particles, glows, waves, tick, hover).in_set(FxSet),
             );
     }
 }

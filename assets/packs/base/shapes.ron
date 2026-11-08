@@ -165,6 +165,30 @@
         Poly(sides: 6, r: 0.05, color: "pebble_dark"),
     ]),
 
+    (id: "foam", parts: [
+        Rect(w: 0.70, h: 0.07, color: "foam_soft", at: (-0.05, 0.10), rot: -8),
+        Rect(w: 0.45, h: 0.06, color: "foam", at: (0.10, -0.08), rot: 5),
+        Circle(r: 0.05, color: "foam", at: (-0.30, -0.12)),
+    ]),
+    (id: "lily", parts: [
+        Circle(r: 0.26, color: "lily_dark", at: (0.02, -0.02)),
+        Circle(r: 0.24, color: "lily"),
+        Poly(sides: 3, r: 0.14, color: "water", at: (0.16, 0.10), rot: 20),
+        Circle(r: 0.05, color: "petal", at: (-0.08, 0.06)),
+    ]),
+    (id: "ripple", parts: [
+        Circle(r: 0.30, color: "foam_soft"),
+        Circle(r: 0.25, color: "water"),
+        Circle(r: 0.14, color: "foam_soft"),
+        Circle(r: 0.10, color: "water"),
+    ]),
+    (id: "rock_wet", parts: [
+        Circle(r: 0.28, color: "foam_soft", at: (0.0, -0.02)),
+        Poly(sides: 6, r: 0.26, color: "ink", rot: 15),
+        Poly(sides: 6, r: 0.22, color: "dark_stone", rot: 15),
+        Poly(sides: 6, r: 0.10, color: "stone", at: (-0.05, 0.06), rot: 15),
+    ]),
+
     // ---- Creatures ----
     (id: "boar", parts: [
         Circle(r: 0.34, color: "shadow", at: (0.04, -0.14)),

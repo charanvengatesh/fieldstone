@@ -21,6 +21,8 @@ pub struct ShapeAssets {
     pub materials: HashMap<String, Handle<ColorMaterial>>,
     /// Unit circle (radius 1) for particles and glows; scale the transform.
     pub unit_circle: Handle<Mesh>,
+    /// Unit square for dashes and glints.
+    pub unit_rect: Handle<Mesh>,
     /// Rasterized icon per shape id, for UI.
     pub icons: HashMap<String, Handle<Image>>,
 }
@@ -59,6 +61,7 @@ pub fn build_shapes(
         material(&c.id);
     }
     assets.unit_circle = meshes.add(Circle::new(1.0));
+    assets.unit_rect = meshes.add(Rectangle::new(1.0, 1.0));
     for (i, shape) in shapes.iter() {
         let parts = shape
             .parts
