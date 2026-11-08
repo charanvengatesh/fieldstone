@@ -168,15 +168,16 @@ pub fn draw(
     }
 }
 
-/// Sub-quads per tile edge.
+/// Sub-quads per dual cell edge.
 const SUB: i32 = 4;
-/// How far the blend between terrains reaches into a tile, in tiles (0.5 = fully blended).
-const BLEND: f32 = 0.22;
+/// Width of the anti-alias band between terrains, in weight units (0.5 is the boundary).
+const EDGE: f32 = 0.10;
 
-/// Terrain with a narrow blended seam and fine grain. Each tile keeps its own color except
-/// inside `BLEND` of an edge, where it eases toward the four-tile corner average, so shores
-/// curve without the whole field turning to mush. Cells past a chunk edge use the neighbor
-/// chunk when loaded and clamp otherwise (the neighbor re-meshes this chunk when it arrives).
+/// Terrain drawn on the dual grid. Each dual cell spans the centers of four neighboring tiles;
+/// inside it, every terrain among those four gets a bilinear weight and the heaviest one wins,
+/// with a thin blend at the 0.5 contour. The contour of a bilinear field is a curve, so shores
+/// round off and diagonals cut cleanly instead of stepping. Grain is hashed on a shared
+/// lattice so it is continuous across cells and chunks.
 fn terrain_mesh(
     pos: IVec2,
     tiles: &[Tile; TILES],
@@ -184,90 +185,95 @@ fn terrain_mesh(
     tile_at: impl Fn(IVec2) -> Option<u16>,
 ) -> Mesh {
     let origin = pos * CHUNK;
-    let base = |cell: IVec2| -> [f32; 4] {
+    let terrain_of = |cell: IVec2| -> u16 {
         let local = cell - origin;
         let inside = (0..CHUNK).contains(&local.x) && (0..CHUNK).contains(&local.y);
-        let terrain = if inside {
+        if inside {
             tiles[(local.y * CHUNK + local.x) as usize].terrain
         } else {
             tile_at(cell).unwrap_or_else(|| {
                 let l = local.clamp(IVec2::ZERO, IVec2::splat(CHUNK - 1));
                 tiles[(l.y * CHUNK + l.x) as usize].terrain
             })
-        };
+        }
+    };
+    let color = |t: u16| {
         colors
-            .get(terrain as usize)
+            .get(t as usize)
             .copied()
             .unwrap_or([1.0, 0.0, 1.0, 1.0])
-    };
-    let n = (CHUNK + 1) as usize;
-    let mut corner = vec![[0.0f32; 4]; n * n];
-    for cy in 0..=CHUNK {
-        for cx in 0..=CHUNK {
-            let mut acc = [0.0f32; 4];
-            for (dx, dy) in [(-1, -1), (0, -1), (-1, 0), (0, 0)] {
-                let c = base(origin + IVec2::new(cx + dx, cy + dy));
-                for k in 0..3 {
-                    acc[k] += c[k] * 0.25;
-                }
-            }
-            corner[cy as usize * n + cx as usize] = [acc[0], acc[1], acc[2], 1.0];
-        }
-    }
-    let lerp4 = |a: [f32; 4], b: [f32; 4], t: f32| {
-        [
-            a[0] + (b[0] - a[0]) * t,
-            a[1] + (b[1] - a[1]) * t,
-            a[2] + (b[2] - a[2]) * t,
-            1.0,
-        ]
     };
     let smooth = |x: f32| {
         let x = x.clamp(0.0, 1.0);
         x * x * (3.0 - 2.0 * x)
     };
-    let verts_per_tile = ((SUB + 1) * (SUB + 1)) as usize;
-    let mut positions = Vec::with_capacity(TILES * verts_per_tile);
-    let mut cols = Vec::with_capacity(TILES * verts_per_tile);
+    let verts_per_cell = ((SUB + 1) * (SUB + 1)) as usize;
+    let mut positions = Vec::with_capacity(TILES * verts_per_cell);
+    let mut cols = Vec::with_capacity(TILES * verts_per_cell);
     let mut idx = Vec::with_capacity(TILES * (SUB * SUB * 6) as usize);
     for ty in 0..CHUNK {
         for tx in 0..CHUNK {
             let cell = origin + IVec2::new(tx, ty);
-            let own = base(cell);
-            let c00 = corner[ty as usize * n + tx as usize];
-            let c10 = corner[ty as usize * n + tx as usize + 1];
-            let c01 = corner[(ty + 1) as usize * n + tx as usize];
-            let c11 = corner[(ty + 1) as usize * n + tx as usize + 1];
+            // Corner terrains of this dual cell: the tile itself and its +x, +y, +xy neighbors.
+            let t = [
+                terrain_of(cell),
+                terrain_of(cell + IVec2::X),
+                terrain_of(cell + IVec2::Y),
+                terrain_of(cell + IVec2::ONE),
+            ];
             let b = positions.len() as u32;
             for sy in 0..=SUB {
                 for sx in 0..=SUB {
                     let (u, v) = (sx as f32 / SUB as f32, sy as f32 / SUB as f32);
-                    positions.push([(tx as f32 + u) * CELL, (ty as f32 + v) * CELL, 0.0]);
-                    let seam = lerp4(lerp4(c00, c10, u), lerp4(c01, c11, u), v);
-                    // Distance to the nearest tile edge, 0 at the edge, 0.5 at the center.
-                    let edge = (0.5 - (u - 0.5).abs()).min(0.5 - (v - 0.5).abs());
-                    let w = 1.0 - smooth(edge / BLEND);
-                    let mut c = lerp4(own, seam, w);
-                    // Fine grain: a per-vertex speckle so flat ground has some tooth.
-                    let g = 0.965
-                        + 0.07
-                            * crate::core::hash01(
-                                11,
-                                cell.x * (SUB + 1) + sx,
-                                cell.y * (SUB + 1) + sy,
-                                5,
-                            );
+                    let w = [(1.0 - u) * (1.0 - v), u * (1.0 - v), (1.0 - u) * v, u * v];
+                    // Weight per distinct terrain; higher terrain index wins exact ties.
+                    let mut best: (u16, f32) = (t[0], -1.0);
+                    let mut second: (u16, f32) = (t[0], -1.0);
+                    for k in 0..4 {
+                        if (0..k).any(|m| t[m] == t[k]) {
+                            continue;
+                        }
+                        let weight: f32 =
+                            (0..4).filter(|&m| t[m] == t[k]).map(|m| w[m]).sum::<f32>()
+                                + t[k] as f32 * 1e-4;
+                        if weight > best.1 {
+                            second = best;
+                            best = (t[k], weight);
+                        } else if weight > second.1 {
+                            second = (t[k], weight);
+                        }
+                    }
+                    let a = color(best.0);
+                    let mut c = if second.1 < 0.0 {
+                        a
+                    } else {
+                        let bcol = color(second.0);
+                        let m = smooth((best.1 - second.1) / (2.0 * EDGE) + 0.5);
+                        [
+                            bcol[0] + (a[0] - bcol[0]) * m,
+                            bcol[1] + (a[1] - bcol[1]) * m,
+                            bcol[2] + (a[2] - bcol[2]) * m,
+                            1.0,
+                        ]
+                    };
+                    let g = 0.97
+                        + 0.06 * crate::core::hash01(11, cell.x * SUB + sx, cell.y * SUB + sy, 5);
                     for channel in c.iter_mut().take(3) {
                         *channel *= g;
                     }
+                    positions.push([
+                        (tx as f32 + 0.5 + u) * CELL,
+                        (ty as f32 + 0.5 + v) * CELL,
+                        0.0,
+                    ]);
                     cols.push(c);
                 }
             }
-            let w = (SUB + 1) as u32;
+            let wv = (SUB + 1) as u32;
             for sy in 0..SUB as u32 {
                 for sx in 0..SUB as u32 {
-                    let i0 = b + sy * w + sx;
-                    idx.extend([i0, i0 + 1, i0 + w + 1, i0, i0 + w + 1, i0 + w]);
+                    let i0 = b + sy * wv + sx;
+                    idx.extend([i0, i0 + 1, i0 + wv + 1, i0, i0 + wv + 1, i0 + wv]);
                 }
             }
         }
