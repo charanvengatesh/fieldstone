@@ -11,5 +11,6 @@
     (id: "wall_wood",  shape: "wall_wood",  hp: 2.0, drops: Some("wall_wood")),
     (id: "wall_stone", shape: "wall_stone", hp: 4.0, drops: Some("wall_stone"), tool: Some("pickaxe")),
     (id: "workbench",  shape: "workbench",  hp: 2.0, drops: Some("workbench"), station: Some("workbench")),
+    (id: "torch",      shape: "torch",      hp: 0.5, drops: Some("torch"), solid: false, light: Some(6.0), xp: 0.0),
     (id: "furnace",    shape: "furnace",    hp: 4.0, drops: Some("furnace"), station: Some("furnace"), tool: Some("pickaxe")),
 ]

@@ -21,4 +21,15 @@
     (id: "axe_wood",      name: "Wooden Axe",     shape: "axe_wood",      stack_max: 1, use: Tool(tag: "axe", power: 1)),
     (id: "axe_stone",     name: "Stone Axe",      shape: "axe_stone",     stack_max: 1, use: Tool(tag: "axe", power: 2)),
     (id: "axe_iron",      name: "Iron Axe",       shape: "axe_iron",      stack_max: 1, use: Tool(tag: "axe", power: 3)),
+
+    (id: "sword_wood",  name: "Wooden Sword", shape: "sword_wood",  stack_max: 1, use: Weapon(damage: 3.0, range: 1.8, cooldown: 0.45)),
+    (id: "sword_stone", name: "Stone Sword",  shape: "sword_stone", stack_max: 1, use: Weapon(damage: 5.0, range: 1.8, cooldown: 0.45)),
+    (id: "sword_iron",  name: "Iron Sword",   shape: "sword_iron",  stack_max: 1, use: Weapon(damage: 8.0, range: 2.0, cooldown: 0.4)),
+    (id: "bow",         name: "Bow",          shape: "bow",         stack_max: 1, use: Weapon(damage: 4.0, range: 10.0, cooldown: 0.8, projectile: Some("arrow"))),
+
+    (id: "torch",  name: "Torch",    shape: "torch", use: Place("torch")),
+    (id: "meat",   name: "Raw Meat", shape: "meat",  use: Eat(hp: 6.0, stamina: 20.0)),
+    (id: "hide",   name: "Hide",     shape: "hide"),
+    (id: "goo",    name: "Slime Goo", shape: "goo",  use: Eat(hp: 1.0, stamina: 5.0)),
+    (id: "shell",  name: "Crab Shell", shape: "shell"),
 ]

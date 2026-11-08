@@ -11,7 +11,8 @@ off a base. Everything you see is a vector shape; everything you interact with i
 | WASD / arrow keys | Move |
 | Shift | Sprint |
 | Left click (hold) | Mine the object under the cursor with the held tool |
-| Right click | Place the held block or station |
+| Left click | Swing or shoot the held weapon toward the cursor |
+| Right click | Place the held block or station, or eat the held food |
 | 1-0, mouse wheel | Select hotbar slot |
 | E | Inventory (click a slot to swap it with the selected hotbar slot) |
 | C | Crafting menu (click a lit recipe to craft) |
@@ -34,8 +35,11 @@ cargo run -- --headless-smoke               # 600 frames without a window, exits
 - `src/art.rs` — shape recipes to `Mesh2d` entities; the only rendering code
 - `src/player.rs` — input, movement, camera follow, cursor cell
 - `src/items/` — inventory, drops, mining and placing, crafting
+- `src/stats.rs` — health, stamina, damage, death, experience and skills
+- `src/combat/` — weapons (melee arcs, projectiles), creature AI, natural spawning
+- `src/daylight.rs` — day/night tint
 - `src/ui/` — hotbar, inventory panel, crafting panel, debug text
-- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, worldgen
+- `assets/packs/base/` — the base content pack: palette, shapes, terrain, objects, items, recipes, loot, creatures, worldgen
 - `mods/` — drop additional packs here; see `mods/README.md`
 
 ## Content and mods
@@ -48,6 +52,6 @@ Schemas live in `src/core/defs.rs`.
 ## Roadmap
 
 1. Survival loop: world, mining, inventory, crafting, building, saving (done)
-2. Combat and RPG stats: health, stamina, weapons, creatures, experience, day/night
+2. Combat and RPG stats: health, stamina, weapons, creatures, experience, day/night (done)
 3. Farming, fishing, Lua scripting hooks, example mod
 4. Polish: animation, particles, lighting, audio, menus

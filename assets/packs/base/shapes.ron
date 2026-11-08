@@ -63,6 +63,43 @@
         Rect(w: 0.44, h: 0.30, color: "ember", at: (0.0, -0.16)),
     ]),
 
+    // Creatures
+    (id: "boar", parts: [
+        Rect(w: 0.62, h: 0.40, color: "bark", rot: 0),
+        Circle(r: 0.20, color: "bark", at: (0.32, 0.04)),
+        Circle(r: 0.04, color: "pebble", at: (0.40, 0.08)),
+        Rect(w: 0.10, h: 0.16, color: "pebble", at: (0.44, -0.08)),
+    ]),
+    (id: "slime", parts: [
+        Circle(r: 0.30, color: "leaf_light", at: (0.0, -0.04)),
+        Circle(r: 0.20, color: "leaf", at: (0.0, 0.08)),
+        Circle(r: 0.04, color: "coal", at: (-0.08, 0.06)),
+        Circle(r: 0.04, color: "coal", at: (0.08, 0.06)),
+    ]),
+    (id: "wolf", parts: [
+        Rect(w: 0.70, h: 0.32, color: "dark_stone"),
+        Circle(r: 0.17, color: "dark_stone", at: (0.36, 0.06)),
+        Poly(sides: 3, r: 0.09, color: "dark_stone", at: (0.30, 0.22)),
+        Circle(r: 0.04, color: "gold", at: (0.42, 0.10)),
+        Rect(w: 0.30, h: 0.08, color: "stone", at: (-0.40, 0.14), rot: 25),
+    ]),
+    (id: "rock_crab", parts: [
+        Poly(sides: 6, r: 0.34, color: "stone", rot: 15),
+        Rect(w: 0.16, h: 0.10, color: "dark_stone", at: (-0.34, -0.14), rot: -30),
+        Rect(w: 0.16, h: 0.10, color: "dark_stone", at: (0.34, -0.14), rot: 30),
+        Circle(r: 0.04, color: "ember", at: (-0.10, 0.10)),
+        Circle(r: 0.04, color: "ember", at: (0.10, 0.10)),
+    ]),
+    (id: "torch", parts: [
+        Rect(w: 0.10, h: 0.50, color: "bark", at: (0.0, -0.10)),
+        Circle(r: 0.14, color: "ember", at: (0.0, 0.22)),
+        Circle(r: 0.07, color: "gold", at: (0.0, 0.26)),
+    ]),
+    (id: "arrow", parts: [
+        Rect(w: 0.50, h: 0.05, color: "bark"),
+        Poly(sides: 3, r: 0.08, color: "stone", at: (0.26, 0.0), rot: -90),
+    ]),
+
     // Items (drawn at half scale on the ground; swatch color is the first part)
     (id: "log",          parts: [ Rect(w: 0.60, h: 0.26, color: "wood"), Rect(w: 0.60, h: 0.07, color: "bark", at: (0.0, 0.09)) ]),
     (id: "stick",        parts: [ Rect(w: 0.55, h: 0.09, color: "bark", rot: 30) ]),
@@ -79,4 +116,12 @@
     (id: "axe_wood",     parts: [ Rect(w: 0.10, h: 0.70, color: "bark", rot: 20), Rect(w: 0.28, h: 0.26, color: "plank", at: (0.12, 0.24), rot: 20) ]),
     (id: "axe_stone",    parts: [ Rect(w: 0.10, h: 0.70, color: "bark", rot: 20), Rect(w: 0.28, h: 0.26, color: "stone", at: (0.12, 0.24), rot: 20) ]),
     (id: "axe_iron",     parts: [ Rect(w: 0.10, h: 0.70, color: "bark", rot: 20), Rect(w: 0.28, h: 0.26, color: "iron", at: (0.12, 0.24), rot: 20) ]),
+    (id: "sword_wood",   parts: [ Rect(w: 0.08, h: 0.70, color: "plank", rot: 45), Rect(w: 0.26, h: 0.07, color: "bark", at: (-0.16, -0.16), rot: 45) ]),
+    (id: "sword_stone",  parts: [ Rect(w: 0.08, h: 0.70, color: "stone", rot: 45), Rect(w: 0.26, h: 0.07, color: "bark", at: (-0.16, -0.16), rot: 45) ]),
+    (id: "sword_iron",   parts: [ Rect(w: 0.08, h: 0.74, color: "pebble", rot: 45), Rect(w: 0.26, h: 0.07, color: "bark", at: (-0.16, -0.16), rot: 45) ]),
+    (id: "bow",          parts: [ Rect(w: 0.06, h: 0.70, color: "bark", rot: 0), Rect(w: 0.02, h: 0.66, color: "pebble", at: (-0.12, 0.0)) ]),
+    (id: "meat",         parts: [ Circle(r: 0.22, color: "berry"), Circle(r: 0.10, color: "pebble", at: (0.08, 0.06)) ]),
+    (id: "hide",         parts: [ Rect(w: 0.50, h: 0.36, color: "bark", rot: 10), Rect(w: 0.36, h: 0.22, color: "wood", rot: 10) ]),
+    (id: "goo",          parts: [ Circle(r: 0.20, color: "leaf_light"), Circle(r: 0.08, color: "leaf", at: (0.06, 0.06)) ]),
+    (id: "shell",        parts: [ Poly(sides: 6, r: 0.22, color: "stone", rot: 15), Poly(sides: 6, r: 0.10, color: "dark_stone", rot: 15) ]),
 ]

@@ -12,6 +12,7 @@ mods/my-mod/
   items.ron
   recipes.ron
   loot.ron
+  creatures.ron  mobs and the player record
   worldgen.ron    replaces the generator config if present
 ```
 

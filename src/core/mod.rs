@@ -20,11 +20,41 @@ pub fn hash01(seed: u32, x: i32, y: i32, salt: u32) -> f32 {
     (h >> 8) as f32 / (1u32 << 24) as f32
 }
 
+/// Small xorshift generator for gameplay randomness (spawns, wander). World generation does
+/// not use it; that stays deterministic through [`hash01`].
+#[derive(Resource)]
+pub struct Rng(pub u64);
+
+impl Default for Rng {
+    fn default() -> Self {
+        Self(0x9E37_79B9_7F4A_7C15)
+    }
+}
+
+impl Rng {
+    pub fn next_u64(&mut self) -> u64 {
+        let mut x = self.0;
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        self.0 = x;
+        x
+    }
+    /// Uniform in 0..1.
+    pub fn f32(&mut self) -> f32 {
+        (self.next_u64() >> 40) as f32 / (1u64 << 24) as f32
+    }
+    pub fn range(&mut self, lo: f32, hi: f32) -> f32 {
+        lo + (hi - lo) * self.f32()
+    }
+}
+
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<time::GameTime>()
+            .init_resource::<Rng>()
             .add_systems(Update, time::tick);
     }
 }

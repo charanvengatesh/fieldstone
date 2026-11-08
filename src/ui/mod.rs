@@ -127,6 +127,7 @@ impl Plugin for UiPlugin {
                 Update,
                 (
                     hud::update,
+                    hud::bars,
                     hud::debug,
                     inventory::toggle,
                     inventory::paint,

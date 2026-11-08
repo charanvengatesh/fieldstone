@@ -6,6 +6,7 @@ use super::drops::SpawnDrop;
 use super::inventory::Inventory;
 use crate::core::{ItemDef, ObjectDef, RecipeDef, Registry};
 use crate::player::Player;
+use crate::stats::GainXp;
 use crate::world::{ChunkMap, cell_of};
 
 /// Cells around the player that count as "next to" a station.
@@ -56,6 +57,7 @@ pub fn craft(
     mut player: Single<(&Transform, &mut Inventory), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
     mut crafted: MessageWriter<Crafted>,
+    mut xp: MessageWriter<GainXp>,
 ) {
     let (tf, inv) = &mut *player;
     let pos = tf.translation.truncate();
@@ -81,5 +83,9 @@ pub fn craft(
             });
         }
         crafted.write(Crafted { recipe: req.0 });
+        xp.write(GainXp {
+            amount: 2.0 * r.inputs.iter().map(|(_, n)| *n as f32).sum::<f32>(),
+            skill: "crafting",
+        });
     }
 }

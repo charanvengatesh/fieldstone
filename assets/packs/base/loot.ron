@@ -10,4 +10,10 @@
     (id: "wall_stone", entries: [ (item: "wall_stone") ]),
     (id: "workbench",  entries: [ (item: "workbench") ]),
     (id: "furnace",    entries: [ (item: "furnace") ]),
+    (id: "torch",      entries: [ (item: "torch") ]),
+
+    (id: "boar",       entries: [ (item: "meat", min: 1, max: 2), (item: "hide", chance: 0.6) ]),
+    (id: "slime",      entries: [ (item: "goo", min: 1, max: 2) ]),
+    (id: "wolf",       entries: [ (item: "meat", min: 1, max: 2), (item: "hide", min: 1, max: 2) ]),
+    (id: "rock_crab",  entries: [ (item: "shell"), (item: "stone", chance: 0.5) ]),
 ]

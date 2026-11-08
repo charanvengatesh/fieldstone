@@ -5,12 +5,46 @@ use bevy::prelude::*;
 use super::*;
 use crate::items::inventory::{HOTBAR, Inventory};
 use crate::player::{Cursor, Player};
+use crate::stats::{Progress, Stats};
 use crate::world::{ChunkMap, cell_of};
 
 #[derive(Component)]
 pub struct Hotbar;
 #[derive(Component)]
 pub struct DebugText;
+#[derive(Component)]
+pub struct HpBar;
+#[derive(Component)]
+pub struct StaminaBar;
+#[derive(Component)]
+pub struct LevelText;
+
+const BAR_W: f32 = 180.0;
+
+fn bar(parent: &mut ChildSpawnerCommands, marker: impl Component, color: Color) {
+    parent
+        .spawn((
+            Node {
+                width: Val::Px(BAR_W),
+                height: Val::Px(10.0),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            BackgroundColor(SLOT_BG),
+            BorderColor::all(BORDER),
+        ))
+        .with_children(|b| {
+            b.spawn((
+                marker,
+                Node {
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    ..default()
+                },
+                BackgroundColor(color),
+            ));
+        });
+}
 
 pub fn spawn(mut commands: Commands) {
     commands
@@ -29,6 +63,27 @@ pub fn spawn(mut commands: Commands) {
             for i in 0..HOTBAR {
                 spawn_slot(p, i);
             }
+        });
+    commands
+        .spawn((Node {
+            position_type: PositionType::Absolute,
+            left: Val::Px(12.0),
+            bottom: Val::Px(12.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(4.0),
+            ..default()
+        },))
+        .with_children(|p| {
+            p.spawn((
+                LevelText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+            ));
+            bar(p, HpBar, Color::srgb(0.85, 0.25, 0.3));
+            bar(p, StaminaBar, Color::srgb(0.35, 0.75, 0.3));
         });
     commands.spawn((
         DebugText,
@@ -53,6 +108,18 @@ pub fn update(
     mut painter: SlotPainter,
 ) {
     painter.paint(&hotbar, &inv.slots, Some(inv.selected));
+}
+
+pub fn bars(
+    player: Single<(&Stats, &Progress), With<Player>>,
+    mut hp: Single<&mut Node, (With<HpBar>, Without<StaminaBar>)>,
+    mut stamina: Single<&mut Node, (With<StaminaBar>, Without<HpBar>)>,
+    mut level: Single<&mut Text, With<LevelText>>,
+) {
+    let (s, p) = *player;
+    hp.width = Val::Percent((s.hp / s.max_hp * 100.0).clamp(0.0, 100.0));
+    stamina.width = Val::Percent((s.stamina / s.max_stamina.max(1.0) * 100.0).clamp(0.0, 100.0));
+    level.0 = format!("Lv {}  {:.0}/{:.0} xp", p.level, p.xp, p.next_level_xp());
 }
 
 pub fn debug(

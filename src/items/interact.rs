@@ -9,6 +9,7 @@ use super::inventory::{HOTBAR, Inventory};
 use crate::art::ShapeAssets;
 use crate::core::{ItemDef, LootDef, ObjectDef, Registry, ShapeDef, TerrainDef, Use};
 use crate::player::{Cursor, Player};
+use crate::stats::{GainXp, Progress, Stats};
 use crate::world::stream::{clear_object, put_object};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CELL, ChunkMap, PLAYER_R, center_of, overlapping_cells};
@@ -68,12 +69,13 @@ pub fn mine(
     loot: Res<Registry<LootDef>>,
     mut map: ResMut<ChunkMap>,
     mut damage: ResMut<Damage>,
-    player: Single<(&Transform, &Inventory), With<Player>>,
+    player: Single<(&Transform, &Inventory, &Progress), With<Player>>,
     mut drops: MessageWriter<SpawnDrop>,
     mut broken: MessageWriter<ObjectBroken>,
+    mut xp: MessageWriter<GainXp>,
     mut commands: Commands,
 ) {
-    let (tf, inv) = *player;
+    let (tf, inv, progress) = *player;
     let pos = tf.translation.truncate();
     let target = cursor
         .0
@@ -94,7 +96,9 @@ pub fn mine(
     if !right_tool || power < def.hardness {
         return;
     }
-    let dps = BASE_DPS * (1 + power - def.hardness) as f32;
+    let dps = BASE_DPS
+        * (1 + power - def.hardness) as f32
+        * (1.0 + 0.15 * progress.skill_level("mining"));
     let hp = damage.0.entry(cell).or_insert(def.hp);
     *hp -= dps * time.delta_secs();
     if *hp > 0.0 {
@@ -106,6 +110,10 @@ pub fn mine(
         roll_loot(table, &items, center_of(cell), wg.seed, 1, &mut drops);
     }
     broken.write(ObjectBroken { cell, object: obj });
+    xp.write(GainXp {
+        amount: def.xp,
+        skill: "mining",
+    });
 }
 
 pub fn place(
@@ -117,19 +125,25 @@ pub fn place(
     shapes: Res<Registry<ShapeDef>>,
     assets: Res<ShapeAssets>,
     mut map: ResMut<ChunkMap>,
-    mut player: Single<(&Transform, &mut Inventory), With<Player>>,
+    mut player: Single<(&Transform, &mut Inventory, &mut Stats), With<Player>>,
     mut placed: MessageWriter<ObjectPlaced>,
     mut commands: Commands,
 ) {
     if !mouse.just_pressed(MouseButton::Right) {
         return;
     }
-    let (tf, inv) = &mut *player;
+    let (tf, inv, stats) = &mut *player;
     let pos = tf.translation.truncate();
+    let Some(held) = inv.held() else { return };
+    if let Use::Eat { hp, stamina } = items.at(held.item).usage {
+        stats.hp = (stats.hp + hp).min(stats.max_hp);
+        stats.stamina = (stats.stamina + stamina).min(stats.max_stamina);
+        inv.consume_held();
+        return;
+    }
     let Some(cell) = cursor.0.filter(|c| in_reach(pos, *c)) else {
         return;
     };
-    let Some(held) = inv.held() else { return };
     let Use::Place(id) = &items.at(held.item).usage else {
         return;
     };

@@ -111,6 +111,12 @@ pub struct ObjectDef {
     /// Crafting station tag this object provides when the player stands next to it.
     #[serde(default)]
     pub station: Option<String>,
+    /// Radius in cells within which hostile creatures will not spawn.
+    #[serde(default)]
+    pub light: Option<f32>,
+    /// Experience granted to the breaker.
+    #[serde(default = "onef")]
+    pub xp: f32,
 }
 def!(ObjectDef, "objects.ron");
 
@@ -124,10 +130,13 @@ pub enum Use {
         tag: String,
         power: u8,
     },
+    /// Melee by default; with `projectile` (a shape id) it fires one toward the cursor instead.
     Weapon {
         damage: f32,
         range: f32,
         cooldown: f32,
+        #[serde(default)]
+        projectile: Option<String>,
     },
     Eat {
         hp: f32,
@@ -216,6 +225,69 @@ pub struct WorldGenDef {
 }
 def!(WorldGenDef, "worldgen.ron");
 
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct StatsDef {
+    pub hp: f32,
+    #[serde(default)]
+    pub stamina: f32,
+    #[serde(default)]
+    pub attack: f32,
+    #[serde(default)]
+    pub defense: f32,
+    /// World units per second.
+    pub speed: f32,
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
+pub enum Behavior {
+    /// Wanders; never attacks.
+    Passive,
+    /// Wanders until the player is within `aggro` cells, then chases and bites.
+    Hostile { aggro: f32 },
+}
+
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeOfDay {
+    Day,
+    Night,
+    Any,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct SpawnDef {
+    /// Terrain ids this creature may appear on.
+    pub on: Vec<String>,
+    #[serde(default = "any")]
+    pub time: TimeOfDay,
+    /// Relative weight among candidates for a cell.
+    #[serde(default = "onef")]
+    pub weight: f32,
+}
+
+/// `creatures.ron`: the player and every mob. The player is the record with id `player`.
+#[derive(Deserialize, Debug, Clone)]
+pub struct CreatureDef {
+    pub id: String,
+    pub shape: String,
+    pub stats: StatsDef,
+    #[serde(default = "passive")]
+    pub ai: Behavior,
+    #[serde(default)]
+    pub drops: Option<String>,
+    #[serde(default)]
+    pub xp: f32,
+    /// Absent for creatures that never spawn naturally (the player, bosses placed by scripts).
+    #[serde(default)]
+    pub spawn: Option<SpawnDef>,
+}
+def!(CreatureDef, "creatures.ron");
+
+fn any() -> TimeOfDay {
+    TimeOfDay::Any
+}
+fn passive() -> Behavior {
+    Behavior::Passive
+}
 fn yes() -> bool {
     true
 }

@@ -3,9 +3,12 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod art;
+mod combat;
 mod core;
+mod daylight;
 mod items;
 mod player;
+mod stats;
 mod ui;
 mod world;
 
@@ -48,7 +51,7 @@ fn main() {
             }),
             ..default()
         }))
-        .add_plugins(ui::UiPlugin);
+        .add_plugins((ui::UiPlugin, daylight::DaylightPlugin));
     }
     core::packs::load_all(&mut app);
     setup_world(&mut app);
@@ -59,10 +62,19 @@ fn main() {
             world::WorldPlugin,
             player::PlayerPlugin,
             items::ItemsPlugin,
+            combat::CombatPlugin,
+            stats::StatsPlugin,
         ))
         .configure_sets(
             Update,
-            (player::PlayerSet, world::WorldSet, items::ItemsSet).chain(),
+            (
+                player::PlayerSet,
+                world::WorldSet,
+                items::ItemsSet,
+                combat::CombatSet,
+                stats::StatsSet,
+            )
+                .chain(),
         )
         .add_systems(Update, (core::save::save, core::save::restore_player))
         .run();
@@ -99,14 +111,19 @@ fn setup_world(app: &mut App) {
         |l| l.seed,
     );
     let wg = WorldGen::new(seed, &gen_def, terrain, objects);
+    let spawn = spawn_point(&wg, terrain);
     let pending = match &loaded {
         Some(l) => PendingPlayer {
             pos: l.player,
             inventory: l.inventory.clone(),
+            hp: l.hp,
+            progress: l.progress.clone(),
         },
         None => PendingPlayer {
-            pos: spawn_point(&wg, terrain),
+            pos: spawn,
             inventory: vec![],
+            hp: None,
+            progress: None,
         },
     };
     let (time, chunks) = loaded.map_or((GameTime::default(), SavedChunks::default()), |l| {
@@ -114,6 +131,7 @@ fn setup_world(app: &mut App) {
     });
     info!("world seed {seed}");
     app.insert_resource(wg)
+        .insert_resource(stats::SpawnPoint(spawn))
         .insert_resource(time)
         .insert_resource(chunks)
         .insert_resource(pending);

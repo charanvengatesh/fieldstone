@@ -12,6 +12,7 @@ use super::time::GameTime;
 use super::{ItemDef, ObjectDef, Registry, TerrainDef};
 use crate::items::inventory::{Inventory, Stack};
 use crate::player::Player;
+use crate::stats::{Progress, Stats};
 use crate::world::chunk::{TILES, Tile};
 use crate::world::{ChunkMap, worldgen::WorldGen};
 
@@ -27,6 +28,11 @@ struct SaveFile {
     time: GameTime,
     player: (f32, f32),
     inventory: Vec<Option<(String, u32)>>,
+    #[serde(default)]
+    hp: Option<f32>,
+    /// `(xp, level, skills)`.
+    #[serde(default)]
+    progress: Option<(f32, u32, Vec<(String, f32)>)>,
     /// String ids referenced by `chunks`; index 0 is reserved for "no object".
     ids: Vec<String>,
     /// Chunk coordinate and, per tile, `(terrain id index, object id index)`.
@@ -42,12 +48,12 @@ pub fn save(
     terrain: Res<Registry<TerrainDef>>,
     objects: Res<Registry<ObjectDef>>,
     items: Res<Registry<ItemDef>>,
-    player: Single<(&Transform, &Inventory), With<Player>>,
+    player: Single<(&Transform, &Inventory, &Stats, &Progress), With<Player>>,
 ) {
     if !keys.just_pressed(KeyCode::F5) {
         return;
     }
-    let (tf, inv) = *player;
+    let (tf, inv, stats, progress) = *player;
     let mut ids: Vec<String> = vec![String::new()];
     let mut intern = |s: &str| -> u16 {
         match ids.iter().position(|i| i == s) {
@@ -85,6 +91,8 @@ pub fn save(
             .iter()
             .map(|s| s.map(|s| (items.id_of(s.item).to_owned(), s.n)))
             .collect(),
+        hp: Some(stats.hp),
+        progress: Some((progress.xp, progress.level, progress.skills.clone())),
         ids,
         chunks,
     };
@@ -107,6 +115,8 @@ pub struct Loaded {
     pub time: GameTime,
     pub player: Vec2,
     pub inventory: Vec<Option<(String, u32)>>,
+    pub hp: Option<f32>,
+    pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
     pub chunks: SavedChunks,
 }
 
@@ -136,6 +146,8 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
         time: file.time,
         player: Vec2::new(file.player.0, file.player.1),
         inventory: file.inventory,
+        hp: file.hp,
+        progress: file.progress,
         chunks: SavedChunks(chunks),
     })
 }
@@ -145,16 +157,27 @@ pub fn restore_player(
     mut commands: Commands,
     pending: Option<Res<PendingPlayer>>,
     items: Res<Registry<ItemDef>>,
-    mut player: Single<(&mut Transform, &mut Inventory), With<Player>>,
+    mut player: Single<(&mut Transform, &mut Inventory, &mut Stats, &mut Progress), With<Player>>,
 ) {
-    let Some(p) = pending else { return };
-    let (tf, inv) = &mut *player;
+    let Some(p) = pending else {
+        return;
+    };
+    let (tf, inv, stats, progress) = &mut *player;
     tf.translation = p.pos.extend(tf.translation.z);
     for (slot, saved) in inv.slots.iter_mut().zip(&p.inventory) {
         *slot = saved
             .as_ref()
             .and_then(|(id, n)| items.idx(id).map(|item| Stack { item, n: *n }));
     }
+    if let Some((xp, level, skills)) = &p.progress {
+        progress.xp = *xp;
+        progress.level = *level;
+        progress.skills = skills.clone();
+        // Replay level bonuses so stats match the saved level.
+        stats.max_hp += 5.0 * *level as f32;
+        stats.attack += *level as f32;
+    }
+    stats.hp = p.hp.unwrap_or(stats.max_hp).min(stats.max_hp);
     commands.remove_resource::<PendingPlayer>();
 }
 
@@ -162,4 +185,6 @@ pub fn restore_player(
 pub struct PendingPlayer {
     pub pos: Vec2,
     pub inventory: Vec<Option<(String, u32)>>,
+    pub hp: Option<f32>,
+    pub progress: Option<(f32, u32, Vec<(String, f32)>)>,
 }

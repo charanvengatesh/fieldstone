@@ -4,12 +4,15 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::art::ShapeAssets;
-use crate::core::{ObjectDef, Registry, ShapeDef, TerrainDef};
+use crate::combat::weapon::Cooldown;
+use crate::core::{CreatureDef, ObjectDef, Registry, ShapeDef, TerrainDef};
 use crate::items::inventory::Inventory;
+use crate::stats::{Creature, Progress, Stats};
+
 use crate::world::{ChunkMap, PLAYER_R, cell_of, is_solid, slide};
 
-const WALK: f32 = 120.0;
-const SPRINT: f32 = 240.0;
+/// Stamina per second while sprinting.
+const SPRINT_COST: f32 = 12.0;
 pub const ZOOM: f32 = 0.6;
 
 #[derive(Component)]
@@ -19,7 +22,12 @@ pub struct Player;
 #[derive(Resource, Default)]
 pub struct Cursor(pub Option<IVec2>);
 
-pub fn spawn(mut commands: Commands, shapes: Res<Registry<ShapeDef>>, assets: Res<ShapeAssets>) {
+pub fn spawn(
+    mut commands: Commands,
+    shapes: Res<Registry<ShapeDef>>,
+    creatures: Res<Registry<CreatureDef>>,
+    assets: Res<ShapeAssets>,
+) {
     commands.spawn((
         Camera2d,
         Projection::Orthographic(OrthographicProjection {
@@ -27,13 +35,24 @@ pub fn spawn(mut commands: Commands, shapes: Res<Registry<ShapeDef>>, assets: Re
             ..OrthographicProjection::default_2d()
         }),
     ));
+    let id = creatures
+        .idx("player")
+        .expect("creatures.ron must define 'player'");
+    let def = creatures.at(id);
     let e = crate::art::spawn_shape(
         &mut commands,
         &assets,
-        shapes.idx("player"),
+        shapes.idx(&def.shape),
         Transform::from_xyz(0.0, 0.0, 2.0),
     );
-    commands.entity(e).insert((Player, Inventory::default()));
+    commands.entity(e).insert((
+        Player,
+        Creature(id),
+        Stats::from(def.stats),
+        Progress::default(),
+        Cooldown::default(),
+        Inventory::default(),
+    ));
 }
 
 /// WASD / arrows to move, Shift to sprint. Each axis resolves separately so the player stops
@@ -44,9 +63,10 @@ pub fn movement(
     map: Res<ChunkMap>,
     terrain: Res<Registry<TerrainDef>>,
     objects: Res<Registry<ObjectDef>>,
-    mut tf: Single<&mut Transform, With<Player>>,
+    mut player: Single<(&mut Transform, &mut Stats), With<Player>>,
 ) {
     use KeyCode::*;
+    let (tf, stats) = &mut *player;
     let axis = |neg: [KeyCode; 2], pos: [KeyCode; 2]| {
         keys.any_pressed(pos) as i8 as f32 - keys.any_pressed(neg) as i8 as f32
     };
@@ -55,10 +75,13 @@ pub fn movement(
         axis([KeyS, ArrowDown], [KeyW, ArrowUp]),
     )
     .normalize_or_zero();
-    let speed = if keys.any_pressed([ShiftLeft, ShiftRight]) {
-        SPRINT
+    let sprinting =
+        keys.any_pressed([ShiftLeft, ShiftRight]) && dir != Vec2::ZERO && stats.stamina > 0.0;
+    let speed = if sprinting {
+        stats.stamina = (stats.stamina - SPRINT_COST * time.delta_secs()).max(0.0);
+        stats.speed * 2.0
     } else {
-        WALK
+        stats.speed
     };
     let delta = dir * speed * time.delta_secs();
     let solid = |c| is_solid(&map, &terrain, &objects, c);
