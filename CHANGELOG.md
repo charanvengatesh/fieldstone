@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.7.0
+
+A rebuild. The top-down survival game is retired to tag `v0.6.1`; this release is a small
+isometric block engine meant to be extended by mods. Saves from 0.6 are ignored (they stay on
+disk untouched).
+
+### New
+- Isometric view of a world made of blocks on an x, y, z grid, 32 levels tall. Dig down,
+  build up. Four view rotations (Q / E).
+- Exact occlusion from a depth buffer: every vertex carries `x + y + z`, so blocks and the
+  player sort per pixel with no sorting code. A faint overlay keeps the player findable
+  behind terrain.
+- Flat-shaded art generated from one colour per block, with outlines on steps and material
+  changes (G shows the full grid).
+- Terrain from a height field with surface bands and a sea; trees, boulders and ore veins
+  from `stamps.ron` and `features.ron`, which mods extend record by record.
+- Physics with gravity and automatic one-block steps. Water cannot be crossed until bridged.
+- Break, place, hotbar, bag with stack splitting, pause menu, save file with only edited
+  chunks.
+- Lua through `mlua` with a synchronous, sandboxed API: scripts read and write blocks and the
+  inventory directly.
+- Debug probe: F9 saves the window, a software-drawn copy of the view that works even when
+  the window is hidden, and a text dump. `--snapshot` draws the world with no window at all.
+
+### Removed
+- Combat, creatures, hunger, crafting, farming, fishing, chests, the shrine quest, day and
+  night, sound, the vector and pixel top-down renderers, shaders, shape recipes. They return
+  as mods.
+- Dependencies `noise` and `bevy_mod_scripting`; Bevy is built with 2D, UI and input
+  features only.
+
 ## 0.6.1
 
 Depth and building. The world reads as a 3/4 view with terraced land, and building gains

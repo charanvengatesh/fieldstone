@@ -1,76 +1,97 @@
 # Mods
 
-A mod is a folder in here with the same layout as `assets/packs/base/`. Every file is optional.
+A mod is a folder in here laid out like `assets/packs/base/`. Every file is optional.
 
 ```
 mods/my-mod/
-  pack.ron        (name: "my-mod", format: 1, enabled: true, depends: ["base"], scripts: [])
-  palette.ron     new or overridden colors
-  shapes.ron      shape recipes (also the source of generated pixel art)
-  sprites.ron     PNG strips per visual id: frames, fps, anchor
-  tiles/<terrain>.png   4x4 sheet of 16 px tiles per terrain (and _0.._3 frames for water)
-  terrain.ron     ground types
-  objects.ron     trees, ores, walls, stations
-  items.ron
-  recipes.ron
-  loot.ron
-  creatures.ron   mobs and the player record
-  fish.ron        what bites in each water type
-  hints.ron       one-shot guidance lines
-  worldgen.ron    replaces the generator config if present
+  pack.ron        (name: "my-mod", format: 2, enabled: true, depends: ["base"], scripts: [])
+  blocks.ron      new or changed cubes
+  items.ron       things that are not blocks (every block already gets its own item)
+  stamps.ron      small 3D shapes: trees, boulders, huts
+  features.ron    where stamps stand and where ore replaces stone
+  worldgen.ron    the terrain itself: heights, sea level, surface bands
+  scripts/*.lua   behaviour
 ```
 
-Packs load in dependency order (`assets/packs/*` first, then `mods/*`). A record whose `id`
-already exists replaces the earlier one, so a mod can retune a base item by redefining it.
-Schemas are documented in `src/core/defs.rs`.
+Packs load in dependency order (`assets/packs/*`, then `mods/*`). A record whose `id` already
+exists replaces the earlier one; a new `id` is added. So a mod retunes a base block by
+redefining it and adds a tree by adding one `features.ron` record, without copying anything.
+Schemas are documented in `src/core/defs.rs`. Set `enabled: false` to keep a mod on disk
+without loading it.
+
+Saves name blocks by id. Removing a mod turns its blocks to air and drops its items on the
+next load, with a warning in the log; nothing else is lost.
+
+## Blocks
+
+```ron
+(id: "crystal", name: "Crystal", color: (176, 132, 240), top: Some((214, 190, 255)), hp: 0.8)
+```
+
+`color` is the whole art: the engine shades a lit top, a mid left face and a dark right face.
+`top` overrides the top face. Other fields: `solid`, `walkable` (false for water: nothing
+stands on or over it until something is built there), `hp` (seconds to break), `breakable`,
+`drops` (an item id; the block itself when absent), `item` (false to make no item).
+
+## Stamps and features
+
+A stamp is layers from the bottom up; each layer is rows read like a map, all the same size.
+A space leaves the world alone. The middle column stands on the chosen cell.
+
+```ron
+(id: "tree",
+    layers: [
+        ["   ", " T ", "   "],
+        ["lll", "lTl", "lll"],
+    ],
+    legend: { 'T': "log", 'l': "leaves" })
+```
+
+Features place things:
+
+```ron
+(id: "forest", rule: Surface(stamp: "tree", on: ["grass"], density: 0.16, noise: Some((28.0, 0.56))))
+(id: "coal",   rule: Replace(block: "stone", with: "coal_ore", density: 0.8, noise: Some((5.0, 0.70)), z: (1, 20)))
+```
+
+`density` is the chance per eligible cell. `noise: Some((scale, threshold))` keeps a rule to
+patches (groves, veins); leave it out for an even scatter. Generation is a pure function of
+the seed, so the same seed with the same packs always gives the same world.
 
 ## Scripts
 
-`scripts` in `pack.ron` lists Lua files (paths relative to the pack). Define any of these
-functions and the engine calls them:
+List Lua files in `pack.ron`. Each script has its own globals, so two mods can both define
+`on_tick`. Define any of these and the engine calls them:
 
-| Hook | Arguments |
-|------|-----------|
-| `on_script_loaded()` | |
-| `on_object_broken(x, y, object_id)` | cell and the object that broke |
-| `on_object_placed(x, y, object_id)` | |
-| `on_craft(recipe_id)` | |
-| `on_death(creature_id, x, y)` | `"player"` when the player dies |
-| `on_day_start(day)` | fires at each dawn after the first |
-| `on_object_used(x, y, from_id, to_id)` | an object with `use_swaps` was used (doors, shrine stages) |
+| Hook | When |
+|------|------|
+| `on_script_loaded()` | once, after the file ran |
 | `on_tick(dt)` | every frame, `dt` in seconds |
+| `on_block_broken(x, y, z, block_id)` | a block was broken by the player |
+| `on_block_placed(x, y, z, block_id)` | a block was placed by the player |
 
-Pixel art: a sprite PNG is a horizontal strip of equal frames; a tile sheet is a 4x4 grid where
-tile index = corner mask (bit 0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right). Anything
-you do not provide is generated from the shape recipe, so a mod can start with shapes and swap
-in PNGs one at a time.
+Functions you can call. They act immediately: a `set_block` is visible to the next
+`get_block`.
 
-Coordinates are cell indices (one cell is 16 world units). Scripts load once at startup; there is no
-hot reload yet. `give_item` drops the items at the player's feet rather than inserting them.
+| Function | Does |
+|----------|------|
+| `log(text)` | writes to the game log |
+| `show_text(text, seconds)` | a line at the top of the screen |
+| `get_block(x, y, z)` | the block id there, `"air"` when empty or not loaded |
+| `set_block(x, y, z, block_id)` | writes a block; `true` when something changed |
+| `give_item(item_id, n)` | adds to the player's bag; returns how many did not fit |
+| `take_item(item_id, n)` | removes exactly `n` or nothing; `true` on success |
+| `count_item(item_id)` | how many the player holds |
+| `sort_inventory()` | merges and orders the bag (not the hotbar) |
+| `player_pos()` | `x, y, z` of the player's feet |
+| `key_just_pressed(name)` | `true` the frame a key goes down; names as in `settings.ron` |
+| `screenshot(name)`, `snapshot(name)`, `dump_state(name)`, `append_file(name, line)` | debug output under `debug/` |
 
-Functions scripts can call:
+Scripts run in a sandbox: `table`, `string`, `math` and `utf8` only. There is no `io`, `os` or
+`require`. Scripts load once at startup; there is no hot reload yet.
 
-| Function | Effect |
-|----------|--------|
-| `log(message)` | writes to the game log |
-| `give_item(item_id, count)` | drops items at the player's feet |
-| `spawn_creature(creature_id, x, y)` | spawns a creature on a cell |
-| `is_night()` | `true` during the dark half of the day |
-| `show_text(message, seconds)` | toast line at the top of the screen |
-| `win(message)` | ends the game: eternal day and an ending card |
-| `set_day_frac(f)` | moves the clock within the current day (0 dawn, 0.5 dusk) |
-| `player_x()`, `player_y()` | the player's cell |
-| `day_frac()` | 0 dawn .. 0.5 dusk .. 1 |
-| `key_just_pressed(name)` | `true` the frame a key goes down; names as in `settings.ron` (`"F9"`, `"K"`) |
-| `screenshot(name)` | saves `debug/<name>.png` |
-| `dump_state(name)` | saves `debug/<name>.txt`: clocks, player, inventory, creatures, chests, ASCII maps |
-| `append_file(name, line)` | appends a line to `debug/<name>` |
+## The two mods in this folder
 
-`format` is the pack format the mod was written for; the engine warns when a mod is newer than it
-understands. Objects can declare `storage` (chest slots), `use_swaps` / `use_consumes` (doors,
-multi-stage builds), `bed`, `radius` (hitbox), `on` (terrain restriction), `light`, `grows_into`.
-
-See `mods/example-autumn/` for a data-only mod (eight palette overrides, nothing else) and
-`mods/example-crystal/` for a complete mod: a new ore in the world generator, items,
-recipes, a light source, and a script that reacts to mining and placing. `mods/debug/` is a
-probe: F9 saves a screenshot and a world-state dump under `debug/` for bug reports.
+- `example-crystal/` is a complete small mod to copy: two blocks, one feature rule, one script.
+- `debug/` is a probe: F9 saves a window screenshot, a software snapshot and a text dump for
+  bug reports. See its README.

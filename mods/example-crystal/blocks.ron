@@ -1,0 +1,5 @@
+// Crystal ore appears in stone (see features.ron) and breaks into a crystal block.
+[
+    (id: "crystal_ore", name: "Crystal Ore", color: (120, 104, 168), hp: 2.0, drops: Some("crystal")),
+    (id: "crystal",     name: "Crystal",     color: (176, 132, 240), top: Some((214, 190, 255)), hp: 0.8),
+]

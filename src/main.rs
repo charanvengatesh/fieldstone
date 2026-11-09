@@ -167,7 +167,13 @@ fn setup_world(app: &mut App, options: &Options) {
                 .duration_since(std::time::UNIX_EPOCH)
                 .map_or(7, |d| d.as_secs() as u32)
         });
-    let wg = world::worldgen::WorldGen::new(seed, &def, blocks);
+    let wg = world::worldgen::WorldGen::new(
+        seed,
+        &def,
+        blocks,
+        world.resource::<core::Registry<core::FeatureDef>>(),
+        world.resource::<core::Registry<core::StampDef>>(),
+    );
     let mut map = world::Map::default();
     let mut view = world::iso::View {
         rot: options.rot % 4,

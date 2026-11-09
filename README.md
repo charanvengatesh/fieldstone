@@ -1,93 +1,82 @@
 # Fieldstone
 
-A small, data-driven, moddable top-down survival game in Rust and Bevy. Wander a procedurally
-generated field, chop trees, mine ore, craft tools at a workbench, smelt at a furnace, cook at a
-campfire, and wall off a base. Art is 16 px pixel sprites and tiles, generated from shape
-recipes until a pack drops in real PNGs; everything you interact with is defined in RON.
+A small isometric block engine in Rust and Bevy, built to be modded. The world is cubes on a
+grid: walk over them, break them, stack them. Everything concrete (which blocks exist, how the
+land is shaped, what grows on it) is data in a pack, and behaviour is Lua. The base pack is
+deliberately bare; features arrive as mods.
+
+The earlier top-down survival game lives on at tag `v0.6.1`.
 
 ## Controls
 
-Built for a trackpad first: nothing needs holding or a right button.
-
 | Input | Action |
 |-------|--------|
-| WASD / arrow keys | Move |
-| Shift | Sprint (uses stamina) |
-| Click an object | Target it: the player walks within reach and works it until it breaks. Click empty ground or press Esc to stop. Holding the button also works |
-| Click with a weapon | Swing or shoot toward the cursor. Switch to a tool or empty slot to mine |
-| Q | Drop the held stack |
-| Click water with a rod | Cast; click again on the bite |
-| Click grass with a hoe | Till it |
-| F or right click | Use the held item (place, plant, eat), or use the object under the cursor: open a chest, open a door, sleep in a bed, feed the shrine |
-| Esc | Pause menu: resume, save, save and quit |
-| 1-0, two-finger scroll | Select hotbar slot |
-| Pinch, or - / = | Zoom (whole pixel scales in pixel mode) |
-| E | Inventory (click a slot to swap it with the selected hotbar slot) |
-| C | Crafting menu (click a lit recipe to craft) |
-| F5 | Save to `saves/world.ron` (loaded automatically next start) |
-| F3 | Debug readout |
+| WASD / arrow keys | Walk along the screen axes. One-block steps are climbed automatically |
+| Hold click | Break the block under the pointer (within five blocks) |
+| Right click (two-finger click) | Place the held block against the face under the pointer |
+| 1-0, two-finger scroll | Choose a hotbar slot |
+| Tab or I | Bag. Click a slot to swap it with the held slot, shift-click splits half, right-click one |
+| Q / E | Turn the view a quarter |
+| Pinch, or - / = | Zoom in whole pixel steps |
+| G | Outline every block (the classic grid look) or only steps and material changes |
+| Esc | Pause: resume, save, save and quit |
+| F5 | Save to `saves/iso.ron`, loaded on the next start |
+| F3 | Debug line |
+| F9 | Debug capture (with `mods/debug` enabled): pictures and a text dump under `debug/` |
 
-Every key is rebindable in `settings.ron`, written next to the executable on first run. The same
-file holds `render` (`Pixel` or `Vector`), `pixel_scale` and `volume`.
+Keys are rebindable in `settings.ron`, written next to the executable on first run.
 
-## Goal
-
-Eat (the amber bar is food), survive, build, and end the night: craft a Sun Shrine (stone and gold at a workbench), forge
-three Sun Cores (gold, iron and coal at a furnace), and feed them to the shrine. The quest is a
-Lua script in the base pack, so a mod can replace it.
+A one-block hole hides its own floor behind its near walls. To fill it, click the far wall.
 
 ## Run
 
 ```sh
-cargo run                                   # first build takes a few minutes (Bevy)
-cargo run --features bevy/dynamic_linking   # faster rebuilds while iterating
-cargo test                                  # registry, chunk math, collision, inventory tests
-cargo run -- --headless-smoke               # no window: scripted input mines an object and places a wall, exits non-zero on failure
-cargo run -- --new                          # ignore the save file and start a fresh world
-cargo run -- --seed 42                      # fix the world seed
-cargo build --release                       # optimized binary in target/release/
+cargo run                        # first build compiles Bevy and takes a few minutes
+cargo run -- --new               # ignore the save and start a fresh world
+cargo run -- --seed 42           # fix the world seed
+cargo test                       # 48 unit tests
+cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
+cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
+                                 #   options: --scale N  --rot 0..3  --grid
+cargo build --release
 ```
+
+## How it works
+
+- **Projection.** 2:1 dimetric with four rotations. The view direction is exactly
+  `(1, 1, 1)`, so a point's nearness is `x + y + z`. Every vertex carries that as depth and
+  the depth buffer sorts blocks and the player per pixel; there is no sorting code.
+- **World.** Chunks of 16 x 16 columns by 32 levels of block ids. Each block is a pure
+  function of the seed and its position, so chunks generate in any order and a save stores
+  only chunks that were edited.
+- **Meshing.** One mesh per chunk with only the faces that look at the camera and touch
+  air. Colour is per vertex from the block's one colour; outlines come from a tiny generated
+  texture chosen per face edge.
+- **Physics.** A box that moves one axis at a time, falls, lands and climbs single steps.
+- **Scripts.** Lua 5.4 through `mlua`, sandboxed to `table`, `string`, `math`, `utf8`. The
+  engine's functions act on the world directly, so a script reads a block and sees the answer
+  on the next line.
 
 ## Layout
 
-- `src/core/` — content schemas (`defs.rs`), id registries, pack loader, clock, save/load
-- `src/world/` — chunked tile storage, noise world generation, streaming, tile sheets and meshes, collision
-- `src/art.rs` — visuals: pixel sprites generated from shape recipes (or PNGs), vector meshes
-- `src/player.rs` — input, movement, camera follow, cursor cell
-- `src/items/` — inventory, drops, mining and placing, crafting
-- `src/stats.rs` — health, stamina, damage, death, experience and skills
-- `src/combat/` — weapons (melee arcs, projectiles), creature AI, natural spawning
-- `src/daylight.rs` — day/night tint
-- `src/farm.rs` — tilling and staged crop growth
-- `src/fish.rs` — casting, bites, fish tables
-- `src/script.rs` — Lua hooks and script-callable functions (`bevy_mod_scripting`)
-- `src/fx.rs` — slashes, break particles, glints, night glows around lights
-- `src/water.rs` + `assets/shaders/water.wgsl` — animated water overlay
-- `src/sound.rs` — procedural sound effects
-- `src/hints.rs` — one-shot guidance from `hints.ron`
-- `src/ui/` — hotbar, inventory panel, crafting panel, debug text
-- `assets/packs/base/` — the base content pack: palette, shapes, sprites, terrain, objects, items, recipes, loot, creatures, fish, hints, worldgen, scripts
-- `mods/` — additional packs; `example-crystal` (new ore, items, Lua) and `example-autumn` (palette-only recolor); see `mods/README.md`
-
-## Content and mods
-
-The engine knows about *kinds* of things (terrain, objects, items, recipes, loot tables, shapes,
-colors, sprites, structure stamps, the generator config) and nothing concrete. A pack is a folder of RON files, one per kind;
-`assets/packs/base` is just the first pack. Later packs override earlier records with the same id.
-Schemas live in `src/core/defs.rs`.
+- `src/core/` schemas (`defs.rs`), id registries, pack loader, settings, save file
+- `src/world/` `iso.rs` projection and picking, block storage, `noise.rs`, `worldgen.rs`,
+  `stamp.rs`, `mesh.rs`, `stream.rs`, `physics.rs`
+- `src/player.rs`, `src/interact.rs`, `src/inventory.rs`, `src/camera.rs`, `src/ui.rs`
+- `src/script.rs` Lua hooks and API
+- `src/debug.rs` screenshots, software snapshots, text dumps; `src/smoke.rs` the self-test
+- `assets/packs/base/` the base pack: `blocks.ron`, `worldgen.ron`, `stamps.ron`, `features.ron`
+- `mods/` packs loaded after the base; see `mods/README.md`
 
 ## Releases
 
-Tagging `v*` builds macOS, Linux and Windows zips through GitHub Actions and attaches them to a
-release. Each zip holds the binary plus `assets/` and `mods/`; run it from inside the folder.
+Tagged versions build for macOS (Apple Silicon), Linux and Windows on GitHub Actions; the zips
+are on the Releases page. Unzip and run `fieldstone` from the folder; it finds `assets/` and
+`mods/` beside itself.
 
 ## Roadmap
 
-- v0.6.0: pixel renderer, generated sprites and tile sheets with PNG overrides, hunger and
-  cooking, deer and bats
-- v0.6.1 (this): 3/4 perspective and y-sorting, terraced elevation with cliffs and ramps,
-  multi-tile objects, connected walls, shelter, stack splitting and tooltips, structure stamps
-- v0.6.2: sleep as the day boundary, seasons, tool tiers and durability, fishing minigame,
-  per-tile light
-- v0.6.3: mines as floors, a village with NPC schedules, shop and coins
-- v0.6.4: hot reload, additive worldgen patches, wider script API, generated API docs
+The engine stays small. Each of these returns as a mod, with at most one small generic
+capability added to the engine and exposed to Lua: crafting, day and night, health and hunger,
+creatures and combat, liquid and see-through blocks, a cutaway view for caves, sound, PNG
+block textures.

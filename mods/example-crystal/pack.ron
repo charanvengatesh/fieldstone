@@ -1,0 +1,8 @@
+// A complete small mod: two blocks, one feature rule, one script. Copy this folder to start
+// your own. Set enabled: false to play without it.
+(
+    name: "example-crystal",
+    format: 2,
+    depends: ["base"],
+    scripts: ["scripts/crystal.lua"],
+)

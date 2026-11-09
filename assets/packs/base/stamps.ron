@@ -1,0 +1,31 @@
+// Small 3D shapes for features.ron. `layers` run bottom to top; each layer is rows of
+// characters read like a map (first row is the highest y, x runs left to right), all the
+// same size. A space leaves the world alone. The middle column stands on the chosen cell.
+[
+    (id: "tree",
+        layers: [
+            ["   ", " T ", "   "],
+            ["   ", " T ", "   "],
+            ["lll", "lTl", "lll"],
+            [" l ", "lll", " l "],
+        ],
+        legend: { 'T': "log", 'l': "leaves" }),
+
+    (id: "tall_tree",
+        layers: [
+            ["   ", " T ", "   "],
+            ["   ", " T ", "   "],
+            ["   ", " T ", "   "],
+            ["lll", "lTl", "lll"],
+            ["lll", "lTl", "lll"],
+            ["   ", " l ", "   "],
+        ],
+        legend: { 'T': "log", 'l': "leaves" }),
+
+    (id: "boulder",
+        layers: [
+            ["ss", "ss"],
+            ["s ", "  "],
+        ],
+        legend: { 's': "stone" }),
+]

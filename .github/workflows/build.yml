@@ -16,11 +16,16 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - name: Linux deps
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libwayland-dev libxkbcommon-dev
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test
-      - run: cargo run -- --headless-smoke --seed 42
+      - name: Smoke test
+        shell: bash
+        run: |
+          cargo run -- --headless-smoke --seed 42 2>&1 | tee smoke.log
+          # The dig, place and save steps must have run, not been skipped.
+          grep -q "breaks, places, saves" smoke.log
 
   release:
     needs: check
@@ -43,7 +48,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Linux deps
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev libwayland-dev libxkbcommon-dev
       - run: cargo build --release
       - name: Package
         shell: bash

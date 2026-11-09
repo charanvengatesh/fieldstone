@@ -1,0 +1,4 @@
+// Added to the base rules, not replacing them: rare veins of crystal ore in deep stone.
+[
+    (id: "crystal", rule: Replace(block: "stone", with: "crystal_ore", density: 0.9, noise: Some((4.0, 0.80)), z: (1, 14))),
+]

@@ -1,6 +1,8 @@
 //! Every content schema in one place. Packs (`assets/packs/*`, `mods/*`) are RON files
 //! holding `Vec<...>` of these; the engine never hardcodes a concrete block or item.
 
+use std::collections::HashMap;
+
 use serde::Deserialize;
 
 /// Anything stored in a [`super::registry::Registry`]: has a unique string id within its kind.
@@ -164,9 +166,63 @@ pub struct WorldGenDef {
     pub base: String,
     /// The unbreakable bottom layer at z 0.
     pub floor: String,
+    /// Surface blocks a new player may start on; any dry ground when empty.
+    #[serde(default)]
+    pub spawn_on: Vec<String>,
 }
 def!(WorldGenDef, "worldgen.ron");
 
+/// `stamps.ron`: a small 3D shape. `layers` run bottom to top; each layer is rows of
+/// characters read like a map (first row is the highest y, x runs left to right). Every
+/// layer has the same width and depth. A space leaves the world alone; any other character
+/// must be in `legend`. The stamp's middle column sits on the cell it is placed at.
+#[derive(Deserialize, Debug, Clone)]
+pub struct StampDef {
+    pub id: String,
+    pub layers: Vec<Vec<String>>,
+    pub legend: HashMap<char, String>,
+}
+def!(StampDef, "stamps.ron");
+
+/// What a feature does to the generated terrain.
+#[derive(Deserialize, Debug, Clone)]
+pub enum Rule {
+    /// Stands `stamp` on dry columns whose surface block is one of `on`.
+    Surface {
+        stamp: String,
+        on: Vec<String>,
+        /// Chance per eligible column, 0..1.
+        density: f32,
+        /// Only where low-frequency noise exceeds a threshold: `(cells per noise cell,
+        /// threshold 0..1)`. Clusters stamps into groves.
+        #[serde(default)]
+        noise: Option<(f64, f32)>,
+    },
+    /// Swaps `block` for `with` inside the ground, between two heights.
+    Replace {
+        block: String,
+        with: String,
+        density: f32,
+        /// As above, in three dimensions: carves veins.
+        #[serde(default)]
+        noise: Option<(f64, f32)>,
+        #[serde(default = "any_height")]
+        z: (i32, i32),
+    },
+}
+
+/// `features.ron`: additions to the terrain. Records are merged by id like everything else,
+/// so a mod adds trees or ore without touching the base generator.
+#[derive(Deserialize, Debug, Clone)]
+pub struct FeatureDef {
+    pub id: String,
+    pub rule: Rule,
+}
+def!(FeatureDef, "features.ron");
+
+fn any_height() -> (i32, i32) {
+    (0, i32::MAX)
+}
 fn yes() -> bool {
     true
 }

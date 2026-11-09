@@ -56,6 +56,8 @@ pub fn load_all(app: &mut App) {
         .insert(BlockDef::air());
     w.get_resource_or_init::<Registry<ItemDef>>();
     w.get_resource_or_init::<Registry<WorldGenDef>>();
+    w.get_resource_or_init::<Registry<StampDef>>();
+    w.get_resource_or_init::<Registry<FeatureDef>>();
     for (dir, meta) in &packs {
         info!("loading pack '{}' from {}", meta.name, dir.display());
         if meta.format > PACK_FORMAT {
@@ -67,6 +69,8 @@ pub fn load_all(app: &mut App) {
         merge::<BlockDef>(w, dir);
         merge::<ItemDef>(w, dir);
         merge::<WorldGenDef>(w, dir);
+        merge::<StampDef>(w, dir);
+        merge::<FeatureDef>(w, dir);
     }
     block_items(w);
     app.insert_resource(LoadedPacks(packs));

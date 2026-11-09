@@ -2,15 +2,15 @@
 // differs): a lit top, a mid left face, a dark right face. `hp` is seconds to break by hand.
 // A block gets an item that places it unless `item: false`.
 [
-    (id: "bedrock", name: "Bedrock", color: (52, 52, 60), breakable: false, item: false),
-    (id: "stone",   name: "Stone",   color: (128, 130, 138), hp: 1.6),
-    (id: "dirt",    name: "Dirt",    color: (124, 86, 52), hp: 0.5),
-    (id: "grass",   name: "Grass",   color: (124, 86, 52), top: Some((92, 168, 72)), hp: 0.6, drops: Some("dirt")),
-    (id: "sand",    name: "Sand",    color: (214, 196, 136), hp: 0.4),
-    (id: "snow",    name: "Snow",    color: (226, 232, 240), hp: 0.3),
-    (id: "water",   name: "Water",   color: (58, 118, 200), walkable: false, breakable: false, item: false),
-    (id: "log",     name: "Log",     color: (112, 76, 44), top: Some((176, 138, 86)), hp: 0.9),
-    (id: "leaves",  name: "Leaves",  color: (56, 128, 58), hp: 0.2),
-    (id: "planks",  name: "Planks",  color: (190, 146, 86), hp: 0.7),
-    (id: "brick",   name: "Brick",   color: (168, 74, 58), hp: 1.2),
+    (id: "bedrock",  name: "Bedrock",  color: (52, 52, 60), breakable: false, item: false),
+    (id: "stone",    name: "Stone",    color: (128, 130, 138), hp: 1.6),
+    (id: "dirt",     name: "Dirt",     color: (124, 86, 52), hp: 0.5),
+    (id: "grass",    name: "Grass",    color: (124, 86, 52), top: Some((92, 168, 72)), hp: 0.6, drops: Some("dirt")),
+    (id: "sand",     name: "Sand",     color: (214, 196, 136), hp: 0.4),
+    (id: "snow",     name: "Snow",     color: (226, 232, 240), hp: 0.3),
+    (id: "water",    name: "Water",    color: (58, 118, 200), walkable: false, breakable: false, item: false),
+    (id: "log",      name: "Log",      color: (112, 76, 44), top: Some((176, 138, 86)), hp: 0.9),
+    (id: "leaves",   name: "Leaves",   color: (56, 128, 58), hp: 0.2),
+    (id: "coal_ore", name: "Coal Ore", color: (74, 76, 84), hp: 1.8),
+    (id: "iron_ore", name: "Iron Ore", color: (168, 124, 104), hp: 2.2),
 ]
