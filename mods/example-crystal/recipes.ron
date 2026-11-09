@@ -1,4 +1,0 @@
-[
-    (id: "crystal_sword", inputs: [("crystal_shard", 3), ("iron_ingot", 1), ("stick", 1)], output: ("crystal_sword", 1), station: Some("workbench")),
-    (id: "crystal_lamp",  inputs: [("crystal_shard", 1), ("stone", 2)],                    output: ("crystal_lamp", 2),  station: Some("workbench")),
-]

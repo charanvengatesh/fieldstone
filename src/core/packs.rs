@@ -11,11 +11,10 @@ use super::registry::Registry;
 
 pub const PACK_ROOTS: [&str; 2] = ["assets/packs", "mods"];
 /// Highest pack format this build understands.
-pub const PACK_FORMAT: u32 = 1;
+pub const PACK_FORMAT: u32 = 2;
 
-/// Packs that were loaded, in order. Scripts are consumed by the scripting layer later.
+/// Packs that were loaded, in order.
 #[derive(Resource, Default, Debug)]
-#[allow(dead_code)] // read by the scripting layer (M3)
 pub struct LoadedPacks(pub Vec<(PathBuf, PackDef)>);
 
 /// Reads every pack directory and fills the registries. Runs before the app starts so
@@ -52,6 +51,11 @@ pub fn load_all(app: &mut App) {
     }
 
     let w = app.world_mut();
+    // Air is index 0 of the block registry, whatever the packs define.
+    w.get_resource_or_init::<Registry<BlockDef>>()
+        .insert(BlockDef::air());
+    w.get_resource_or_init::<Registry<ItemDef>>();
+    w.get_resource_or_init::<Registry<WorldGenDef>>();
     for (dir, meta) in &packs {
         info!("loading pack '{}' from {}", meta.name, dir.display());
         if meta.format > PACK_FORMAT {
@@ -60,27 +64,35 @@ pub fn load_all(app: &mut App) {
                 meta.name, meta.format, PACK_FORMAT
             );
         }
-        merge::<ColorDef>(w, dir);
-        merge::<ShapeDef>(w, dir);
-        merge::<SpriteDef>(w, dir);
-        merge::<TerrainDef>(w, dir);
-        merge::<ObjectDef>(w, dir);
+        merge::<BlockDef>(w, dir);
         merge::<ItemDef>(w, dir);
-        merge::<RecipeDef>(w, dir);
-        merge::<LootDef>(w, dir);
-        merge::<StructureDef>(w, dir);
         merge::<WorldGenDef>(w, dir);
-        merge::<CreatureDef>(w, dir);
-        merge::<FishTableDef>(w, dir);
-        merge::<HintDef>(w, dir);
     }
-    // The filler for multi-tile footprints: solid, unbreakable, never drawn.
-    let part: ObjectDef = ron::from_str(&format!(
-        r#"(id: "{PART_ID}", shape: "", solid: true, hp: 1.0e9, xp: 0.0)"#
-    ))
-    .expect("part def");
-    w.get_resource_or_init::<Registry<ObjectDef>>().insert(part);
+    block_items(w);
     app.insert_resource(LoadedPacks(packs));
+}
+
+/// Gives every block that asks for one an item that places it, unless a pack wrote its own.
+fn block_items(world: &mut World) {
+    let made: Vec<ItemDef> = {
+        let blocks = world.resource::<Registry<BlockDef>>();
+        let items = world.resource::<Registry<ItemDef>>();
+        blocks
+            .iter()
+            .filter(|(_, b)| b.item && items.get(&b.id).is_none())
+            .map(|(_, b)| ItemDef {
+                id: b.id.clone(),
+                name: b.label().to_owned(),
+                color: b.top.unwrap_or(b.color),
+                stack_max: 99,
+                places: Some(b.id.clone()),
+            })
+            .collect()
+    };
+    let mut items = world.resource_mut::<Registry<ItemDef>>();
+    for item in made {
+        items.insert(item);
+    }
 }
 
 fn merge<T: Def + std::fmt::Debug>(world: &mut World, dir: &Path) {

@@ -1,9 +1,7 @@
 //! Every content schema in one place. Packs (`assets/packs/*`, `mods/*`) are RON files
-//! holding `Vec<...>` of these; the engine never hardcodes a concrete item, tile, or recipe.
+//! holding `Vec<...>` of these; the engine never hardcodes a concrete block or item.
 
-use bevy::math::IVec2;
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde::Deserialize;
 
 /// Anything stored in a [`super::registry::Registry`]: has a unique string id within its kind.
 pub trait Def: serde::de::DeserializeOwned + Send + Sync + 'static {
@@ -22,7 +20,11 @@ macro_rules! def {
     };
 }
 
+/// sRGB bytes, written `(r, g, b)` in RON.
 pub type Rgb = [u8; 3];
+
+/// The id of the empty block. The engine registers it first, so its index is always 0.
+pub const AIR: &str = "air";
 
 /// `pack.ron`: pack metadata. Packs load in dependency order; later packs override earlier ids.
 #[derive(Deserialize, Default, Debug, Clone)]
@@ -36,475 +38,137 @@ pub struct PackDef {
     pub enabled: bool,
     #[serde(default)]
     pub depends: Vec<String>,
+    /// Lua files, relative to the pack folder.
     #[serde(default)]
-    #[allow(dead_code)] // consumed by the scripting layer (M3)
     pub scripts: Vec<String>,
 }
 
-/// `palette.ron`: named colors every other file refers to.
+/// `blocks.ron`: one kind of cube. Art is generated from `color`: a lit top, a mid left face
+/// and a dark right face.
 #[derive(Deserialize, Debug, Clone)]
-pub struct ColorDef {
+pub struct BlockDef {
     pub id: String,
-    pub rgb: Rgb,
-    /// Opacity 0..255; shadows and glass use this.
-    #[serde(default = "opaque")]
-    pub a: u8,
-}
-def!(ColorDef, "palette.ron");
-
-/// One primitive inside a shape. `color` is a palette id. Offsets are in cells (1.0 = one tile).
-#[derive(Deserialize, Debug, Clone)]
-pub enum Part {
-    Circle {
-        r: f32,
-        color: String,
-        #[serde(default)]
-        at: [f32; 2],
-    },
-    Rect {
-        w: f32,
-        h: f32,
-        color: String,
-        #[serde(default)]
-        at: [f32; 2],
-        #[serde(default)]
-        rot: f32,
-    },
-    Poly {
-        sides: u32,
-        r: f32,
-        color: String,
-        #[serde(default)]
-        at: [f32; 2],
-        #[serde(default)]
-        rot: f32,
-    },
-}
-
-/// `shapes.ron`: vector art recipes, drawn back to front.
-#[derive(Deserialize, Debug, Clone)]
-pub struct ShapeDef {
-    pub id: String,
-    pub parts: Vec<Part>,
-}
-def!(ShapeDef, "shapes.ron");
-
-/// `sprites.ron`: pixel art for a visual id (the same ids `shape` fields use). Without `image`
-/// the engine rasterizes the shape of that id at 16 px per cell; with `frames > 1` and
-/// `rotate`, it renders the shape at 0, 90, 180 and 270 degrees into a strip (player facing).
-#[derive(Deserialize, Debug, Clone)]
-pub struct SpriteDef {
-    pub id: String,
-    /// Pack-relative PNG, a horizontal strip of `frames` equal frames.
+    /// Shown in tooltips; the id when empty.
     #[serde(default)]
-    pub image: Option<String>,
-    #[serde(default = "one_u32")]
-    pub frames: u32,
-    /// Frames per second for looping animation; 0 means frames are picked by code (facing).
+    pub name: String,
+    pub color: Rgb,
+    /// Colour of the top face when it differs from the sides (grass over dirt).
     #[serde(default)]
-    pub fps: f32,
-    /// Generate `frames` by rotating the shape instead of loading an image.
-    #[serde(default)]
-    pub rotate: bool,
-    /// Pivot inside the frame, 0..1 from bottom-left; (0.5, 0.5) is centered.
-    #[serde(default = "center")]
-    pub anchor: [f32; 2],
-}
-def!(SpriteDef, "sprites.ron");
-
-fn center() -> [f32; 2] {
-    [0.5, 0.5]
-}
-
-/// `terrain.ron`: the ground layer of a tile.
-#[derive(Deserialize, Debug, Clone)]
-pub struct TerrainDef {
-    pub id: String,
-    pub color: String,
-    #[serde(default = "yes")]
-    pub walkable: bool,
-    /// Fish table id (`fish.ron`) if this is water you can fish in.
-    #[serde(default)]
-    pub fish_table: Option<String>,
-    /// Terrain this becomes when worked with a `hoe` tool.
-    #[serde(default)]
-    pub till: Option<String>,
-}
-def!(TerrainDef, "terrain.ron");
-
-/// `objects.ron`: anything standing on a tile: trees, rocks, ore, walls, workbenches, crops.
-#[derive(Deserialize, Debug, Clone)]
-pub struct ObjectDef {
-    pub id: String,
-    pub shape: String,
+    pub top: Option<Rgb>,
+    /// Blocks movement and can be stood on.
     #[serde(default = "yes")]
     pub solid: bool,
-    /// Half-size of the collision box in cells (0.5 fills the cell). Trees use a small trunk.
-    #[serde(default = "half")]
-    pub radius: f32,
-    /// Tool power needed to damage it at all. 0 means bare hands work.
-    #[serde(default)]
-    pub hardness: u8,
-    /// Tool tag that works on it (`"axe"`, `"pickaxe"`); `None` means anything.
-    #[serde(default)]
-    pub tool: Option<String>,
-    #[serde(default = "one")]
+    /// `false` for surfaces nothing may stand on or wade into (water, lava).
+    #[serde(default = "yes")]
+    pub walkable: bool,
+    /// Seconds of holding the break button.
+    #[serde(default = "onef")]
     pub hp: f32,
+    #[serde(default = "yes")]
+    pub breakable: bool,
+    /// Item id given when broken; the block's own item when absent.
     #[serde(default)]
     pub drops: Option<String>,
-    /// Crafting station tag this object provides when the player stands next to it.
-    #[serde(default)]
-    pub station: Option<String>,
-    /// Radius in cells within which hostile creatures will not spawn.
-    #[serde(default)]
-    pub light: Option<f32>,
-    /// Experience granted to the breaker.
-    #[serde(default = "onef")]
-    pub xp: f32,
-    /// Terrain ids this may be placed on; `None` allows any walkable terrain.
-    #[serde(default)]
-    pub on: Option<Vec<String>>,
-    /// Crops: `(next object id, seconds)`. Growth doubles next to water.
-    #[serde(default)]
-    pub grows_into: Option<(String, f32)>,
-    /// Container slots; 0 means not a container.
-    #[serde(default)]
-    pub storage: u32,
-    /// Using it (F / right click) swaps it for this object: doors, shrine stages.
-    #[serde(default)]
-    pub use_swaps: Option<String>,
-    /// The swap needs this item held, and eats one.
-    #[serde(default)]
-    pub use_consumes: Option<String>,
-    /// Using it sets the respawn point and, at night, sleeps until dawn.
-    #[serde(default)]
-    pub bed: bool,
-    /// Visual offset from the cell center, in cells, picked per cell. Natural things wander;
-    /// built things stay aligned.
-    #[serde(default)]
-    pub jitter: f32,
-    /// Footprint in cells; the anchor cell is the bottom-left. Other cells hold `__part`.
-    #[serde(default = "one_by_one")]
-    pub size: [u32; 2],
-    /// Group tag; objects in the same group join visually (walls, fences): 16 frames by mask.
-    #[serde(default)]
-    pub connects: Option<String>,
-    /// Low enough for arrows to pass (fences).
-    #[serde(default)]
-    pub low: bool,
+    /// Whether an item that places this block is generated automatically.
+    #[serde(default = "yes")]
+    pub item: bool,
 }
+def!(BlockDef, "blocks.ron");
 
-/// Engine-owned object id that fills the extra cells of a multi-tile object.
-pub const PART_ID: &str = "__part";
+impl BlockDef {
+    pub fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
+    }
 
-fn one_by_one() -> [u32; 2] {
-    [1, 1]
-}
-
-impl ObjectDef {
-    /// Whether F / right click on this object does something itself (instead of placing).
-    pub fn interactive(&self) -> bool {
-        self.storage > 0 || self.use_swaps.is_some() || self.bed
-    }
-    /// Set dressing: walkable, worthless, gone in a tap. Never a click target, never in the
-    /// way of building, and a swing goes to the creature standing on it.
-    pub fn decor(&self) -> bool {
-        !self.solid && self.drops.is_none() && self.hp <= 0.5 && self.id != PART_ID
-    }
-    pub fn is_part(&self) -> bool {
-        self.id == PART_ID
-    }
-    pub fn footprint(&self) -> IVec2 {
-        IVec2::new(self.size[0].max(1) as i32, self.size[1].max(1) as i32)
+    pub fn air() -> Self {
+        Self {
+            id: AIR.into(),
+            name: "Air".into(),
+            color: [0, 0, 0],
+            top: None,
+            solid: false,
+            walkable: true,
+            hp: 0.0,
+            breakable: false,
+            drops: None,
+            item: false,
+        }
     }
 }
-def!(ObjectDef, "objects.ron");
 
-#[derive(Deserialize, Serialize, Debug, Clone, Default, PartialEq)]
-pub enum Use {
-    #[default]
-    None,
-    /// Places the named object on an empty tile.
-    Place(String),
-    Tool {
-        tag: String,
-        power: u8,
-    },
-    /// Melee by default; with `projectile` (a shape id) it fires one toward the cursor instead.
-    Weapon {
-        damage: f32,
-        range: f32,
-        cooldown: f32,
-        #[serde(default)]
-        projectile: Option<String>,
-    },
-    Eat {
-        #[serde(default)]
-        hp: f32,
-        #[serde(default)]
-        stamina: f32,
-        #[serde(default)]
-        food: f32,
-    },
-    Seed(String),
-    Rod {
-        power: u8,
-    },
-}
-
-/// `items.ron`
+/// `items.ron`: things that are not blocks. Every block with `item: true` gets a record here
+/// automatically, so most packs never write this file.
 #[derive(Deserialize, Debug, Clone)]
 pub struct ItemDef {
     pub id: String,
+    #[serde(default)]
     pub name: String,
-    pub shape: String,
+    #[serde(default = "grey")]
+    pub color: Rgb,
     #[serde(default = "stack")]
     pub stack_max: u32,
+    /// Block id placed when used on a face.
     #[serde(default)]
-    #[allow(dead_code)] // recipe and script filters (M2+)
-    pub tags: Vec<String>,
-    #[serde(default, rename = "use")]
-    pub usage: Use,
+    pub places: Option<String>,
 }
 def!(ItemDef, "items.ron");
 
-/// `recipes.ron`
+impl ItemDef {
+    pub fn label(&self) -> &str {
+        if self.name.is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
+    }
+}
+
+/// The terrain height field: fractal value noise mapped onto `low..=high`.
+#[derive(Deserialize, Debug, Clone, Copy)]
+pub struct HeightDef {
+    /// Cells per noise cell at the lowest octave; larger is gentler.
+    pub scale: f64,
+    pub octaves: u32,
+    pub low: i32,
+    pub high: i32,
+}
+
+/// One surface band: columns whose top is at or below `max` get `surface` on top and
+/// `under` beneath it.
 #[derive(Deserialize, Debug, Clone)]
-pub struct RecipeDef {
-    pub id: String,
-    pub inputs: Vec<(String, u32)>,
-    pub output: (String, u32),
-    /// Station tag required nearby, if any.
-    #[serde(default)]
-    pub station: Option<String>,
-}
-def!(RecipeDef, "recipes.ron");
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct LootEntry {
-    pub item: String,
-    #[serde(default = "one_u32")]
-    pub min: u32,
-    #[serde(default = "one_u32")]
-    pub max: u32,
-    #[serde(default = "onef")]
-    pub chance: f32,
+pub struct BandDef {
+    pub max: i32,
+    pub surface: String,
+    pub under: String,
 }
 
-/// `loot.ron`
-#[derive(Deserialize, Debug, Clone)]
-pub struct LootDef {
-    pub id: String,
-    pub entries: Vec<LootEntry>,
-}
-def!(LootDef, "loot.ron");
-
-/// One rule for sprinkling objects over generated terrain.
-#[derive(Deserialize, Debug, Clone)]
-pub struct Scatter {
-    /// Object to place. Empty when the rule stamps a `structure` instead.
-    #[serde(default)]
-    pub object: String,
-    /// A `structures.ron` id stamped with its bottom-left corner on the cell. The whole
-    /// footprint must be walkable, flat and free of water.
-    #[serde(default)]
-    pub structure: Option<String>,
-    /// Terrain ids this may appear on.
-    pub on: Vec<String>,
-    /// Probability per eligible tile, 0..1.
-    pub density: f32,
-    /// Optional low-frequency noise gate `(scale, threshold)`: only where noise > threshold.
-    #[serde(default)]
-    pub noise: Option<(f64, f64)>,
-    /// Only where one of these terrains touches the cell (8 neighbors): shoreline foam, reeds.
-    #[serde(default)]
-    pub near: Option<Vec<String>>,
-}
-
-/// One legend entry of a structure stamp.
-#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
-pub enum Stamp {
-    /// Place this object (its footprint anchor on the cell), keep the terrain.
-    Object(String),
-    /// Paint this terrain, remove whatever the generator scattered there.
-    Terrain(String),
-    /// Keep the terrain, remove scatter: the clear ground of a camp or yard.
-    Clear,
-}
-
-/// `structures.ron`: a hand-drawn stamp. `rows` are listed north to south and must all be
-/// the same width; every character must appear in `legend` except a space, which leaves the
-/// generated cell alone. `loot` fills any storage object in the stamp when the chunk is
-/// first generated.
-#[derive(Deserialize, Debug, Clone)]
-pub struct StructureDef {
-    pub id: String,
-    pub rows: Vec<String>,
-    pub legend: HashMap<char, Stamp>,
-    #[serde(default)]
-    pub loot: Option<String>,
-}
-def!(StructureDef, "structures.ron");
-
-/// `worldgen.ron`: a single record describing how terrain is generated from two noise fields
-/// (height and moisture, both in -1..1).
+/// `worldgen.ron`: a single record describing the terrain. Features (trees, ore) live in
+/// `features.ron` so mods add to the world without replacing this.
 #[derive(Deserialize, Debug, Clone)]
 pub struct WorldGenDef {
     pub id: String,
-    pub height_scale: f64,
-    pub moisture_scale: f64,
-    /// Height bands, lowest first: `(upper_bound, terrain)`. The last band catches everything above.
-    pub bands: Vec<(f64, String)>,
-    /// Terrain swapped in where moisture > threshold: `(from, to, threshold)`.
-    #[serde(default)]
-    pub wet: Vec<(String, String, f64)>,
-    #[serde(default)]
-    pub scatter: Vec<Scatter>,
-    /// Scale of the relief noise that terraces land into heights 0..3 (0 disables relief).
-    #[serde(default = "relief_scale")]
-    pub relief_scale: f64,
-    /// Chance that a cliff foot gets a natural ramp.
-    #[serde(default = "ramp_chance")]
-    pub ramps: f32,
+    pub height: HeightDef,
+    /// Columns lower than this are flooded with `sea_block` up to it.
+    pub sea: i32,
+    pub sea_block: String,
+    /// Bands by surface height, lowest first; the last one catches everything above.
+    pub bands: Vec<BandDef>,
+    /// How many `under` blocks sit below the surface before `base` starts.
+    #[serde(default = "three")]
+    pub under_depth: i32,
+    /// Fills the rest of the column.
+    pub base: String,
+    /// The unbreakable bottom layer at z 0.
+    pub floor: String,
 }
 def!(WorldGenDef, "worldgen.ron");
 
-fn relief_scale() -> f64 {
-    64.0
-}
-fn ramp_chance() -> f32 {
-    0.35
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct FishEntry {
-    pub item: String,
-    #[serde(default = "onef")]
-    pub weight: f32,
-    #[serde(default)]
-    pub min_rod_power: u8,
-    #[serde(default = "any")]
-    pub time: TimeOfDay,
-}
-
-/// `fish.ron`: what bites in a body of water, keyed by `TerrainDef::fish_table`.
-#[derive(Deserialize, Debug, Clone)]
-pub struct FishTableDef {
-    pub id: String,
-    pub entries: Vec<FishEntry>,
-}
-def!(FishTableDef, "fish.ron");
-
-#[derive(Deserialize, Debug, Clone, Copy)]
-pub struct StatsDef {
-    pub hp: f32,
-    #[serde(default)]
-    pub stamina: f32,
-    #[serde(default)]
-    pub attack: f32,
-    #[serde(default)]
-    pub defense: f32,
-    /// World units per second.
-    pub speed: f32,
-}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq)]
-pub enum Behavior {
-    /// Wanders; never attacks.
-    Passive,
-    /// Wanders; runs from the player when hurt or approached within `flee` cells.
-    Skittish { flee: f32 },
-    /// Wanders until the player is within `aggro` cells, then chases and bites.
-    Hostile { aggro: f32 },
-}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TimeOfDay {
-    Day,
-    Night,
-    Any,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct SpawnDef {
-    /// Terrain ids this creature may appear on.
-    pub on: Vec<String>,
-    #[serde(default = "any")]
-    pub time: TimeOfDay,
-    /// Relative weight among candidates for a cell.
-    #[serde(default = "onef")]
-    pub weight: f32,
-}
-
-/// `creatures.ron`: the player and every mob. The player is the record with id `player`.
-#[derive(Deserialize, Debug, Clone)]
-pub struct CreatureDef {
-    pub id: String,
-    pub shape: String,
-    pub stats: StatsDef,
-    #[serde(default = "passive")]
-    pub ai: Behavior,
-    #[serde(default)]
-    pub drops: Option<String>,
-    #[serde(default)]
-    pub xp: f32,
-    /// Absent for creatures that never spawn naturally (the player, bosses placed by scripts).
-    #[serde(default)]
-    pub spawn: Option<SpawnDef>,
-    /// Collision half-size in cells.
-    #[serde(default = "creature_radius")]
-    pub radius: f32,
-}
-
-fn creature_radius() -> f32 {
-    0.26
-}
-def!(CreatureDef, "creatures.ron");
-
-#[derive(Deserialize, Debug, Clone)]
-pub enum HintWhen {
-    /// Seconds since the game started.
-    After(f32),
-    HasItem(String),
-    Placed(String),
-    Night,
-    Day(u32),
-    Level(u32),
-    /// Player stands inside an enclosure.
-    Indoors,
-}
-
-/// `hints.ron`: one-shot guidance lines shown top-center when their trigger first holds.
-#[derive(Deserialize, Debug, Clone)]
-pub struct HintDef {
-    pub id: String,
-    pub when: HintWhen,
-    pub text: String,
-    #[serde(default = "six")]
-    pub secs: f32,
-}
-def!(HintDef, "hints.ron");
-
-fn six() -> f32 {
-    6.0
-}
-fn any() -> TimeOfDay {
-    TimeOfDay::Any
-}
-fn passive() -> Behavior {
-    Behavior::Passive
-}
-fn opaque() -> u8 {
-    255
-}
-fn half() -> f32 {
-    0.5
-}
 fn yes() -> bool {
     true
-}
-fn one() -> f32 {
-    1.0
 }
 fn onef() -> f32 {
     1.0
@@ -512,6 +176,12 @@ fn onef() -> f32 {
 fn one_u32() -> u32 {
     1
 }
+fn three() -> i32 {
+    3
+}
 fn stack() -> u32 {
     99
+}
+fn grey() -> Rgb {
+    [160, 160, 160]
 }

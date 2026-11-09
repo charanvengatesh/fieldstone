@@ -1,5 +1,6 @@
-//! `settings.ron` next to the executable: key bindings, default zoom, volume. Written with
-//! defaults on first run so players can see what to edit.
+//! `settings.ron` next to the executable: key bindings and zoom. Written with defaults on
+//! first run so players can see what to edit. Missing fields take their defaults, so files
+//! from older versions keep working.
 
 use std::fs;
 
@@ -7,78 +8,60 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 #[derive(Resource, Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
 pub struct Settings {
-    /// Vector mode camera scale (world units per screen pixel).
-    pub zoom: f32,
-    /// Pixel mode: screen pixels per texel, 1..=6.
-    #[serde(default = "three")]
+    /// Screen pixels per texel, 1..=6.
     pub pixel_scale: u32,
-    #[serde(default)]
-    pub render: RenderMode,
-    /// 0.0 .. 1.0
-    pub volume: f32,
     pub keys: BindingNames,
-}
-
-/// `Pixel` draws sprites and tile sheets at a whole-number scale; `Vector` is the original
-/// shape renderer, kept through 0.6 for comparison and for packs without art.
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum RenderMode {
-    #[default]
-    Pixel,
-    Vector,
-}
-
-fn three() -> u32 {
-    3
 }
 
 /// Key names as written in the file; parsed into [`Keys`] at startup.
 #[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(default)]
 pub struct BindingNames {
     pub up: Vec<String>,
     pub down: Vec<String>,
     pub left: Vec<String>,
     pub right: Vec<String>,
-    pub sprint: Vec<String>,
-    pub use_item: Vec<String>,
     pub inventory: Vec<String>,
-    pub craft: Vec<String>,
     pub save: Vec<String>,
     pub debug: Vec<String>,
     pub pause: Vec<String>,
     pub zoom_in: Vec<String>,
     pub zoom_out: Vec<String>,
     pub hotbar: Vec<String>,
-    #[serde(default = "default_drop")]
-    pub drop: Vec<String>,
+    pub rotate_left: Vec<String>,
+    pub rotate_right: Vec<String>,
+    pub grid: Vec<String>,
+}
+
+impl Default for BindingNames {
+    fn default() -> Self {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
+        Self {
+            up: v(&["W", "Up"]),
+            down: v(&["S", "Down"]),
+            left: v(&["A", "Left"]),
+            right: v(&["D", "Right"]),
+            inventory: v(&["Tab", "I"]),
+            save: v(&["F5"]),
+            debug: v(&["F3"]),
+            pause: v(&["Escape"]),
+            zoom_in: v(&["Equal"]),
+            zoom_out: v(&["Minus"]),
+            hotbar: v(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]),
+            rotate_left: v(&["Q"]),
+            rotate_right: v(&["E"]),
+            grid: v(&["G"]),
+        }
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect();
         Self {
-            zoom: 0.6,
             pixel_scale: 3,
-            render: RenderMode::Pixel,
-            volume: 0.8,
-            keys: BindingNames {
-                up: v(&["W", "Up"]),
-                down: v(&["S", "Down"]),
-                left: v(&["A", "Left"]),
-                right: v(&["D", "Right"]),
-                sprint: v(&["ShiftLeft", "ShiftRight"]),
-                use_item: v(&["F"]),
-                inventory: v(&["E"]),
-                craft: v(&["C"]),
-                save: v(&["F5"]),
-                debug: v(&["F3"]),
-                pause: v(&["Escape"]),
-                zoom_in: v(&["Equal"]),
-                zoom_out: v(&["Minus"]),
-                hotbar: v(&["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]),
-                drop: v(&["Q"]),
-            },
+            keys: BindingNames::default(),
         }
     }
 }
@@ -90,17 +73,16 @@ pub struct Keys {
     pub down: Vec<KeyCode>,
     pub left: Vec<KeyCode>,
     pub right: Vec<KeyCode>,
-    pub sprint: Vec<KeyCode>,
-    pub use_item: Vec<KeyCode>,
     pub inventory: Vec<KeyCode>,
-    pub craft: Vec<KeyCode>,
     pub save: Vec<KeyCode>,
     pub debug: Vec<KeyCode>,
     pub pause: Vec<KeyCode>,
     pub zoom_in: Vec<KeyCode>,
     pub zoom_out: Vec<KeyCode>,
     pub hotbar: Vec<KeyCode>,
-    pub drop: Vec<KeyCode>,
+    pub rotate_left: Vec<KeyCode>,
+    pub rotate_right: Vec<KeyCode>,
+    pub grid: Vec<KeyCode>,
 }
 
 impl Keys {
@@ -111,17 +93,16 @@ impl Keys {
             down: p(&n.down),
             left: p(&n.left),
             right: p(&n.right),
-            sprint: p(&n.sprint),
-            use_item: p(&n.use_item),
             inventory: p(&n.inventory),
-            craft: p(&n.craft),
             save: p(&n.save),
             debug: p(&n.debug),
             pause: p(&n.pause),
             zoom_in: p(&n.zoom_in),
             zoom_out: p(&n.zoom_out),
             hotbar: p(&n.hotbar),
-            drop: p(&n.drop),
+            rotate_left: p(&n.rotate_left),
+            rotate_right: p(&n.rotate_right),
+            grid: p(&n.grid),
         }
     }
     pub fn pressed(&self, input: &ButtonInput<KeyCode>, keys: &[KeyCode]) -> bool {
@@ -134,10 +115,6 @@ impl Keys {
 
 /// Accepts single letters, digits, and the common named keys. Unknown names are ignored with
 /// a warning so a typo never locks the player out.
-fn default_drop() -> Vec<String> {
-    vec!["Q".to_string()]
-}
-
 pub fn parse_key(name: &str) -> Option<KeyCode> {
     use KeyCode::*;
     let k = match name {
@@ -254,7 +231,17 @@ mod tests {
     fn default_bindings_parse() {
         let k = Keys::from_names(&Settings::default().keys);
         assert_eq!(k.up, vec![KeyCode::KeyW, KeyCode::ArrowUp]);
+        assert_eq!(k.rotate_left, vec![KeyCode::KeyQ]);
         assert_eq!(k.hotbar.len(), 10);
         assert_eq!(parse_key("nope"), None);
+    }
+
+    #[test]
+    fn old_files_fill_missing_fields() {
+        let s: Settings =
+            ron::from_str("(pixel_scale: 2, volume: 0.5, keys: (up: [\"I\"]))").unwrap();
+        assert_eq!(s.pixel_scale, 2);
+        assert_eq!(s.keys.up, vec!["I".to_string()]);
+        assert_eq!(s.keys.down, Settings::default().keys.down);
     }
 }

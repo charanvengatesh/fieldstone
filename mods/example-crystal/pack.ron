@@ -1,5 +1,0 @@
-(
-    name: "example-crystal",
-    depends: ["base"],
-    scripts: ["scripts/crystal.lua"],
-)

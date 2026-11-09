@@ -67,5 +67,5 @@ pub fn settings_file() -> PathBuf {
 }
 
 pub fn save_file() -> PathBuf {
-    user_dir().join("saves").join("world.ron")
+    user_dir().join("saves").join("iso.ron")
 }

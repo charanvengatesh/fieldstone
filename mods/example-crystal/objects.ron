@@ -1,4 +1,0 @@
-[
-    (id: "crystal_ore",  shape: "crystal_ore",  hp: 6.0, drops: Some("crystal_ore"), tool: Some("pickaxe"), hardness: 2, xp: 4.0),
-    (id: "crystal_lamp", shape: "crystal_lamp", hp: 1.0, drops: Some("crystal_lamp"), solid: false, light: Some(10.0), xp: 0.0),
-]

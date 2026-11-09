@@ -62,29 +62,21 @@ impl<T: Def> Registry<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::defs::ColorDef;
+    use crate::core::defs::ItemDef;
+
+    fn item(id: &str, stack_max: u32) -> ItemDef {
+        ron::from_str(&format!(r#"(id: "{id}", stack_max: {stack_max})"#)).unwrap()
+    }
 
     #[test]
     fn override_keeps_index() {
-        let mut r = Registry::<ColorDef>::default();
-        let a = r.insert(ColorDef {
-            id: "a".into(),
-            rgb: [1, 1, 1],
-            a: 255,
-        });
-        r.insert(ColorDef {
-            id: "b".into(),
-            rgb: [2, 2, 2],
-            a: 255,
-        });
-        let a2 = r.insert(ColorDef {
-            id: "a".into(),
-            rgb: [9, 9, 9],
-            a: 255,
-        });
+        let mut r = Registry::<ItemDef>::default();
+        let a = r.insert(item("a", 1));
+        r.insert(item("b", 2));
+        let a2 = r.insert(item("a", 9));
         assert_eq!(a, a2);
         assert_eq!(r.len(), 2);
-        assert_eq!(r.get("a").unwrap().rgb, [9, 9, 9]);
+        assert_eq!(r.get("a").unwrap().stack_max, 9);
         assert_eq!(r.id_of(1), "b");
     }
 }

@@ -1,4 +1,0 @@
-[
-    (id: "crystal_ore",  entries: [ (item: "crystal_shard", min: 1, max: 2), (item: "stone", chance: 0.5) ]),
-    (id: "crystal_lamp", entries: [ (item: "crystal_lamp") ]),
-]

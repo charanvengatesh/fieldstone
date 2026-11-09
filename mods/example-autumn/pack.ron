@@ -1,7 +1,0 @@
-(
-    name: "example-autumn",
-    format: 1,
-    enabled: false, // flip to true to see the recolor
-    depends: ["base"],
-    scripts: [],
-)

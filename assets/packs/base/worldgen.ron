@@ -1,45 +1,17 @@
-// How terrain is generated. Height and moisture are fractal noise in roughly -1..1.
-// `bands` pick terrain by height (lowest first; the last catches everything else).
-// `wet` swaps terrain where moisture exceeds a threshold. `scatter` sprinkles objects;
-// an optional `noise: (scale, threshold)` gate clusters them into veins and groves. A rule
-// with `structure:` instead of `object:` stamps a structures.ron grid.
+// The terrain: a height field in `low..=high`, flooded below `sea`, with a surface block
+// chosen by height. Trees, ore and other additions are separate records in features.ron.
 [(
     id: "default",
-    height_scale: 90.0,
-    moisture_scale: 140.0,
+    height: (scale: 72.0, octaves: 4, low: 4, high: 22),
+    sea: 9,
+    sea_block: "water",
     bands: [
-        (-0.38, "deep_water"),
-        (-0.22, "water"),
-        (-0.12, "sand"),
-        (0.30, "grass"),
-        (2.0, "rock"),
+        (max: 10, surface: "sand",  under: "sand"),
+        (max: 17, surface: "grass", under: "dirt"),
+        (max: 20, surface: "stone", under: "stone"),
+        (max: 99, surface: "snow",  under: "stone"),
     ],
-    wet: [
-        ("grass", "forest", 0.12),
-        ("grass", "meadow", -0.25),
-    ],
-    scatter: [
-        (object: "oak",      on: ["forest"],          density: 0.03),
-        (object: "tree",     on: ["forest"],          density: 0.26),
-        (object: "tree",     on: ["grass"],           density: 0.03),
-        (object: "bush",     on: ["grass", "meadow"], density: 0.03),
-        (object: "rock",     on: ["grass", "meadow"], density: 0.015),
-        (object: "rock",     on: ["rock"],            density: 0.10),
-        (object: "iron_ore", on: ["rock"],            density: 0.14, noise: Some((30.0, 0.15))),
-        (object: "coal_ore", on: ["rock"],            density: 0.14, noise: Some((30.0, 0.15))),
-        (object: "gold_ore", on: ["rock"],            density: 0.06, noise: Some((45.0, 0.30))),
-        (object: "grass_tuft",   on: ["grass", "meadow"], density: 0.12),
-        (object: "flower_white", on: ["meadow"],          density: 0.05),
-        (object: "flower_red",   on: ["meadow", "grass"], density: 0.02),
-        (object: "mushroom",     on: ["forest"],          density: 0.04),
-        (object: "pebbles",      on: ["sand", "rock"],    density: 0.05),
-        (object: "shell_deco",   on: ["sand"],            density: 0.03),
-        (object: "foam",         on: ["sand"],            density: 0.55, near: Some(["water", "deep_water"])),
-        (object: "reeds",        on: ["sand"],            density: 0.18, near: Some(["water"])),
-        (object: "lily",         on: ["water"],           density: 0.06, near: Some(["sand"])),
-        (object: "ripple",       on: ["water"],           density: 0.03),
-        (object: "rock_wet",     on: ["water"],           density: 0.012, near: Some(["sand"])),
-        // Structures: a 3x3 stamp from structures.ron, anchored bottom-left, only on flat land.
-        (structure: Some("campsite"), on: ["meadow"], density: 0.003),
-    ],
+    under_depth: 3,
+    base: "stone",
+    floor: "bedrock",
 )]

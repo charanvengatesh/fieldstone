@@ -106,18 +106,11 @@ impl Inventory {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{ItemDef, Use};
+    use crate::core::ItemDef;
 
     fn items() -> Registry<ItemDef> {
         let mut r = Registry::default();
-        r.insert(ItemDef {
-            id: "log".into(),
-            name: "Log".into(),
-            shape: "log".into(),
-            stack_max: 5,
-            tags: vec![],
-            usage: Use::None,
-        });
+        r.insert(ron::from_str::<ItemDef>(r#"(id: "log", stack_max: 5)"#).unwrap());
         r
     }
 
@@ -219,18 +212,11 @@ pub fn sort_slots(slots: &mut [Option<Stack>], items: &Registry<ItemDef>) {
 #[cfg(test)]
 mod transfer_tests {
     use super::*;
-    use crate::core::{ItemDef, Use};
+    use crate::core::ItemDef;
 
     fn reg() -> Registry<ItemDef> {
         let mut r = Registry::default();
-        r.insert(ItemDef {
-            id: "log".into(),
-            name: "Log".into(),
-            shape: "log".into(),
-            stack_max: 10,
-            tags: vec![],
-            usage: Use::None,
-        });
+        r.insert(ron::from_str::<ItemDef>(r#"(id: "log", stack_max: 10)"#).unwrap());
         r
     }
 

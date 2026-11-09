@@ -1,8 +1,0 @@
-// Pixel art per visual id. Anything not listed is rasterized from its shape at 16 px per cell.
-// Drop a PNG next to this file and point `image` at it to replace the generated art.
-[
-    (id: "player", frames: 4, rotate: true),
-    (id: "wolf", frames: 4, rotate: true),
-    (id: "boar", frames: 4, rotate: true),
-    (id: "deer", frames: 4, rotate: true),
-]

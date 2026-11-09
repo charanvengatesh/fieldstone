@@ -1,5 +1,0 @@
-[
-    (id: "crystal_shard", name: "Crystal Shard", shape: "crystal_shard"),
-    (id: "crystal_sword", name: "Crystal Sword", shape: "crystal_sword", stack_max: 1, use: Weapon(damage: 11.0, range: 2.2, cooldown: 0.35)),
-    (id: "crystal_lamp",  name: "Crystal Lamp",  shape: "crystal_lamp",  use: Place("crystal_lamp")),
-]
