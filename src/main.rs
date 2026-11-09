@@ -8,6 +8,8 @@ mod camera;
 mod core;
 mod debug;
 mod inventory;
+mod player;
+mod smoke;
 mod world;
 
 use bevy::prelude::*;
@@ -98,14 +100,14 @@ fn main() {
     app.insert_resource(core::settings::Keys::from_names(&settings.keys))
         .insert_resource(settings)
         .insert_resource(ClearColor(Color::srgb_u8(24, 28, 40)))
-        .add_plugins((core::CorePlugin, world::WorldPlugin))
+        .add_plugins((core::CorePlugin, world::WorldPlugin, player::PlayerPlugin))
         .insert_resource(world::iso::View {
             rot: options.rot % 4,
         })
         .insert_resource(world::mesh::Grid(options.grid));
     if options.headless {
-        app.insert_resource(Snapshot(options.snapshot.clone(), options.scale))
-            .add_systems(Update, smoke);
+        app.insert_resource(smoke::Smoke::new(options.snapshot.clone(), options.scale))
+            .add_systems(Update, smoke::drive.before(player::PlayerSet));
     } else {
         app.add_plugins((camera::CameraPlugin, debug::DebugPlugin));
     }
@@ -135,55 +137,4 @@ fn setup_world(app: &mut App, options: &Options) {
     info!("world seed {seed}, spawn {spawn}");
     world.insert_resource(wg);
     world.insert_resource(world::Focus(spawn));
-}
-
-#[derive(Resource)]
-struct Snapshot(Option<String>, f32);
-
-/// `--headless-smoke`: lets the world stream in, checks it, and exits non-zero on failure.
-/// With `--snapshot` it also draws what the camera would see.
-fn smoke(
-    map: Res<world::Map>,
-    focus: Res<world::Focus>,
-    view: Res<world::iso::View>,
-    grid: Res<world::mesh::Grid>,
-    wg: Res<world::worldgen::WorldGen>,
-    palette: Option<Res<world::mesh::Palette>>,
-    snapshot: Res<Snapshot>,
-    mut frames: Local<u32>,
-    mut exit: MessageWriter<AppExit>,
-) {
-    *frames += 1;
-    if *frames < 120 {
-        return;
-    }
-    let meshed = map.chunks.values().filter(|c| !c.dirty).count();
-    if map.chunks.len() != 81 || meshed != 81 || map.entities.len() != 81 {
-        error!(
-            "smoke test FAILED: {} chunks, {meshed} meshed, {} drawn",
-            map.chunks.len(),
-            map.entities.len()
-        );
-        exit.write(AppExit::error());
-        return;
-    }
-    if let (Some(name), Some(palette)) = (&snapshot.0, palette) {
-        let texture = world::mesh::edge_texture();
-        let center = view.project(focus.0).truncate();
-        let mut canvas =
-            debug::Canvas::new(1280, 800, snapshot.1, center, Color::srgb_u8(24, 28, 40));
-        for pos in map.chunks.keys() {
-            let faces = world::mesh::chunk_faces(*pos, *view, grid.0, &palette, |p| {
-                map.get(p).unwrap_or_else(|| wg.block(p))
-            });
-            let at = view.project((*pos * world::CHUNK).extend(0).as_vec3());
-            canvas.draw(at, &faces, &texture);
-        }
-        match canvas.save(name) {
-            Ok(path) => info!("snapshot {}", path.display()),
-            Err(e) => error!("snapshot: {e}"),
-        }
-    }
-    info!("smoke test ran 120 frames: 81 chunks loaded and meshed");
-    exit.write(AppExit::Success);
 }

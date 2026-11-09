@@ -4,6 +4,7 @@
 pub mod iso;
 pub mod mesh;
 pub mod noise;
+pub mod physics;
 pub mod stream;
 pub mod worldgen;
 
