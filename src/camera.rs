@@ -14,6 +14,10 @@ use crate::world::mesh::Grid;
 #[derive(Component)]
 pub struct MainCamera;
 
+/// The second camera, which draws the overlay layer over the world.
+#[derive(Component)]
+pub struct Overlay;
+
 pub fn setup(settings: Res<Settings>, mut commands: Commands) {
     let projection = || {
         Projection::Orthographic(OrthographicProjection {
@@ -26,6 +30,7 @@ pub fn setup(settings: Res<Settings>, mut commands: Commands) {
     commands.spawn((
         Camera2d,
         MainCamera,
+        Overlay,
         projection(),
         Camera {
             order: 1,

@@ -217,7 +217,7 @@ pub fn chunk_faces(
 
 /// The four corners of the face of block `p` with outward `normal`, ordered so that edge
 /// `i` runs from corner `i` to corner `i + 1`.
-fn corners(p: IVec3, normal: IVec3) -> [Vec3; 4] {
+pub fn corners(p: IVec3, normal: IVec3) -> [Vec3; 4] {
     let base = p.as_vec3();
     if normal == IVec3::Z {
         return [

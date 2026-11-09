@@ -47,6 +47,13 @@ impl Toast {
     }
 }
 
+/// Set by the pause menu and the save key: write the save now, and optionally exit after.
+#[derive(Resource, Default)]
+pub struct SaveRequest {
+    pub save: bool,
+    pub quit: bool,
+}
+
 pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
@@ -54,6 +61,7 @@ impl Plugin for CorePlugin {
         app.init_resource::<Paused>()
             .init_resource::<UiHovered>()
             .init_resource::<Toast>()
+            .init_resource::<SaveRequest>()
             .add_systems(Update, toast_tick);
     }
 }

@@ -7,9 +7,11 @@
 mod camera;
 mod core;
 mod debug;
+mod interact;
 mod inventory;
 mod player;
 mod smoke;
+mod ui;
 mod world;
 
 use bevy::prelude::*;
@@ -100,7 +102,12 @@ fn main() {
     app.insert_resource(core::settings::Keys::from_names(&settings.keys))
         .insert_resource(settings)
         .insert_resource(ClearColor(Color::srgb_u8(24, 28, 40)))
-        .add_plugins((core::CorePlugin, world::WorldPlugin, player::PlayerPlugin))
+        .add_plugins((
+            core::CorePlugin,
+            world::WorldPlugin,
+            player::PlayerPlugin,
+            interact::InteractPlugin,
+        ))
         .insert_resource(world::iso::View {
             rot: options.rot % 4,
         })
@@ -109,7 +116,15 @@ fn main() {
         app.insert_resource(smoke::Smoke::new(options.snapshot.clone(), options.scale))
             .add_systems(Update, smoke::drive.before(player::PlayerSet));
     } else {
-        app.add_plugins((camera::CameraPlugin, debug::DebugPlugin));
+        app.add_plugins((camera::CameraPlugin, debug::DebugPlugin, ui::UiPlugin))
+            .add_systems(Startup, interact::spawn_highlight)
+            .add_systems(
+                Update,
+                (
+                    interact::track_cursor.before(interact::InteractSet),
+                    interact::show_highlight.after(interact::InteractSet),
+                ),
+            );
     }
     app.run();
 }
