@@ -12,6 +12,9 @@
     (id: "wall_stone", shape: "wall_stone", hp: 4.0, drops: Some("wall_stone"), tool: Some("pickaxe")),
     (id: "workbench",  shape: "workbench",  hp: 2.0, drops: Some("workbench"), station: Some("workbench"), radius: 0.45),
     (id: "torch",      shape: "torch",      hp: 0.5, drops: Some("torch"), solid: false, light: Some(6.0), xp: 0.0),
+    // Ramps let you climb a terrace; natural ones are placed at cliff feet by the generator.
+    (id: "ramp",         shape: "ramp",         hp: 0.4, solid: false, xp: 0.0),
+
     // Decor: walkable, breaks instantly, no drops. Scattered by worldgen for texture.
     (id: "grass_tuft",   shape: "grass_tuft",   hp: 0.1, solid: false, xp: 0.0, jitter: 0.35),
     (id: "flower_white", shape: "flower_white", hp: 0.1, solid: false, xp: 0.0, jitter: 0.35),

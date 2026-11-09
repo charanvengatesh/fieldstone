@@ -160,12 +160,19 @@ pub fn draw(
         }
         // Pixel mode: tile sheets. The lowest terrain present fills every cell; the rest
         // draw their corner-mask tiles on top in priority order.
+        let origin_cell = pos * CHUNK;
+        let height_of = |x: i32, y: i32| -> u8 {
+            let cell = origin_cell + IVec2::new(x, y);
+            chunks
+                .get(&chunk_of(cell))
+                .map_or(0, |ch| ch.tiles[local_index(cell)].height)
+        };
         let (mesh, pixel_material) = if pixel {
             let order = super::tiles::present(&field);
             let base = order[0];
             let mut spawned = Vec::new();
             for (k, &t) in order.iter().enumerate().skip(1) {
-                let Some(m) = super::tiles::tile_mesh(&field, t, false) else {
+                let Some(m) = super::tiles::tile_mesh(&field, t, false, &height_of) else {
                     continue;
                 };
                 let (material, is_water) = sheet_material(&sheets, t);
@@ -179,10 +186,24 @@ pub fn draw(
                 }
                 spawned.push(e.id());
             }
+            if let (Some(cliff), Some(m)) = (&sheets.cliff, super::tiles::cliff_mesh(&height_of)) {
+                // Cliff faces sit on the real tile grid (half a cell off the dual grid).
+                let e = commands
+                    .spawn((
+                        Mesh2d(meshes.add(m)),
+                        MeshMaterial2d(cliff.clone()),
+                        Transform::from_translation(
+                            (center_of(pos * CHUNK) - CELL / 2.0).extend(0.08),
+                        ),
+                    ))
+                    .id();
+                spawned.push(e);
+            }
             if !spawned.is_empty() {
                 layers.insert(pos, spawned);
             }
-            let m = super::tiles::tile_mesh(&field, base, true).expect("base tile mesh");
+            let m =
+                super::tiles::tile_mesh(&field, base, true, &height_of).expect("base tile mesh");
             let (material, is_water) = sheet_material(&sheets, base);
             (meshes.add(m), Some((material, is_water, base)))
         } else {

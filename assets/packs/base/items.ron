@@ -35,6 +35,7 @@
     (id: "bow",         name: "Bow",          shape: "bow",         stack_max: 1, use: Weapon(damage: 4.0, range: 10.0, cooldown: 0.8, projectile: Some("arrow"))),
 
     (id: "torch",  name: "Torch",    shape: "torch", use: Place("torch")),
+    (id: "ramp_wood", name: "Wooden Ramp", shape: "ramp", use: Place("ramp"), stack_max: 8),
     (id: "meat",   name: "Raw Meat", shape: "meat",  use: Eat(hp: 2.0, stamina: 10.0, food: 20.0)),
     (id: "meat_cooked", name: "Cooked Meat", shape: "meat_cooked", use: Eat(hp: 8.0, stamina: 25.0, food: 35.0)),
     (id: "hide",   name: "Hide",     shape: "hide"),

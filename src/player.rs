@@ -11,7 +11,7 @@ use crate::core::{CreatureDef, ItemDef, ObjectDef, Registry, ShapeDef, TerrainDe
 use crate::items::interact::{REACH, Target};
 use crate::items::inventory::Inventory;
 use crate::stats::{Creature, Progress, Stats};
-use crate::world::{CELL, ChunkMap, PLAYER_R, cell_of, center_of, slide, solid_half};
+use crate::world::{CELL, ChunkMap, PLAYER_R, blocker, cell_of, center_of, slide};
 
 /// Stamina per second while sprinting.
 const SPRINT_COST: f32 = 12.0;
@@ -115,10 +115,10 @@ pub fn movement(
         stats.speed
     };
     let delta = dir * speed * time.delta_secs();
-    let solid = |c| solid_half(&map, &terrain, &objects, c);
+    let solid = blocker(&map, &terrain, &objects, cell_of(pos));
     let mut p = pos;
-    p = slide(p, delta.with_y(0.0), PLAYER_R, solid);
-    p = slide(p, delta.with_x(0.0), PLAYER_R, solid);
+    p = slide(p, delta.with_y(0.0), PLAYER_R, &solid);
+    p = slide(p, delta.with_x(0.0), PLAYER_R, &solid);
     tf.translation = p.extend(tf.translation.z);
     // Auto-walk that makes no headway (water, wall, trunk) gives up instead of grinding.
     if walking_to_target && (p - pos).length() < 0.5 * time.delta_secs() * 60.0 {

@@ -5,7 +5,7 @@ use bevy::prelude::*;
 use crate::core::{Behavior, CreatureDef, ObjectDef, Registry, Rng, TerrainDef};
 use crate::player::Player;
 use crate::stats::{Creature, Damage, Stats};
-use crate::world::{CELL, ChunkMap, clear_line, slide, solid_half};
+use crate::world::{CELL, ChunkMap, blocker, cell_of, clear_line, slide};
 
 const BITE_RANGE: f32 = CELL * 0.9;
 const BITE_COOLDOWN: f32 = 1.0;
@@ -45,7 +45,6 @@ pub fn think(
     let calms: Vec<crate::stats::CalmHostiles> = calm.read().copied().collect();
     let target = ptf.translation.truncate();
     let dt = time.delta_secs();
-    let solid = |c| solid_half(&map, &terrain, &objects, c);
     for (c, stats, mut ai, mut tf, sprite) in &mut mobs {
         let def = creatures.at(c.0);
         let pos = tf.translation.truncate();
@@ -94,9 +93,10 @@ pub fn think(
         };
         let delta = ai.dir * speed * dt;
         let r = def.radius * CELL;
+        let solid = blocker(&map, &terrain, &objects, cell_of(pos));
         let mut p = pos;
-        p = slide(p, delta.with_y(0.0), r, solid);
-        p = slide(p, delta.with_x(0.0), r, solid);
+        p = slide(p, delta.with_y(0.0), r, &solid);
+        p = slide(p, delta.with_x(0.0), r, &solid);
         // Bumped into something while wandering: pick a new direction sooner.
         if !hostile && (p - pos).length() < delta.length() * 0.5 {
             ai.timer = 0.0;

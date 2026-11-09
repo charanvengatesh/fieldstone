@@ -30,6 +30,34 @@ pub fn solid_half(
     (o.solid && o.radius > 0.0).then_some(o.radius * CELL)
 }
 
+/// Whether a mover standing in `from` may step into `to` as far as height goes: same level,
+/// or either cell holds a ramp. Unloaded cells count as level 0.
+pub fn passable(map: &ChunkMap, objects: &Registry<ObjectDef>, from: IVec2, to: IVec2) -> bool {
+    let (a, b) = (map.height(from), map.height(to));
+    if a == b {
+        return true;
+    }
+    let is_ramp = |c: IVec2| {
+        map.tile(c)
+            .and_then(|t| t.object)
+            .is_some_and(|o| objects.id_of(o) == "ramp")
+    };
+    a.abs_diff(b) == 1 && (is_ramp(from) || is_ramp(to))
+}
+
+/// Collision closure for a mover currently in `here`: solid boxes plus height steps.
+pub fn blocker<'a>(
+    map: &'a ChunkMap,
+    terrain: &'a Registry<TerrainDef>,
+    objects: &'a Registry<ObjectDef>,
+    here: IVec2,
+) -> impl Fn(IVec2) -> Option<f32> + 'a {
+    move |c: IVec2| {
+        solid_half(map, terrain, objects, c)
+            .or_else(|| (!passable(map, objects, here, c)).then_some(CELL / 2.0))
+    }
+}
+
 /// Whether a straight line between two points crosses no solid box (sampled every ~8 units).
 pub fn clear_line(
     map: &ChunkMap,
@@ -69,3 +97,41 @@ impl Plugin for WorldPlugin {
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorldSet;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::ObjectDef;
+    use chunk::{Chunk, Tile, local_index};
+
+    fn world(heights: &[(IVec2, u8)], ramps: &[IVec2]) -> (ChunkMap, Registry<ObjectDef>) {
+        let mut objects = Registry::<ObjectDef>::default();
+        let ramp: ObjectDef = ron::from_str(r#"(id: "ramp", shape: "ramp", solid: false)"#).unwrap();
+        let ramp_id = objects.insert(ramp);
+        let mut chunk = Chunk::filled(Tile::default());
+        for (c, h) in heights {
+            chunk.tiles[local_index(*c)].height = *h;
+        }
+        for c in ramps {
+            chunk.tiles[local_index(*c)].object = Some(ramp_id);
+        }
+        let mut map = ChunkMap::default();
+        map.chunks.insert(IVec2::ZERO, chunk);
+        (map, objects)
+    }
+
+    #[test]
+    fn steps_need_a_ramp() {
+        let a = IVec2::new(2, 2);
+        let up = IVec2::new(2, 3);
+        let (map, objects) = world(&[(up, 1)], &[]);
+        assert!(!passable(&map, &objects, a, up));
+        assert!(passable(&map, &objects, a, IVec2::new(3, 2)));
+        let (map, objects) = world(&[(up, 1)], &[a]);
+        assert!(passable(&map, &objects, a, up));
+        assert!(passable(&map, &objects, up, a));
+        // Two levels at once never pass, ramp or not.
+        let (map, objects) = world(&[(up, 2)], &[a]);
+        assert!(!passable(&map, &objects, a, up));
+    }
+}

@@ -305,8 +305,21 @@ pub struct WorldGenDef {
     pub wet: Vec<(String, String, f64)>,
     #[serde(default)]
     pub scatter: Vec<Scatter>,
+    /// Scale of the relief noise that terraces land into heights 0..3 (0 disables relief).
+    #[serde(default = "relief_scale")]
+    pub relief_scale: f64,
+    /// Chance that a cliff foot gets a natural ramp.
+    #[serde(default = "ramp_chance")]
+    pub ramps: f32,
 }
 def!(WorldGenDef, "worldgen.ron");
+
+fn relief_scale() -> f64 {
+    64.0
+}
+fn ramp_chance() -> f32 {
+    0.35
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct FishEntry {

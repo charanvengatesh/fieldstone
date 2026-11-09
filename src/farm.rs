@@ -60,6 +60,7 @@ pub fn till(
             crate::world::chunk::Tile {
                 terrain: next,
                 object: None,
+                height: tile.height,
             },
         );
     }

@@ -13,6 +13,8 @@ pub const CELL: f32 = 16.0;
 pub struct Tile {
     pub terrain: u16,
     pub object: Option<u16>,
+    /// Terrace level 0..3; cliffs stand between different heights.
+    pub height: u8,
 }
 
 pub struct Chunk {
@@ -70,6 +72,11 @@ impl ChunkMap {
         self.chunks
             .get(&chunk_of(cell))
             .map(|c| c.tiles[local_index(cell)])
+    }
+
+    /// Height of a loaded cell; unloaded cells report 0 so edges of the world stay flat.
+    pub fn height(&self, cell: IVec2) -> u8 {
+        self.tile(cell).map_or(0, |t| t.height)
     }
 
     /// Returns the previous tile if the chunk is loaded.

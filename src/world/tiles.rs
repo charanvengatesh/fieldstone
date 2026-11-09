@@ -21,11 +21,12 @@ pub const TILE: u32 = 16;
 pub const WATER_FRAMES: usize = 4;
 const FRAME_SECS: f32 = 0.35;
 
-/// Materials per terrain: one for ground, `WATER_FRAMES` for water.
+/// Materials per terrain: one for ground, `WATER_FRAMES` for water, plus the cliff sheet.
 #[derive(Resource, Default)]
 pub struct TileSheets {
     pub ground: HashMap<u16, Handle<ColorMaterial>>,
     pub water: HashMap<u16, Vec<Handle<ColorMaterial>>>,
+    pub cliff: Option<Handle<ColorMaterial>>,
 }
 
 /// A chunk layer drawn with a water terrain's sheet; its material cycles through the frames.
@@ -46,6 +47,14 @@ pub fn build_sheets(
 ) {
     if !assets.pixel() {
         return;
+    }
+    {
+        let img = crate::art::load_png(&packs, "tiles/cliff.png").unwrap_or_else(cliff_sheet);
+        sheets.cliff = Some(materials.add(ColorMaterial {
+            texture: Some(images.add(img)),
+            alpha_mode: AlphaMode2d::Blend,
+            ..default()
+        }));
     }
     for (i, t) in terrain.iter() {
         let color = palette_color(&palette, &t.color).to_srgba();
@@ -192,9 +201,15 @@ fn mask_of(cell: &[Weights], terrain: u16) -> u32 {
 
 /// Textured quads for one terrain across the chunk. `base` draws every cell with the full
 /// tile so the lowest layer leaves no holes. Returns `None` when the terrain is absent.
-pub fn tile_mesh(field: &[Weights], terrain: u16, base: bool) -> Option<Mesh> {
+pub fn tile_mesh(
+    field: &[Weights],
+    terrain: u16,
+    base: bool,
+    height_of: &impl Fn(i32, i32) -> u8,
+) -> Option<Mesh> {
     let mut positions = Vec::new();
     let mut uvs = Vec::new();
+    let mut cols = Vec::new();
     let mut idx = Vec::new();
     for ty in 0..CHUNK {
         for tx in 0..CHUNK {
@@ -207,6 +222,10 @@ pub fn tile_mesh(field: &[Weights], terrain: u16, base: bool) -> Option<Mesh> {
             if mask == 0 {
                 continue;
             }
+            // Higher ground is a touch brighter; the dual cell takes its bottom-left tile's height.
+            let h = height_of(tx, ty) as f32;
+            let bright = 1.0 + 0.06 * h;
+            cols.extend([[bright, bright, bright, 1.0]; 4]);
             let (col, row) = ((mask % 4) as f32, (mask / 4) as f32);
             let (u0, v0) = (col / 4.0, row / 4.0);
             let (u1, v1) = (u0 + 0.25, v0 + 0.25);
@@ -269,6 +288,117 @@ pub fn animate_water(
             mat.0 = frames[clock.1].clone();
         }
     }
+}
+
+/// Cliff sheet: 8 tiles indexed by which of N (bit 0), E (bit 1), W (bit 2) neighbors are
+/// higher. A higher north draws a rock face over the top of the cell with a lit lip; higher
+/// east or west draws a shaded edge. The sheet is 4x2 tiles.
+fn cliff_sheet() -> Image {
+    let (w, h) = (TILE * 4, TILE * 2);
+    let mut data = vec![0u8; (w * h * 4) as usize];
+    let face = [0.36, 0.26, 0.18];
+    let face_dark = [0.26, 0.18, 0.12];
+    let lip = [0.62, 0.50, 0.34];
+    let edge = [0.0, 0.0, 0.0];
+    for mask in 0..8u32 {
+        let (col, row) = (mask % 4, mask / 4);
+        let (north, east, west) = (mask & 1 != 0, mask & 2 != 0, mask & 4 != 0);
+        for y in 0..TILE {
+            for x in 0..TILE {
+                let px = col * TILE + x;
+                let py = row * TILE + (TILE - 1 - y);
+                let i = ((py * w + px) * 4) as usize;
+                let mut out = [0.0f32; 4];
+                // y counts up from the cell's bottom; the face occupies the top 7 texels.
+                if north && y >= TILE - 7 {
+                    let g = 0.92 + 0.16 * hash01(5, x as i32, y as i32 + mask as i32 * 7, 17);
+                    let c = if y == TILE - 1 {
+                        lip
+                    } else if (x + y) % 5 == 0 {
+                        face_dark
+                    } else {
+                        face
+                    };
+                    out = [c[0] * g, c[1] * g, c[2] * g, 1.0];
+                    if y == TILE - 7 {
+                        out = [edge[0], edge[1], edge[2], 0.55];
+                    }
+                }
+                if east && x >= TILE - 2 && out[3] == 0.0 {
+                    out = [
+                        edge[0],
+                        edge[1],
+                        edge[2],
+                        if x == TILE - 1 { 0.45 } else { 0.2 },
+                    ];
+                }
+                if west && x < 2 && out[3] == 0.0 {
+                    out = [edge[0], edge[1], edge[2], if x == 0 { 0.45 } else { 0.2 }];
+                }
+                for k in 0..4 {
+                    data[i + k] = (out[k].clamp(0.0, 1.0) * 255.0).round() as u8;
+                }
+            }
+        }
+    }
+    let mut img = Image::new(
+        Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    img.sampler = ImageSampler::nearest();
+    img
+}
+
+/// Cliff quads for the chunk: one per cell with a higher N, E or W neighbor. Cells are the
+/// real tiles here (not dual cells), so the face sits on the lower tile below a step.
+pub fn cliff_mesh(height_of: &impl Fn(i32, i32) -> u8) -> Option<Mesh> {
+    let mut positions = Vec::new();
+    let mut uvs = Vec::new();
+    let mut idx = Vec::new();
+    for ty in 0..CHUNK {
+        for tx in 0..CHUNK {
+            let h = height_of(tx, ty);
+            let mask = (height_of(tx, ty + 1) > h) as u32
+                | ((height_of(tx + 1, ty) > h) as u32) << 1
+                | ((height_of(tx - 1, ty) > h) as u32) << 2;
+            if mask == 0 {
+                continue;
+            }
+            let (col, row) = ((mask % 4) as f32, (mask / 4) as f32);
+            let (u0, v0) = (col / 4.0, row / 2.0);
+            let (u1, v1) = (u0 + 0.25, v0 + 0.5);
+            let x0 = tx as f32 * CELL;
+            let y0 = ty as f32 * CELL;
+            let b = positions.len() as u32;
+            positions.extend([
+                [x0, y0, 0.0],
+                [x0 + CELL, y0, 0.0],
+                [x0 + CELL, y0 + CELL, 0.0],
+                [x0, y0 + CELL, 0.0],
+            ]);
+            uvs.extend([[u0, v1], [u1, v1], [u1, v0], [u0, v0]]);
+            idx.extend([b, b + 1, b + 2, b, b + 2, b + 3]);
+        }
+    }
+    if positions.is_empty() {
+        return None;
+    }
+    Some(
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+        .with_inserted_indices(Indices::U32(idx)),
+    )
 }
 
 #[allow(dead_code)]

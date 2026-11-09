@@ -57,6 +57,9 @@ struct SaveFile {
     ids: Vec<String>,
     /// Chunk coordinate and, per tile, `(terrain id index, object id index)`.
     chunks: Vec<((i32, i32), Vec<(u16, u16)>)>,
+    /// Per saved chunk, the terrace heights (same order as `chunks`); empty for old saves.
+    #[serde(default)]
+    heights: Vec<Vec<u8>>,
 }
 
 pub fn save(
@@ -93,6 +96,7 @@ pub fn save(
         }
     };
     let mut chunks = Vec::new();
+    let mut heights = Vec::new();
     let loaded = map
         .chunks
         .iter()
@@ -109,6 +113,7 @@ pub fn save(
             })
             .collect();
         chunks.push(((pos.x, pos.y), encoded));
+        heights.push(tiles.iter().map(|t| t.height).collect());
     }
     let file = SaveFile {
         seed: wg.seed,
@@ -141,6 +146,7 @@ pub fn save(
         growth: growth.0.iter().map(|(c, t)| ((c.x, c.y), *t)).collect(),
         ids,
         chunks,
+        heights,
     };
     let path = super::paths::save_file();
     let result = ron::ser::to_string_pretty(&file, ron::ser::PrettyConfig::default())
@@ -187,8 +193,13 @@ pub fn load(terrain: &Registry<TerrainDef>, objects: &Registry<ObjectDef>) -> Op
     };
     let fallback_terrain = 0;
     let mut chunks = HashMap::default();
-    for ((x, y), tiles) in file.chunks {
+    for (k, ((x, y), tiles)) in file.chunks.into_iter().enumerate() {
         let mut arr = [Tile::default(); TILES];
+        if let Some(hs) = file.heights.get(k) {
+            for (slot, h) in arr.iter_mut().zip(hs) {
+                slot.height = *h;
+            }
+        }
         for (slot, (t, o)) in arr.iter_mut().zip(tiles) {
             let name = |i: u16| file.ids.get(i as usize).map(String::as_str).unwrap_or("");
             slot.terrain = terrain.idx(name(t)).unwrap_or(fallback_terrain);

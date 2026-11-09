@@ -211,6 +211,15 @@
         Circle(r: 0.09, color: "ember"),
     ]),
 
+    (id: "ramp", parts: [
+        Rect(w: 0.92, h: 0.70, color: "ink", at: (0.0, -0.14)),
+        Rect(w: 0.84, h: 0.62, color: "wood", at: (0.0, -0.14)),
+        Rect(w: 0.84, h: 0.06, color: "bark", at: (0.0, 0.06)),
+        Rect(w: 0.84, h: 0.06, color: "bark", at: (0.0, -0.14)),
+        Rect(w: 0.84, h: 0.06, color: "bark", at: (0.0, -0.34)),
+        Rect(w: 0.84, h: 0.08, color: "plank", at: (0.0, 0.14)),
+    ]),
+
     // ---- Decor ----
     (id: "grass_tuft", parts: [
         Rect(w: 0.05, h: 0.26, color: "leaf_light", at: (-0.10, 0.0), rot: 15),
