@@ -5,14 +5,12 @@
 use bevy::prelude::*;
 
 use crate::core::{BlockDef, ItemDef, Registry};
-use crate::debug::Canvas;
 use crate::interact::{Cursor, within_reach};
 use crate::inventory::Inventory;
-use crate::player::{FIGURE, Player, closed, figure_texture};
-use crate::world::iso::{BLOCK_H, View};
-use crate::world::mesh::{Faces, Grid, Palette, chunk_faces, edge_texture};
+use crate::player::{Player, closed};
+use crate::world::iso::View;
 use crate::world::worldgen::WorldGen;
-use crate::world::{AIR, CHUNK, Focus, HEIGHT, Map};
+use crate::world::{AIR, HEIGHT, Map};
 
 #[derive(Resource)]
 pub struct Smoke {
@@ -23,6 +21,7 @@ pub struct Smoke {
     /// The block the script breaks and puts back, and what it was.
     dug: Option<(IVec3, u16)>,
     failed: bool,
+    done: bool,
 }
 
 impl Smoke {
@@ -34,6 +33,7 @@ impl Smoke {
             start: Vec3::ZERO,
             dug: None,
             failed: false,
+            done: false,
         }
     }
 }
@@ -50,17 +50,15 @@ pub fn drive(
     mut cursor: ResMut<Cursor>,
     items: Res<Registry<ItemDef>>,
     map: Res<Map>,
-    focus: Res<Focus>,
     view: Res<View>,
-    grid: Res<Grid>,
     wg: Res<WorldGen>,
     blocks: Res<Registry<BlockDef>>,
-    palette: Option<Res<Palette>>,
+    path: Res<crate::core::save::SavePath>,
+    mut request: ResMut<crate::core::SaveRequest>,
     mut player: Single<(&Player, &mut Inventory)>,
-    (mut broken, mut placed, mut exit): (
+    (mut broken, mut placed): (
         MessageReader<crate::interact::BlockBroken>,
         MessageReader<crate::interact::BlockPlaced>,
-        MessageWriter<AppExit>,
     ),
 ) {
     let (player, inv) = &mut *player;
@@ -223,50 +221,58 @@ pub fn drive(
                 }
             }
         }
-        560 => {
-            if let (Some(name), Some(palette)) = (smoke.snapshot.clone(), palette) {
-                let center = view.project(focus.0).truncate();
-                let mut canvas =
-                    Canvas::new(1280, 800, smoke.scale, center, Color::srgb_u8(24, 28, 40));
-                let edges = edge_texture();
-                for pos in map.chunks.keys() {
-                    let faces = chunk_faces(*pos, *view, grid.0, &palette, |p| {
-                        map.get(p).unwrap_or_else(|| wg.block(p))
-                    });
-                    let at = view.project((*pos * CHUNK).extend(0).as_vec3());
-                    canvas.draw(at, &faces, &edges);
+        // Save, then read the file back and compare it with the live world.
+        545 => request.save = true,
+        555 => {
+            let loaded = crate::core::save::load(&path.0, &blocks, &items);
+            match (loaded, smoke.dug) {
+                (Some(l), Some((b, _))) => {
+                    let chunk = crate::world::chunk_of(b);
+                    let same = l
+                        .chunks
+                        .get(&chunk)
+                        .zip(map.chunks.get(&chunk))
+                        .is_some_and(|(saved, live)| saved[..] == live.blocks[..]);
+                    if !same || l.seed != wg.seed || l.player.distance(player.body.pos) > 0.01 {
+                        fail(
+                            &mut smoke,
+                            format!("save does not match the world (chunk {chunk})"),
+                        );
+                    } else {
+                        info!("smoke: save round trip matches ({} chunks)", l.chunks.len());
+                    }
                 }
-                let at = view.project(player.body.pos.with_z(player.shown_z));
-                canvas.draw(at + Vec3::Z * 0.05, &figure_faces(), &figure_texture());
-                match canvas.save(&name) {
-                    Ok(path) => info!("snapshot {}", path.display()),
-                    Err(e) => fail(&mut smoke, format!("snapshot: {e}")),
-                }
-            }
-            if smoke.failed {
-                error!("smoke test FAILED");
-                exit.write(AppExit::error());
-            } else {
-                info!("smoke test passed: world streams in, player walks, breaks and places");
-                exit.write(AppExit::Success);
+                _ => fail(&mut smoke, format!("no save at {}", path.0.display())),
             }
         }
+        560 => smoke.done = true,
         _ => {}
     }
 }
 
-/// The player quad as the canvas wants it: the same corners and depths as the real mesh.
-fn figure_faces() -> Faces {
-    let (w, h) = (FIGURE.x as f32, FIGURE.y as f32);
-    let top = h / BLOCK_H;
-    Faces {
-        positions: vec![
-            [-w / 2.0, 0.0, 0.0],
-            [w / 2.0, 0.0, 0.0],
-            [w / 2.0, h, top],
-            [-w / 2.0, h, top],
-        ],
-        uvs: vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
-        colors: vec![[1.0; 4]; 4],
+/// Runs once the script is over: draws the snapshot if one was asked for, then exits.
+pub fn finish(world: &mut World) {
+    let smoke = world.resource::<Smoke>();
+    if !smoke.done {
+        return;
     }
+    let (failed, snapshot, scale) = (smoke.failed, smoke.snapshot.clone(), smoke.scale);
+    let mut failed = failed;
+    if let Some(name) = snapshot {
+        match crate::debug::snapshot(world, &name, scale) {
+            Ok(path) => info!("snapshot {}", path.display()),
+            Err(e) => {
+                error!("smoke: snapshot: {e}");
+                failed = true;
+            }
+        }
+    }
+    if failed {
+        error!("smoke test FAILED");
+        world.write_message(AppExit::error());
+    } else {
+        info!("smoke test passed: world streams in, player walks, breaks, places, saves");
+        world.write_message(AppExit::Success);
+    }
+    world.resource_mut::<Smoke>().done = false;
 }

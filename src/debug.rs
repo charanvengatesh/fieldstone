@@ -1,9 +1,11 @@
-//! Debug probe: screenshots and text written under `debug/` in the user directory.
-//! `F9` saves a screenshot. Automatic capture every N seconds starts when the environment
-//! variable `FIELDSTONE_DEBUG_AUTO=N` is set or a file `debug/auto` holds N, which is how a
-//! run nobody is watching can be looked at afterwards.
+//! Debug probe: pictures and text written under `debug/` in the user directory. Scripts
+//! drive it (`mods/debug` binds F9); automatic capture every N seconds starts when the
+//! environment variable `FIELDSTONE_DEBUG_AUTO=N` is set or a file `debug/auto` holds N,
+//! which is how a run nobody is watching can be looked at afterwards.
 
 use std::path::PathBuf;
+
+use std::fmt::Write as _;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
@@ -11,7 +13,14 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 
-use crate::world::mesh::Faces;
+use crate::core::{BlockDef, ItemDef, Registry};
+use crate::interact::Target;
+use crate::inventory::Inventory;
+use crate::player::{Player, figure_faces, figure_texture};
+use crate::world::iso::View;
+use crate::world::mesh::{Faces, Grid, Palette, chunk_faces, edge_texture};
+use crate::world::worldgen::WorldGen;
+use crate::world::{CHUNK, Focus, Map};
 
 /// `debug/` under the user directory, created on first use.
 pub fn dir() -> PathBuf {
@@ -38,12 +47,193 @@ pub fn safe_name(name: &str) -> String {
 
 /// Saves the window to `debug/<name>.png`. Reads the swapchain, so the window must be on
 /// screen and the app active; a game started from a background shell saves black images.
-pub fn screenshot(commands: &mut Commands, name: &str) {
+/// [`snapshot`] has no such limit.
+pub fn screenshot(world: &mut World, name: &str) {
+    if world
+        .query_filtered::<(), With<PrimaryWindow>>()
+        .iter(world)
+        .next()
+        .is_none()
+    {
+        return;
+    }
     let path = dir().join(format!("{}.png", safe_name(name)));
     info!("debug: screenshot {}", path.display());
-    commands
+    world
         .spawn(Screenshot::primary_window())
         .observe(save_to_disk(path));
+}
+
+/// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
+/// Works without a window and whatever the window's state.
+pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, String> {
+    let (pos, shown_z, facing) = world
+        .query::<&Player>()
+        .iter(world)
+        .next()
+        .map(|p| (p.body.pos, p.shown_z, p.facing))
+        .ok_or("no player")?;
+    let map = world.resource::<Map>();
+    let view = *world.resource::<View>();
+    let grid = world.resource::<Grid>().0;
+    let wg = world.resource::<WorldGen>();
+    let palette = world.get_resource::<Palette>().ok_or("no palette yet")?;
+    let center = view.project(world.resource::<Focus>().0).truncate();
+    let mut canvas = Canvas::new(1280, 800, scale, center, Color::srgb_u8(24, 28, 40));
+    let edges = edge_texture();
+    for chunk in map.chunks.keys() {
+        let faces = chunk_faces(*chunk, view, grid, palette, |p| {
+            map.get(p).unwrap_or_else(|| wg.block(p))
+        });
+        canvas.draw(
+            view.project((*chunk * CHUNK).extend(0).as_vec3()),
+            &faces,
+            &edges,
+        );
+    }
+    let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
+    canvas.draw(at, &figure_faces(facing), &figure_texture());
+    canvas.save(name)
+}
+
+const HALF_W: i32 = 24;
+const HALF_H: i32 = 12;
+
+/// A plain-text picture of the game right now: seed, view, player, inventory, target, and
+/// maps of the surface block and its height around the player.
+pub fn report(world: &mut World) -> String {
+    let player = world
+        .query::<(&Player, &Inventory)>()
+        .iter(world)
+        .next()
+        .map(|(p, inv)| (p.body, inv.slots.clone(), inv.selected));
+    let mut out = String::new();
+    let map = world.resource::<Map>();
+    let blocks = world.resource::<Registry<BlockDef>>();
+    let items = world.resource::<Registry<ItemDef>>();
+    let view = world.resource::<View>();
+    let target = world.resource::<Target>();
+    let seed = world.get_resource::<WorldGen>().map(|w| w.seed);
+    let packs = world
+        .get_resource::<crate::core::packs::LoadedPacks>()
+        .map(|p| {
+            p.0.iter()
+                .map(|(_, m)| m.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    let _ = writeln!(out, "fieldstone {} debug dump", env!("CARGO_PKG_VERSION"));
+    let _ = writeln!(
+        out,
+        "seed {seed:?}  view rot {}  grid {}  chunks {} loaded, {} parked, {} edited  packs {packs} ({} blocks, {} items)",
+        view.rot,
+        world.resource::<Grid>().0,
+        map.chunks.len(),
+        map.parked.len(),
+        map.chunks.values().filter(|c| c.modified).count(),
+        blocks.len(),
+        items.len(),
+    );
+    let Some((body, slots, selected)) = player else {
+        out.push_str("no player\n");
+        return out;
+    };
+    let cell = body.pos.floor().as_ivec3();
+    let under = map.block(cell - IVec3::Z);
+    let _ = writeln!(
+        out,
+        "\nplayer at {:.2} {:.2} {:.2}  cell {cell}  grounded {}  standing on {}",
+        body.pos.x,
+        body.pos.y,
+        body.pos.z,
+        body.grounded,
+        blocks.id_of(under),
+    );
+    let _ = writeln!(out, "selected slot {selected}");
+    for (i, s) in slots.iter().enumerate() {
+        if let Some(s) = s {
+            let _ = writeln!(out, "  slot {i:2}: {} x{}", items.id_of(s.item), s.n);
+        }
+    }
+    match target.0 {
+        Some(h) => {
+            let _ = writeln!(
+                out,
+                "target {} at {} face {}",
+                blocks.id_of(map.block(h.block)),
+                h.block,
+                h.normal
+            );
+        }
+        None => {
+            let _ = writeln!(out, "target none");
+        }
+    }
+    // Maps: world +y up the page, +x to the right, whatever the view rotation.
+    let letters = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    let glyph = |b: u16| letters[b as usize % letters.len()] as char;
+    let digits = b"0123456789ABCDEFGHIJKLMNOPQRSTUV";
+    let _ = writeln!(
+        out,
+        "\nsurface {}x{} around the player (world +x right, +y up; @ player, ? unloaded):",
+        HALF_W * 2 + 1,
+        HALF_H * 2 + 1
+    );
+    let mut heights = String::new();
+    let mut seen: Vec<u16> = Vec::new();
+    for dy in (-HALF_H..=HALF_H).rev() {
+        let (mut row, mut hrow) = (String::new(), String::new());
+        for dx in -HALF_W..=HALF_W {
+            let (x, y) = (cell.x + dx, cell.y + dy);
+            match map.top(x, y) {
+                Some(z) => {
+                    let b = map.block(IVec3::new(x, y, z));
+                    if !seen.contains(&b) {
+                        seen.push(b);
+                    }
+                    row.push(if dx == 0 && dy == 0 { '@' } else { glyph(b) });
+                    hrow.push(digits[z as usize % digits.len()] as char);
+                }
+                None => {
+                    row.push('?');
+                    hrow.push('?');
+                }
+            }
+        }
+        let _ = writeln!(out, "{row}");
+        let _ = writeln!(heights, "{hrow}");
+    }
+    let _ = writeln!(out, "\nheights (0-9 then A=10 ... V=31):\n{heights}");
+    seen.sort_unstable();
+    let _ = writeln!(out, "legend:");
+    for b in seen {
+        let _ = writeln!(out, "  {} {}", glyph(b), blocks.id_of(b));
+    }
+    out
+}
+
+/// Writes [`report`] to `debug/<name>.txt`.
+pub fn dump(world: &mut World, name: &str) {
+    let path = dir().join(format!("{}.txt", safe_name(name)));
+    match std::fs::write(&path, report(world)) {
+        Ok(()) => info!("debug: dump {}", path.display()),
+        Err(e) => error!("debug: {}: {e}", path.display()),
+    }
+}
+
+/// Appends a line to `debug/<name>`.
+pub fn append(name: &str, line: &str) {
+    use std::io::Write;
+    let path = dir().join(safe_name(name));
+    let r = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+        .and_then(|mut f| writeln!(f, "{line}"));
+    if let Err(e) = r {
+        error!("debug: {}: {e}", path.display());
+    }
 }
 
 /// Automatic capture: seconds between shots, time since the last, shots taken.
@@ -63,7 +253,7 @@ fn setup(mut commands: Commands) {
         .and_then(|s| s.trim().parse::<f32>().ok())
         .filter(|s| *s > 0.0);
     if let Some(every) = every {
-        info!("debug: automatic screenshots every {every}s");
+        info!("debug: automatic capture every {every}s");
         commands.insert_resource(Auto {
             every,
             since: 0.0,
@@ -72,29 +262,24 @@ fn setup(mut commands: Commands) {
     }
 }
 
-fn capture(
-    time: Res<Time>,
-    input: Res<ButtonInput<KeyCode>>,
-    window: Query<(), With<PrimaryWindow>>,
-    auto: Option<ResMut<Auto>>,
-    mut manual: Local<u32>,
-    mut commands: Commands,
-) {
-    if window.is_empty() {
+/// Every interval: a window screenshot, a software snapshot and a dump.
+fn auto(world: &mut World) {
+    let dt = world.resource::<Time>().delta_secs();
+    let Some(mut auto) = world.get_resource_mut::<Auto>() else {
+        return;
+    };
+    auto.since += dt;
+    if auto.since < auto.every || auto.shots >= AUTO_LIMIT {
         return;
     }
-    if input.just_pressed(KeyCode::F9) {
-        *manual += 1;
-        screenshot(&mut commands, &format!("{:03}-f9", *manual));
+    auto.since = 0.0;
+    auto.shots += 1;
+    let name = format!("{:03}-auto", auto.shots);
+    screenshot(world, &name);
+    if let Err(e) = snapshot(world, &format!("{name}-soft"), 2.0) {
+        warn!("debug: snapshot: {e}");
     }
-    if let Some(mut auto) = auto {
-        auto.since += time.delta_secs();
-        if auto.since >= auto.every && auto.shots < AUTO_LIMIT {
-            auto.since = 0.0;
-            auto.shots += 1;
-            screenshot(&mut commands, &format!("{:03}-auto", auto.shots));
-        }
-    }
+    dump(world, &name);
 }
 
 /// A software picture of mesh data: the same quads, texture, vertex colours and depth test
@@ -222,7 +407,7 @@ pub struct DebugPlugin;
 
 impl Plugin for DebugPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup).add_systems(Update, capture);
+        app.add_systems(Startup, setup).add_systems(Update, auto);
     }
 }
 

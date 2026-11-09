@@ -5,21 +5,23 @@ a clean game.
 
 | Key | Does |
 |-----|------|
-| F9  | screenshot + world-state dump |
-| F10 | toggle automatic snapshots every 5 s (40 per session) |
+| F9  | window screenshot + software snapshot + world-state dump |
+| F10 | toggle automatic capture every 5 s (40 per session) |
 | F11 | dump only |
 
 Files land in `debug/` next to `settings.ron` (the game folder when writable, otherwise the
-per-user config directory). `events.log` records every hook the engine fires with the day,
-time and player cell. A dump holds the clocks, render settings, player position and stats,
-inventory, target and cursor, nearby creatures with their AI state, nearby chests, and three
-ASCII maps (objects and terrain, heights, legends).
+per-user config directory). `events.log` records every hook the engine fires with the time
+and the player's cell. A dump holds the seed, view, chunk counts, player position, inventory,
+target, and two maps around the player: the surface block and its height.
 
-When something looks wrong: press F9 while looking at it, then hand over the matching
-`NNN-f9.png` and `NNN-f9.txt` with a line about what you expected.
+Two kinds of picture are saved. `NNN-f9.png` is the real window; it is black when the window
+is hidden or the app is in the background. `NNN-f9-soft.png` is the same view drawn on the
+CPU from the same mesh data; it always works, but shows no interface.
 
-`FIELDSTONE_DEBUG_AUTO=5 cargo run` starts automatic capture at launch, for runs nobody is
-watching; so does a file `debug/auto` holding the seconds. Screenshots read the window, so the
-game must be on screen and active: on macOS a binary started from a background shell never
-gets a presentable frame and saves black images. `open target/debug/fieldstone` (after
-`cargo build`) launches it activated. Dumps and the event log work either way.
+When something looks wrong: press F9 while looking at it, then hand over the number with a
+line about what you expected.
+
+For a run nobody is watching, `FIELDSTONE_DEBUG_AUTO=5 cargo run` (or a file `debug/auto`
+holding the seconds) captures from launch without any script. Without a window at all,
+`cargo run -- --snapshot NAME [--seed N] [--scale N] [--rot N] [--grid]` runs the scripted
+self-test and writes `debug/NAME.png`.

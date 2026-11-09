@@ -2,6 +2,7 @@ pub mod defs;
 pub mod packs;
 pub mod paths;
 pub mod registry;
+pub mod save;
 pub mod settings;
 
 use bevy::prelude::*;

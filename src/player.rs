@@ -59,11 +59,20 @@ pub fn closed(map: &Map, blocks: &Registry<BlockDef>, c: IVec3) -> bool {
 
 pub fn spawn(
     focus: Res<Focus>,
+    pending: Option<Res<crate::core::save::Pending>>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut commands: Commands,
 ) {
+    // A loaded save hands over what the player carried.
+    let mut inventory = Inventory::default();
+    if let Some(p) = pending {
+        for (slot, saved) in inventory.slots.iter_mut().zip(&p.inventory) {
+            *slot = *saved;
+        }
+        inventory.selected = p.selected.min(crate::inventory::HOTBAR - 1);
+    }
     let image = images.add(figure_texture());
     let (w, h) = (FIGURE.x as f32, FIGURE.y as f32);
     // Feet at the origin; a point `y` texels up is `y / BLOCK_H` blocks nearer the viewer.
@@ -92,7 +101,7 @@ pub fn spawn(
             shown_z: focus.0.z,
             facing: 1.0,
         },
-        Inventory::default(),
+        inventory,
         Mesh2d(meshes.add(mesh)),
         MeshMaterial2d(materials.add(ColorMaterial {
             color: Color::WHITE,
@@ -166,6 +175,23 @@ pub fn place(
     tf.scale = Vec3::new(player.facing, 1.0, 1.0);
     ghost.translation = at;
     ghost.scale = tf.scale;
+}
+
+/// The figure's quad as plain vertex data, for the software canvas: the same corners and
+/// depths as the mesh, mirrored when facing left.
+pub fn figure_faces(facing: f32) -> crate::world::mesh::Faces {
+    let (w, h) = (FIGURE.x as f32 * facing.signum(), FIGURE.y as f32);
+    let top = h / BLOCK_H;
+    crate::world::mesh::Faces {
+        positions: vec![
+            [-w / 2.0, 0.0, 0.0],
+            [w / 2.0, 0.0, 0.0],
+            [w / 2.0, h, top],
+            [-w / 2.0, h, top],
+        ],
+        uvs: vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        colors: vec![[1.0; 4]; 4],
+    }
 }
 
 /// A small outlined figure: head, tunic, legs. Generated so the base pack ships no images.
