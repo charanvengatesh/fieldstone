@@ -36,30 +36,83 @@ pub fn spawn(mut commands: Commands) {
             for i in HOTBAR..SLOTS {
                 let e = spawn_slot(p, i);
                 p.commands().entity(e).observe(
-                    move |_: On<PointerClick>,
+                    move |click: On<PointerClick>,
+                          input: Res<ButtonInput<KeyCode>>,
                           open: Res<OpenContainer>,
                           map: Res<ChunkMap>,
                           objects: Res<Registry<ObjectDef>>,
                           items: Res<Registry<ItemDef>>,
                           mut containers: ResMut<Containers>,
                           mut inv: Single<&mut Inventory, With<Player>>| {
-                        if super::container::push_to_open(
-                            i,
-                            &open,
-                            &map,
-                            &objects,
-                            &items,
-                            &mut containers,
-                            &mut inv,
-                        ) {
+                        let amount = click_amount(&click, &input, inv.slots[i]);
+                        // With a chest open, clicks push into it.
+                        if let Some(cell) = open.0
+                            && let Some(size) = map
+                                .tile(cell)
+                                .and_then(|t| t.object)
+                                .map(|o| objects.at(o).storage)
+                                .filter(|s| *s > 0)
+                        {
+                            let chest = containers.slots_mut(cell, size);
+                            crate::items::inventory::transfer(
+                                &mut inv.slots,
+                                i,
+                                chest,
+                                amount,
+                                &items,
+                            );
                             return;
                         }
                         let sel = inv.selected;
-                        inv.slots.swap(i, sel);
+                        if amount == u32::MAX {
+                            inv.slots.swap(i, sel);
+                        } else {
+                            // Split part of the stack into the first empty slot.
+                            let mut slots = std::mem::take(&mut inv.slots);
+                            let mut dst = vec![None; slots.len()];
+                            // Only empty slots receive the split so nothing merges back.
+                            for (k, s) in slots.iter().enumerate() {
+                                if s.is_some() {
+                                    dst[k] = Some(crate::items::inventory::Stack {
+                                        item: u16::MAX,
+                                        n: u32::MAX,
+                                    });
+                                }
+                            }
+                            let moved = crate::items::inventory::transfer(
+                                &mut slots, i, &mut dst, amount, &items,
+                            );
+                            if moved > 0 {
+                                for (k, d) in dst.into_iter().enumerate() {
+                                    if let Some(st) = d
+                                        && st.item != u16::MAX
+                                    {
+                                        slots[k] = Some(st);
+                                    }
+                                }
+                            }
+                            inv.slots = slots;
+                        }
                     },
                 );
             }
         });
+}
+
+/// Whole stack on a plain click, half with shift, one with the secondary button.
+pub fn click_amount(
+    click: &On<PointerClick>,
+    input: &ButtonInput<KeyCode>,
+    stack: Option<crate::items::inventory::Stack>,
+) -> u32 {
+    let n = stack.map_or(0, |s| s.n);
+    if click.button == bevy::picking::pointer::PointerButton::Secondary {
+        1
+    } else if input.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) {
+        n.div_ceil(2).max(1)
+    } else {
+        u32::MAX
+    }
 }
 
 pub fn toggle(

@@ -98,7 +98,12 @@ pub fn spawn(mut commands: Commands) {
             ))
             .with_children(|p| {
                 for i in 0..HOTBAR {
-                    spawn_slot(p, i);
+                    let e = spawn_slot(p, i);
+                    p.commands().entity(e).observe(
+                        move |_: On<PointerClick>, mut inv: Single<&mut Inventory, With<Player>>| {
+                            inv.selected = i;
+                        },
+                    );
                 }
             });
         });

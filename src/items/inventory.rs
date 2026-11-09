@@ -148,3 +148,118 @@ mod tests {
         assert_eq!(inv.count(0), 1);
     }
 }
+
+/// Moves up to `n` of the stack at `src[i]` into `dst`, topping up matching stacks first and
+/// then filling empty slots. Returns how many moved.
+pub fn transfer(
+    src: &mut [Option<Stack>],
+    i: usize,
+    dst: &mut [Option<Stack>],
+    n: u32,
+    items: &Registry<ItemDef>,
+) -> u32 {
+    let Some(stack) = src.get(i).copied().flatten() else {
+        return 0;
+    };
+    let mut left = n.min(stack.n);
+    let want = left;
+    let max = items.at(stack.item).stack_max;
+    for s in dst.iter_mut().flatten() {
+        if s.item == stack.item && s.n < max && left > 0 {
+            let take = left.min(max - s.n);
+            s.n += take;
+            left -= take;
+        }
+    }
+    for slot in dst.iter_mut() {
+        if left == 0 {
+            break;
+        }
+        if slot.is_none() {
+            let take = left.min(max);
+            *slot = Some(Stack {
+                item: stack.item,
+                n: take,
+            });
+            left -= take;
+        }
+    }
+    let moved = want - left;
+    let remaining = stack.n - moved;
+    src[i] = (remaining > 0).then_some(Stack {
+        item: stack.item,
+        n: remaining,
+    });
+    moved
+}
+
+/// Groups by item, merges stacks up to their max, and packs them to the front.
+pub fn sort_slots(slots: &mut [Option<Stack>], items: &Registry<ItemDef>) {
+    let mut counts: Vec<(u16, u32)> = Vec::new();
+    for s in slots.iter().flatten() {
+        match counts.iter_mut().find(|(id, _)| *id == s.item) {
+            Some(e) => e.1 += s.n,
+            None => counts.push((s.item, s.n)),
+        }
+    }
+    counts.sort_by_key(|(id, _)| *id);
+    let mut out: Vec<Option<Stack>> = Vec::with_capacity(slots.len());
+    for (item, mut n) in counts {
+        let max = items.at(item).stack_max.max(1);
+        while n > 0 && out.len() < slots.len() {
+            let take = n.min(max);
+            out.push(Some(Stack { item, n: take }));
+            n -= take;
+        }
+    }
+    out.resize(slots.len(), None);
+    slots.copy_from_slice(&out);
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+    use crate::core::{ItemDef, Use};
+
+    fn reg() -> Registry<ItemDef> {
+        let mut r = Registry::default();
+        r.insert(ItemDef {
+            id: "log".into(),
+            name: "Log".into(),
+            shape: "log".into(),
+            stack_max: 10,
+            tags: vec![],
+            usage: Use::None,
+        });
+        r
+    }
+
+    #[test]
+    fn half_and_one_move_the_right_amounts() {
+        let items = reg();
+        let mut a = vec![Some(Stack { item: 0, n: 7 }), None];
+        let mut b = vec![None, None];
+        assert_eq!(transfer(&mut a, 0, &mut b, 3, &items), 3);
+        assert_eq!(a[0].unwrap().n, 4);
+        assert_eq!(b[0].unwrap().n, 3);
+        assert_eq!(transfer(&mut a, 0, &mut b, 1, &items), 1);
+        assert_eq!(b[0].unwrap().n, 4);
+        assert_eq!(transfer(&mut a, 0, &mut b, 99, &items), 3);
+        assert!(a[0].is_none());
+    }
+
+    #[test]
+    fn sort_merges_and_packs() {
+        let items = reg();
+        let mut slots = vec![
+            None,
+            Some(Stack { item: 0, n: 6 }),
+            None,
+            Some(Stack { item: 0, n: 6 }),
+        ];
+        sort_slots(&mut slots, &items);
+        assert_eq!(slots[0].unwrap().n, 10);
+        assert_eq!(slots[1].unwrap().n, 2);
+        assert!(slots[2].is_none());
+    }
+}

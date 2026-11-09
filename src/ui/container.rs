@@ -39,9 +39,10 @@ pub fn spawn(mut commands: Commands) {
         ))
         .with_children(|p| {
             for i in 0..MAX_SLOTS {
-                let e = spawn_slot(p, i);
+                let e = spawn_slot_from(p, i, SlotSource::Chest);
                 p.commands().entity(e).insert(ContainerSlot(i)).observe(
-                    move |_: On<PointerClick>,
+                    move |click: On<PointerClick>,
+                          input: Res<ButtonInput<KeyCode>>,
                           open: Res<OpenContainer>,
                           items: Res<Registry<ItemDef>>,
                           mut containers: ResMut<Containers>,
@@ -50,18 +51,59 @@ pub fn spawn(mut commands: Commands) {
                         let Some(slots) = containers.0.get_mut(&cell) else {
                             return;
                         };
-                        let Some(stack) = slots.get(i).copied().flatten() else {
-                            return;
-                        };
-                        let left = inv.add(stack.item, stack.n, &items);
-                        slots[i] = (left > 0).then_some(crate::items::inventory::Stack {
-                            item: stack.item,
-                            n: left,
-                        });
+                        let amount = super::inventory::click_amount(
+                            &click,
+                            &input,
+                            slots.get(i).copied().flatten(),
+                        );
+                        crate::items::inventory::transfer(slots, i, &mut inv.slots, amount, &items);
                     },
                 );
             }
         });
+}
+
+#[derive(Component)]
+pub struct SortButton;
+
+pub fn spawn_sort(mut commands: Commands) {
+    let width = (SLOT + 6.0) * HOTBAR as f32 + 10.0;
+    commands
+        .spawn((
+            SortButton,
+            panel(Node {
+                position_type: PositionType::Absolute,
+                bottom: Val::Px(
+                    12.0 + SLOT + 44.0 + 3.0 * (SLOT + 6.0) + 24.0 + 2.0 * (SLOT + 6.0) + 18.0,
+                ),
+                left: Val::Percent(50.0),
+                margin: UiRect::left(Val::Px(width / 2.0 - 70.0)),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(4.0)),
+                ..default()
+            }),
+            Visibility::Hidden,
+        ))
+        .with_children(|p| {
+            p.spawn((
+                Text::new("Sort chest"),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+            ));
+        })
+        .observe(
+            |_: On<PointerClick>,
+             open: Res<OpenContainer>,
+             items: Res<Registry<ItemDef>>,
+             mut containers: ResMut<Containers>| {
+                if let Some(cell) = open.0
+                    && let Some(slots) = containers.0.get_mut(&cell)
+                {
+                    crate::items::inventory::sort_slots(slots, &items);
+                }
+            },
+        );
 }
 
 pub fn paint(
@@ -76,6 +118,15 @@ pub fn paint(
         (
             With<super::inventory::InventoryPanel>,
             Without<ContainerPanel>,
+            Without<SortButton>,
+        ),
+    >,
+    mut sort_vis: Single<
+        &mut Visibility,
+        (
+            With<SortButton>,
+            Without<ContainerPanel>,
+            Without<super::inventory::InventoryPanel>,
         ),
     >,
     mut painter: SlotPainter,
@@ -83,6 +134,7 @@ pub fn paint(
     let (vis, children) = &mut *panel;
     let Some(cell) = open.0 else {
         **vis = Visibility::Hidden;
+        **sort_vis = Visibility::Hidden;
         return;
     };
     let size = map
@@ -92,9 +144,11 @@ pub fn paint(
         .min(MAX_SLOTS as u32);
     if size == 0 {
         **vis = Visibility::Hidden;
+        **sort_vis = Visibility::Hidden;
         return;
     }
     **vis = Visibility::Visible;
+    **sort_vis = Visibility::Visible;
     **inventory_vis = Visibility::Visible;
     for (slot, mut node) in &mut boxes {
         node.display = if slot.0 < size as usize {
@@ -105,54 +159,4 @@ pub fn paint(
     }
     let slots = containers.slots_mut(cell, size).clone();
     painter.paint(children, &slots, None);
-}
-
-/// Used by the inventory panel: with a chest open, a clicked inventory slot moves into it.
-pub fn push_to_open(
-    index: usize,
-    open: &OpenContainer,
-    map: &ChunkMap,
-    objects: &Registry<ObjectDef>,
-    items: &Registry<ItemDef>,
-    containers: &mut Containers,
-    inv: &mut Inventory,
-) -> bool {
-    let Some(cell) = open.0 else { return false };
-    let size = map
-        .tile(cell)
-        .and_then(|t| t.object)
-        .map_or(0, |o| objects.at(o).storage);
-    if size == 0 {
-        return false;
-    }
-    let Some(stack) = inv.slots.get(index).copied().flatten() else {
-        return true;
-    };
-    let slots = containers.slots_mut(cell, size);
-    let max = items.at(stack.item).stack_max;
-    let mut left = stack.n;
-    for s in slots.iter_mut().flatten() {
-        if s.item == stack.item && s.n < max {
-            let take = left.min(max - s.n);
-            s.n += take;
-            left -= take;
-            if left == 0 {
-                break;
-            }
-        }
-    }
-    if left > 0
-        && let Some(free) = slots.iter().position(|s| s.is_none())
-    {
-        slots[free] = Some(crate::items::inventory::Stack {
-            item: stack.item,
-            n: left,
-        });
-        left = 0;
-    }
-    inv.slots[index] = (left > 0).then_some(crate::items::inventory::Stack {
-        item: stack.item,
-        n: left,
-    });
-    true
 }

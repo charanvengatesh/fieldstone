@@ -20,6 +20,22 @@ pub const BORDER: Color = Color::srgba(1.0, 1.0, 1.0, 0.18);
 pub const SELECTED: Color = Color::srgb(1.0, 0.88, 0.45);
 pub const TEXT_DIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.7);
 
+/// What the pointer rests on, for the tooltip: an item id, or nothing.
+#[derive(Resource, Default)]
+pub struct Tooltip(pub Option<u16>);
+
+#[derive(Component)]
+pub struct TooltipPanel;
+#[derive(Component)]
+pub struct TooltipText;
+
+/// Where a slot's stack lives, so hover and clicks know what they point at.
+#[derive(Component, Clone, Copy)]
+pub enum SlotSource {
+    Inventory,
+    Chest,
+}
+
 /// A slot box showing one inventory index: an icon child and a count child.
 #[derive(Component)]
 pub struct SlotUi(pub usize);
@@ -42,9 +58,18 @@ pub fn panel(node: Node) -> impl Bundle {
 }
 
 pub fn spawn_slot(parent: &mut ChildSpawnerCommands, index: usize) -> Entity {
-    parent
+    spawn_slot_from(parent, index, SlotSource::Inventory)
+}
+
+pub fn spawn_slot_from(
+    parent: &mut ChildSpawnerCommands,
+    index: usize,
+    source: SlotSource,
+) -> Entity {
+    let e = parent
         .spawn((
             SlotUi(index),
+            source,
             Node {
                 width: Val::Px(SLOT),
                 height: Val::Px(SLOT),
@@ -83,7 +108,99 @@ pub fn spawn_slot(parent: &mut ChildSpawnerCommands, index: usize) -> Entity {
                 },
             ));
         })
-        .id()
+        .id();
+    parent
+        .commands()
+        .entity(e)
+        .observe(
+            move |_: On<PointerOver>,
+                  open: Res<crate::items::container::OpenContainer>,
+                  containers: Res<crate::items::container::Containers>,
+                  inv: Single<&crate::items::inventory::Inventory, With<crate::player::Player>>,
+                  mut tip: ResMut<Tooltip>| {
+                let stack = match source {
+                    SlotSource::Inventory => inv.slots.get(index).copied().flatten(),
+                    SlotSource::Chest => open
+                        .0
+                        .and_then(|c| containers.0.get(&c))
+                        .and_then(|s| s.get(index).copied().flatten()),
+                };
+                tip.0 = stack.map(|s| s.item);
+            },
+        )
+        .observe(|_: On<PointerOut>, mut tip: ResMut<Tooltip>| tip.0 = None);
+    e
+}
+
+/// Small panel beside the cursor describing the hovered item.
+pub fn spawn_tooltip(mut commands: Commands) {
+    commands
+        .spawn((
+            TooltipPanel,
+            panel(Node {
+                position_type: PositionType::Absolute,
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                max_width: Val::Px(260.0),
+                ..default()
+            }),
+            Visibility::Hidden,
+            GlobalZIndex(20),
+        ))
+        .with_children(|p| {
+            p.spawn((
+                TooltipText,
+                Text::new(""),
+                TextFont {
+                    font_size: FontSize::Px(13.0),
+                    ..default()
+                },
+            ));
+        });
+}
+
+pub fn tooltip(
+    tip: Res<Tooltip>,
+    items: Res<Registry<ItemDef>>,
+    window: Single<&Window, With<bevy::window::PrimaryWindow>>,
+    mut panel: Single<(&mut Node, &mut Visibility), With<TooltipPanel>>,
+    mut text: Single<&mut Text, With<TooltipText>>,
+) {
+    let (node, vis) = &mut *panel;
+    let Some(item) = tip.0 else {
+        **vis = Visibility::Hidden;
+        return;
+    };
+    let def = items.at(item);
+    let mut lines = vec![def.name.clone()];
+    match &def.usage {
+        crate::core::Use::Eat { hp, stamina, food } => lines.push(format!(
+            "Food +{food:.0}  Health +{hp:.0}  Stamina +{stamina:.0}"
+        )),
+        crate::core::Use::Weapon {
+            damage,
+            range,
+            cooldown,
+            projectile,
+        } => lines.push(format!(
+            "{} damage {damage:.0}, reach {range:.0} cells, {cooldown:.1}s",
+            if projectile.is_some() {
+                "Ranged"
+            } else {
+                "Melee"
+            }
+        )),
+        crate::core::Use::Tool { tag, power } => lines.push(format!("{tag}, power {power}")),
+        crate::core::Use::Place(o) => lines.push(format!("Places {o}")),
+        crate::core::Use::Rod { power } => lines.push(format!("Fishing rod, power {power}")),
+        crate::core::Use::Seed(c) => lines.push(format!("Plants {c}")),
+        crate::core::Use::None => {}
+    }
+    text.0 = lines.join("\n");
+    **vis = Visibility::Visible;
+    if let Some(p) = window.cursor_position() {
+        node.left = Val::Px(p.x + 14.0);
+        node.top = Val::Px(p.y + 14.0);
+    }
 }
 
 /// Everything needed to paint slot boxes. Shared by the hotbar and the inventory panel.
@@ -153,35 +270,39 @@ pub struct UiPlugin;
 
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            Startup,
-            (
-                hud::spawn,
-                inventory::spawn,
-                craft_menu::spawn,
-                container::spawn,
-                pause::spawn,
-            ),
-        )
-        .add_systems(Update, track_hover.before(crate::player::PlayerSet))
-        .add_systems(
-            Update,
-            (
-                hud::update,
-                hud::bars,
-                hud::status,
-                hud::title,
-                hud::toast,
-                hud::ending,
-                hud::debug,
-                inventory::toggle,
-                inventory::paint,
-                container::paint.after(inventory::toggle),
-                craft_menu::toggle,
-                craft_menu::paint,
-                craft_menu::scroll,
-                pause::toggle,
-            ),
-        );
+        app.init_resource::<Tooltip>()
+            .add_systems(
+                Startup,
+                (
+                    hud::spawn,
+                    inventory::spawn,
+                    craft_menu::spawn,
+                    container::spawn,
+                    container::spawn_sort,
+                    pause::spawn,
+                    spawn_tooltip,
+                ),
+            )
+            .add_systems(Update, track_hover.before(crate::player::PlayerSet))
+            .add_systems(
+                Update,
+                (
+                    hud::update,
+                    hud::bars,
+                    hud::status,
+                    hud::title,
+                    hud::toast,
+                    hud::ending,
+                    hud::debug,
+                    inventory::toggle,
+                    inventory::paint,
+                    container::paint.after(inventory::toggle),
+                    craft_menu::toggle,
+                    craft_menu::paint,
+                    craft_menu::scroll,
+                    pause::toggle,
+                    tooltip,
+                ),
+            );
     }
 }
