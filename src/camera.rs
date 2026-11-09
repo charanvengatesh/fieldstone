@@ -25,13 +25,16 @@ pub fn setup(settings: Res<Settings>, mut commands: Commands) {
             ..OrthographicProjection::default_2d()
         })
     };
-    commands.spawn((Camera2d, MainCamera, projection()));
+    // No multisampling: it softens texel edges and lets edge pixels sample the tile next
+    // door in the atlas.
+    commands.spawn((Camera2d, MainCamera, projection(), Msaa::Off));
     // The overlay has its own depth buffer, so what it draws is never hidden by blocks.
     commands.spawn((
         Camera2d,
         MainCamera,
         Overlay,
         projection(),
+        Msaa::Off,
         Camera {
             order: 1,
             clear_color: ClearColorConfig::None,

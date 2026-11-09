@@ -3,7 +3,8 @@
 use bevy::prelude::*;
 
 use super::iso::View;
-use super::mesh::{BlockMaterial, Grid, Palette, chunk_faces};
+use super::mesh::{BlockMaterial, Grid, chunk_faces};
+use super::tiles::Tiles;
 use super::worldgen::WorldGen;
 use super::{CHUNK, Chunk, Focus, Map, chunk_of};
 
@@ -66,13 +67,13 @@ pub fn remesh(
     view: Res<View>,
     grid: Res<Grid>,
     wg: Res<WorldGen>,
-    palette: Option<Res<Palette>>,
+    tiles: Option<Res<Tiles>>,
     material: Option<Res<BlockMaterial>>,
     mut map: ResMut<Map>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    let (Some(palette), Some(material)) = (palette, material) else {
+    let (Some(tiles), Some(material)) = (tiles, material) else {
         return;
     };
     let center = chunk_of(focus.0.floor().as_ivec3());
@@ -84,10 +85,12 @@ pub fn remesh(
         .collect();
     dirty.sort_by_key(|p| (*p - center).length_squared());
     dirty.truncate(MESHES_PER_FRAME);
+    let started = std::time::Instant::now();
+    let count = dirty.len();
     for pos in dirty {
         // Cells outside the loaded area are answered by the generator, so a chunk's border
         // faces are right the first time and loading a neighbour never forces a rebuild.
-        let faces = chunk_faces(pos, *view, grid.0, &palette, |p| {
+        let faces = chunk_faces(pos, *view, grid.0, &tiles, |p| {
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let at = view.project((pos * CHUNK).extend(0).as_vec3());
@@ -111,5 +114,11 @@ pub fn remesh(
             map.entities.insert(pos, e);
         }
         map.chunks.get_mut(&pos).expect("listed above").dirty = false;
+    }
+    if count > 0 {
+        debug!(
+            "meshed {count} chunks in {:.1} ms",
+            started.elapsed().as_secs_f32() * 1000.0
+        );
     }
 }

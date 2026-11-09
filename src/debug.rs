@@ -18,7 +18,8 @@ use crate::interact::Target;
 use crate::inventory::Inventory;
 use crate::player::{Player, figure_faces, figure_texture};
 use crate::world::iso::View;
-use crate::world::mesh::{Faces, Grid, Palette, chunk_faces, edge_texture};
+use crate::world::mesh::{Faces, Grid, LEVELS, chunk_faces, unpack_flags};
+use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CHUNK, Focus, Map};
 
@@ -67,32 +68,29 @@ pub fn screenshot(world: &mut World, name: &str) {
 /// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
 /// Works without a window and whatever the window's state.
 pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, String> {
-    let (pos, shown_z, facing) = world
+    let (pos, shown_z, facing, frame) = world
         .query::<&Player>()
         .iter(world)
         .next()
-        .map(|p| (p.body.pos, p.shown_z, p.facing))
+        .map(|p| (p.body.pos, p.shown_z, p.facing, p.frame))
         .ok_or("no player")?;
     let map = world.resource::<Map>();
     let view = *world.resource::<View>();
     let grid = world.resource::<Grid>().0;
     let wg = world.resource::<WorldGen>();
-    let palette = world.get_resource::<Palette>().ok_or("no palette yet")?;
+    let tiles = world.get_resource::<Tiles>().ok_or("no tiles yet")?;
+    let time = world.resource::<Time>().elapsed_secs();
     let center = view.project(world.resource::<Focus>().0).truncate();
     let mut canvas = Canvas::new(1280, 800, scale, center, Color::srgb_u8(24, 28, 40));
-    let edges = edge_texture();
     for chunk in map.chunks.keys() {
-        let faces = chunk_faces(*chunk, view, grid, palette, |p| {
+        let faces = chunk_faces(*chunk, view, grid, tiles, |p| {
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
-        canvas.draw(
-            view.project((*chunk * CHUNK).extend(0).as_vec3()),
-            &faces,
-            &edges,
-        );
+        let at = view.project((*chunk * CHUNK).extend(0).as_vec3());
+        canvas.draw_blocks(at, &faces, tiles, time);
     }
     let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
-    canvas.draw(at, &figure_faces(facing), &figure_texture());
+    canvas.draw(at, &figure_faces(facing, frame), &figure_texture());
     canvas.save(name)
 }
 
@@ -308,21 +306,106 @@ impl Canvas {
         }
     }
 
-    /// Draws quads whose positions are relative to `offset` (texels in x and y, depth in z).
-    /// `texture` is tightly packed sRGB RGBA; texels with alpha below one half are skipped.
+    /// Draws plain textured quads (texture times vertex colour) whose positions are
+    /// relative to `offset`: texels in x and y, depth in z. Texels with alpha below one
+    /// half are skipped.
     pub fn draw(&mut self, offset: Vec3, faces: &Faces, texture: &Image) {
         let Some(tex) = texture.data.as_ref() else {
             return;
         };
         let (tw, th) = (texture.width() as usize, texture.height() as usize);
+        self.raster(offset, faces, |faces, i, w| {
+            let mix = |f: &dyn Fn(usize) -> f32| (0..3).map(|k| w[k] * f(i[k])).sum::<f32>();
+            let u = mix(&|k| faces.uvs[k][0]).clamp(0.0, 0.9999);
+            let v = mix(&|k| faces.uvs[k][1]).clamp(0.0, 0.9999);
+            let t = ((v * th as f32) as usize * tw + (u * tw as f32) as usize) * 4;
+            if tex[t + 3] < 128 {
+                return None;
+            }
+            let texel = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
+            Some([
+                texel.red * mix(&|k| faces.colors[k][0]),
+                texel.green * mix(&|k| faces.colors[k][1]),
+                texel.blue * mix(&|k| faces.colors[k][2]),
+            ])
+        });
+    }
+
+    /// Draws block faces the way `assets/shaders/block.wgsl` does: light evaluated at each
+    /// texel's centre and banded, outlines from the mask in the vertex alpha, water rows
+    /// slid by `time`. Keep the two in step.
+    pub fn draw_blocks(&mut self, offset: Vec3, faces: &Faces, tiles: &Tiles, time: f32) {
+        let Some(tex) = tiles.image.data.as_ref() else {
+            return;
+        };
+        let size = tiles.size.as_vec2();
+        let tile = TILE as f32;
+        self.raster(offset, faces, |faces, i, w| {
+            let uv_of = |k: usize| Vec2::from(faces.uvs[k]);
+            let uv = uv_of(i[0]) * w[0] + uv_of(i[1]) * w[1] + uv_of(i[2]) * w[2];
+            let px = uv * size;
+            let texel = px.floor().clamp(Vec2::ZERO, size - Vec2::ONE);
+            let cell = (texel / tile).floor() * tile;
+            let local = texel - cell;
+            // Light at the texel's centre: the weights that land on it in this triangle.
+            let (e1, e2) = (uv_of(i[1]) - uv_of(i[0]), uv_of(i[2]) - uv_of(i[0]));
+            let det = e1.perp_dot(e2);
+            let wc = if det.abs() > 1e-14 {
+                let d = (texel + Vec2::splat(0.5)) / size - uv_of(i[0]);
+                let (a, b) = (d.perp_dot(e2) / det, e1.perp_dot(d) / det);
+                [1.0 - a - b, a, b]
+            } else {
+                w
+            };
+            let mut light = Vec3::ZERO;
+            for k in 0..3 {
+                let c = faces.colors[i[k]];
+                light += Vec3::new(c[0], c[1], c[2]) * wc[k];
+            }
+            light = light.max(Vec3::ZERO);
+            let brightness = light.max_element();
+            if brightness > 1e-4 {
+                let banded = (brightness * LEVELS).round().max(1.0) / LEVELS;
+                light *= banded / brightness;
+            }
+            let (mask, water) = unpack_flags(faces.colors[i[0]][3]);
+            let mut sample = local;
+            if water {
+                let slide = ((time * 1.3 + local.y * 0.9).sin() * 1.5 + 0.5).floor();
+                sample.x = (local.x + slide + tile).rem_euclid(tile);
+            }
+            let at = cell + sample;
+            let t = ((at.y as usize) * tiles.size.x as usize + at.x as usize) * 4;
+            let texel_colour = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
+            let mut c = Vec3::new(texel_colour.red, texel_colour.green, texel_colour.blue) * light;
+            let edge = (mask & 1 != 0 && local.y < 0.5)
+                || (mask & 2 != 0 && local.x > tile - 1.5)
+                || (mask & 4 != 0 && local.y > tile - 1.5)
+                || (mask & 8 != 0 && local.x < 0.5);
+            if edge {
+                c *= Vec3::new(0.50, 0.50, 0.58);
+            }
+            Some(c.to_array())
+        });
+    }
+
+    /// Fills every triangle with whatever `shade` returns for a pixel, given the three
+    /// vertex indices and the pixel's weights on them, keeping the nearest result.
+    fn raster(
+        &mut self,
+        offset: Vec3,
+        faces: &Faces,
+        shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 3]>,
+    ) {
+        let (width, height, scale, center) = (self.width, self.height, self.scale, self.center);
         let to_px = |p: [f32; 3]| {
             Vec2::new(
-                (p[0] + offset.x - self.center.x) * self.scale + self.width as f32 / 2.0,
-                self.height as f32 / 2.0 - (p[1] + offset.y - self.center.y) * self.scale,
+                (p[0] + offset.x - center.x) * scale + width as f32 / 2.0,
+                height as f32 / 2.0 - (p[1] + offset.y - center.y) * scale,
             )
         };
         for q in 0..faces.len() {
-            for tri in [[0, 1, 2], [0, 2, 3]] {
+            for tri in faces.triangles(q) {
                 let i = tri.map(|k| q * 4 + k);
                 let p = i.map(|k| to_px(faces.positions[k]));
                 let area = (p[1] - p[0]).perp_dot(p[2] - p[0]);
@@ -334,7 +417,7 @@ impl Canvas {
                     .max(p[1])
                     .max(p[2])
                     .ceil()
-                    .min(Vec2::new(self.width as f32, self.height as f32));
+                    .min(Vec2::new(width as f32, height as f32));
                 for y in lo.y as u32..hi.y as u32 {
                     for x in lo.x as u32..hi.x as u32 {
                         let c = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
@@ -346,43 +429,38 @@ impl Canvas {
                         if w.iter().any(|v| *v < 0.0) {
                             continue;
                         }
-                        let mix =
-                            |f: &dyn Fn(usize) -> f32| (0..3).map(|k| w[k] * f(i[k])).sum::<f32>();
-                        let depth = mix(&|k| faces.positions[k][2]) + offset.z;
-                        let at = (y * self.width + x) as usize;
+                        let depth =
+                            (0..3).map(|k| w[k] * faces.positions[i[k]][2]).sum::<f32>() + offset.z;
+                        let at = (y * width + x) as usize;
                         if depth < self.depth[at] {
                             continue;
                         }
-                        let u = mix(&|k| faces.uvs[k][0]).clamp(0.0, 0.9999);
-                        let v = mix(&|k| faces.uvs[k][1]).clamp(0.0, 0.9999);
-                        let t = ((v * th as f32) as usize * tw + (u * tw as f32) as usize) * 4;
-                        if tex[t + 3] < 128 {
-                            continue;
+                        if let Some(color) = shade(faces, i, w) {
+                            self.depth[at] = depth;
+                            self.color[at] = color;
                         }
-                        let texel = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
-                        self.depth[at] = depth;
-                        self.color[at] = [
-                            texel.red * mix(&|k| faces.colors[k][0]),
-                            texel.green * mix(&|k| faces.colors[k][1]),
-                            texel.blue * mix(&|k| faces.colors[k][2]),
-                        ];
                     }
                 }
             }
         }
     }
 
-    /// Writes `debug/<name>.png`.
-    pub fn save(&self, name: &str) -> Result<PathBuf, String> {
+    /// The picture as an sRGB image. With `cutout`, pixels nothing was drawn on are
+    /// transparent instead of the clear colour.
+    pub fn into_image(self, cutout: bool) -> Image {
         let mut data = Vec::with_capacity(self.color.len() * 4);
-        for c in &self.color {
+        for (c, depth) in self.color.iter().zip(&self.depth) {
             let s = Color::linear_rgb(c[0], c[1], c[2]).to_srgba();
             data.extend(
                 [s.red, s.green, s.blue].map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8),
             );
-            data.push(255);
+            data.push(if cutout && *depth == f32::NEG_INFINITY {
+                0
+            } else {
+                255
+            });
         }
-        let image = Image::new(
+        let mut image = Image::new(
             Extent3d {
                 width: self.width,
                 height: self.height,
@@ -393,14 +471,31 @@ impl Canvas {
             TextureFormat::Rgba8UnormSrgb,
             RenderAssetUsages::default(),
         );
-        let path = dir().join(format!("{}.png", safe_name(name)));
+        image.sampler = bevy::image::ImageSampler::nearest();
         image
+    }
+
+    /// Writes `debug/<name>.png`.
+    pub fn save(self, name: &str) -> Result<PathBuf, String> {
+        let path = dir().join(format!("{}.png", safe_name(name)));
+        self.into_image(false)
             .try_into_dynamic()
             .map_err(|e| e.to_string())?
             .save(&path)
             .map_err(|e| e.to_string())?;
         Ok(path)
     }
+}
+
+/// A block drawn alone as a 32 x 32 cut-out, for item icons: the same faces, tiles and
+/// shading as in the world.
+pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
+    let faces = chunk_faces(IVec2::ZERO, View::default(), false, tiles, |p| {
+        if p == IVec3::ZERO { block } else { 0 }
+    });
+    let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
+    canvas.draw_blocks(Vec3::ZERO, &faces, tiles, 0.0);
+    canvas.into_image(true)
 }
 
 pub struct DebugPlugin;
@@ -417,8 +512,17 @@ mod tests {
 
     #[test]
     fn canvas_keeps_the_nearer_of_two_quads() {
-        let mut texture = crate::world::mesh::edge_texture();
-        texture.data.as_mut().unwrap().fill(255);
+        let texture = Image::new_fill(
+            Extent3d {
+                width: 4,
+                height: 4,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            &[255, 255, 255, 255],
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
         let quad = |depth: f32, color: [f32; 4]| Faces {
             positions: vec![
                 [-4.0, -4.0, depth],
@@ -428,6 +532,7 @@ mod tests {
             ],
             uvs: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
             colors: vec![color; 4],
+            flips: vec![false],
         };
         let mut canvas = Canvas::new(16, 16, 1.0, Vec2::ZERO, Color::BLACK);
         canvas.draw(Vec3::ZERO, &quad(5.0, [1.0, 0.0, 0.0, 1.0]), &texture);
@@ -441,6 +546,67 @@ mod tests {
             &texture,
         );
         assert_eq!(canvas.color[8 * 16 + 8], [0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn block_icons_are_cut_out_cubes() {
+        let mut blocks = Registry::<BlockDef>::default();
+        blocks.insert(BlockDef::air());
+        let b = blocks.insert(ron::from_str(r#"(id: "b", color: (200, 60, 40))"#).unwrap());
+        let tiles = crate::world::tiles::atlas(&blocks, None).1;
+        let icon = block_icon(b, &tiles);
+        let data = icon.data.as_ref().unwrap();
+        let px = |x: usize, y: usize| &data[(y * 32 + x) * 4..(y * 32 + x) * 4 + 4];
+        // Corners are clear; the top face, left face and right face are drawn, each darker.
+        assert_eq!(px(0, 0)[3], 0);
+        assert_eq!(px(31, 31)[3], 0);
+        let (top, left, right) = (px(16, 8), px(8, 22), px(24, 22));
+        assert!(top[3] == 255 && left[3] == 255 && right[3] == 255);
+        assert!(
+            top[0] > left[0] && left[0] > right[0],
+            "{top:?} {left:?} {right:?}"
+        );
+    }
+
+    /// Not a check: writes every base block's icon, enlarged, to `debug/icons.png`.
+    #[test]
+    #[ignore]
+    fn icon_sheet() {
+        let blocks = crate::world::worldgen::tests::base_blocks();
+        let tiles = crate::world::tiles::atlas(&blocks, None).1;
+        let n = blocks.len() as u32 - 1;
+        let scale = 4u32;
+        let mut data = vec![40u8; (n * 32 * scale * 32 * scale * 4) as usize];
+        for b in 1..=n {
+            let icon = block_icon(b as u16, &tiles);
+            let src = icon.data.as_ref().unwrap();
+            for y in 0..32 * scale {
+                for x in 0..32 * scale {
+                    let s = (((y / scale) * 32 + x / scale) * 4) as usize;
+                    if src[s + 3] == 0 {
+                        continue;
+                    }
+                    let d = ((y * n * 32 * scale + (b - 1) * 32 * scale + x) * 4) as usize;
+                    data[d..d + 4].copy_from_slice(&src[s..s + 4]);
+                }
+            }
+        }
+        let sheet = Image::new(
+            Extent3d {
+                width: n * 32 * scale,
+                height: 32 * scale,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        sheet
+            .try_into_dynamic()
+            .unwrap()
+            .save(dir().join("icons.png"))
+            .unwrap();
     }
 
     #[test]

@@ -7,6 +7,7 @@ pub mod noise;
 pub mod physics;
 pub mod stamp;
 pub mod stream;
+pub mod tiles;
 pub mod worldgen;
 
 use bevy::platform::collections::HashMap;
@@ -91,16 +92,17 @@ impl Map {
         chunk.blocks[i] = id;
         chunk.dirty = true;
         chunk.modified = true;
-        // A block on a chunk border changes the faces and outlines of the chunk beside it.
-        let l = p.truncate().rem_euclid(IVec2::splat(CHUNK));
-        for (on_edge, d) in [
-            (l.x == 0, IVec2::NEG_X),
-            (l.x == CHUNK - 1, IVec2::X),
-            (l.y == 0, IVec2::NEG_Y),
-            (l.y == CHUNK - 1, IVec2::Y),
-        ] {
-            if on_edge && let Some(n) = self.chunks.get_mut(&(c + d)) {
-                n.dirty = true;
+        // A block changes the light on faces up to `LIGHT_REACH` away, which may be in the
+        // chunks beside this one.
+        let r = mesh::LIGHT_REACH;
+        for dy in [-r, 0, r] {
+            for dx in [-r, 0, r] {
+                let n = chunk_of(p + IVec3::new(dx, dy, 0));
+                if n != c
+                    && let Some(chunk) = self.chunks.get_mut(&n)
+                {
+                    chunk.dirty = true;
+                }
             }
         }
         true
@@ -129,7 +131,12 @@ impl Plugin for WorldPlugin {
             .add_systems(Startup, mesh::setup)
             .add_systems(
                 Update,
-                (stream::stream, stream::view_changed, stream::remesh)
+                (
+                    mesh::tick,
+                    stream::stream,
+                    stream::view_changed,
+                    stream::remesh,
+                )
                     .chain()
                     .in_set(WorldSet),
             );

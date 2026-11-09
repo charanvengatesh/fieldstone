@@ -15,6 +15,7 @@ use crate::interact::Target;
 use crate::inventory::{HOTBAR, Inventory, SLOTS, Stack, transfer};
 use crate::player::Player;
 use crate::world::Map;
+use crate::world::tiles::Tiles;
 
 const SLOT: f32 = 46.0;
 const ICON: f32 = 34.0;
@@ -27,9 +28,10 @@ const SELECTED: Color = Color::srgb(1.0, 0.88, 0.45);
 const TEXT_DIM: Color = Color::srgba(1.0, 1.0, 1.0, 0.7);
 const BAR_W: f32 = (SLOT + GAP) * HOTBAR as f32 + 10.0;
 
-/// The cube every item icon is tinted from.
+/// One icon per item, by item index. Blocks are drawn from their own tiles; anything else
+/// is a plain cube tinted with the item's colour.
 #[derive(Resource)]
-pub struct Icon(pub Handle<Image>);
+pub struct Icons(pub Vec<(Handle<Image>, Color)>);
 
 /// The item the pointer rests on, for the tooltip.
 #[derive(Resource, Default)]
@@ -143,8 +145,34 @@ fn spawn_slot(parent: &mut ChildSpawnerCommands, index: usize) -> Entity {
     e
 }
 
-fn spawn(mut images: ResMut<Assets<Image>>, mut commands: Commands) {
-    commands.insert_resource(Icon(images.add(cube_icon())));
+/// Builds the icons once the tile atlas exists.
+fn build_icons(
+    tiles: Res<Tiles>,
+    items: Res<Registry<ItemDef>>,
+    blocks: Res<Registry<BlockDef>>,
+    mut images: ResMut<Assets<Image>>,
+    mut commands: Commands,
+) {
+    let plain = images.add(cube_icon());
+    let icons = items
+        .iter()
+        .map(
+            |(_, item)| match item.places.as_deref().and_then(|id| blocks.idx(id)) {
+                Some(block) => (
+                    images.add(crate::debug::block_icon(block, &tiles)),
+                    Color::WHITE,
+                ),
+                None => (
+                    plain.clone(),
+                    Color::srgb_u8(item.color[0], item.color[1], item.color[2]),
+                ),
+            },
+        )
+        .collect();
+    commands.insert_resource(Icons(icons));
+}
+
+fn spawn(mut commands: Commands) {
     // Hotbar with the held item's name above it.
     commands
         .spawn(Node {
@@ -355,8 +383,7 @@ pub fn split(slots: &mut [Option<Stack>], i: usize, amount: u32, items: &Registr
 /// Everything needed to paint slot boxes. Shared by the hotbar and the inventory panel.
 #[derive(SystemParam)]
 struct SlotPainter<'w, 's> {
-    items: Res<'w, Registry<ItemDef>>,
-    icon: Res<'w, Icon>,
+    icons: Res<'w, Icons>,
     boxes: Query<'w, 's, (&'static SlotUi, &'static mut BorderColor, &'static Children)>,
     swatches: Query<'w, 's, &'static mut ImageNode, With<Swatch>>,
     counts: Query<'w, 's, &'static mut Text, (With<Count>, Without<HeldName>)>,
@@ -376,11 +403,10 @@ impl SlotPainter<'_, '_> {
             });
             for kid in kids {
                 if let Ok(mut img) = self.swatches.get_mut(*kid) {
-                    match stack {
-                        Some(s) => {
-                            let c = self.items.at(s.item).color;
-                            img.image = self.icon.0.clone();
-                            img.color = Color::srgb_u8(c[0], c[1], c[2]);
+                    match stack.and_then(|s| self.icons.0.get(s.item as usize)) {
+                        Some((image, tint)) => {
+                            img.image = image.clone();
+                            img.color = *tint;
                         }
                         None => img.color = Color::NONE,
                     }
@@ -583,7 +609,10 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Tooltip>()
-            .add_systems(Startup, spawn)
+            .add_systems(
+                Startup,
+                (spawn, build_icons.after(crate::world::mesh::setup)),
+            )
             .add_systems(Update, track_hover.before(crate::player::PlayerSet))
             .add_systems(Update, (toggles, paint, texts, tooltip));
     }

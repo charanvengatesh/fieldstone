@@ -25,13 +25,38 @@ next load, with a warning in the log; nothing else is lost.
 ## Blocks
 
 ```ron
-(id: "crystal", name: "Crystal", color: (176, 132, 240), top: Some((214, 190, 255)), hp: 0.8)
+(id: "crystal", name: "Crystal", color: (170, 126, 236), top: Some((208, 182, 255)),
+    pattern: Bricks, accent: Some((232, 214, 255)), glow: 0.85, hp: 0.8)
 ```
 
-`color` is the whole art: the engine shades a lit top, a mid left face and a dark right face.
-`top` overrides the top face. Other fields: `solid`, `walkable` (false for water: nothing
-stands on or over it until something is built there), `hp` (seconds to break), `breakable`,
-`drops` (an item id; the block itself when absent), `item` (false to make no item).
+A block's art is two 16 x 16 tiles, one for the top and one for the sides. The engine draws
+them from `color`, `top` (top face, when it differs) and `accent` (a second colour) using
+`pattern`:
+
+| Pattern | Looks like |
+|---------|-----------|
+| `Grain` (default) | loose speckle: dirt, gravel |
+| `Smooth` | one flat colour |
+| `Stone` | quiet blotches and flecks |
+| `Sand` | fine speckle with ripples |
+| `Snow` | near white with sparse cool shade |
+| `Grass` | tufted `top`; sides are `color` soil with a ragged lip of `top` |
+| `Leaves` | clumps with dark gaps |
+| `Log` | bark on the sides, rings in `top` on the ends |
+| `Planks` | boards with seams |
+| `Bricks` | courses with `accent` mortar |
+| `Ore` | stone with nuggets of `accent` |
+| `Water` | wave dashes; the shader makes them move |
+
+To draw your own instead, put PNGs in the pack: `textures/<id>_top.png` and
+`textures/<id>_side.png`, or one `textures/<id>.png` for both. Each is 16 x 16, drawn the
+usual way up.
+
+Other fields: `glow` (0..1, the least brightness the block ever has, so it stays lit in
+shadow), `solid`, `walkable` (false for water: nothing stands on or over it until something
+is built there), `hp` (seconds to break), `breakable`, `drops` (an item id; the block itself
+when absent), `item` (false to make no item). Blocks with the same `color` and `top` are one
+family and get no outline between them, which is how ore sits cleanly in stone.
 
 ## Stamps and features
 
@@ -92,6 +117,7 @@ Scripts run in a sandbox: `table`, `string`, `math` and `utf8` only. There is no
 
 ## The two mods in this folder
 
-- `example-crystal/` is a complete small mod to copy: two blocks, one feature rule, one script.
+- `example-crystal/` is a complete small mod to copy: two blocks (an ore and a glowing
+  crystal), one feature rule, one script.
 - `debug/` is a probe: F9 saves a window screenshot, a software snapshot and a text dump for
   bug reports. See its README.

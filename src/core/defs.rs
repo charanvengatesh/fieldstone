@@ -45,8 +45,39 @@ pub struct PackDef {
     pub scripts: Vec<String>,
 }
 
-/// `blocks.ron`: one kind of cube. Art is generated from `color`: a lit top, a mid left face
-/// and a dark right face.
+/// How a block's 16 x 16 pixel-art tiles are drawn from its colours.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Pattern {
+    /// Loose speckle: dirt, gravel.
+    #[default]
+    Grain,
+    /// One flat colour.
+    Smooth,
+    /// Blotches and a few cracks.
+    Stone,
+    /// Fine speckle with ripples.
+    Sand,
+    /// Near white with sparse cool shade.
+    Snow,
+    /// Tufted top in the `top` colour; sides are soil with a ragged lip of it.
+    Grass,
+    /// Clumps with dark gaps.
+    Leaves,
+    /// Bark on the sides, rings in the `top` colour on the ends.
+    Log,
+    /// Boards with seams.
+    Planks,
+    /// Courses with mortar in the `accent` colour.
+    Bricks,
+    /// Stone with clusters of the `accent` colour.
+    Ore,
+    /// Wave dashes; the shader makes them move.
+    Water,
+}
+
+/// `blocks.ron`: one kind of cube. Its tiles are generated from `color`, `top` and `accent`
+/// by `pattern`, unless a pack ships `textures/<id>_top.png` and `textures/<id>_side.png`
+/// (or one `textures/<id>.png` for both), each 16 x 16.
 #[derive(Deserialize, Debug, Clone)]
 pub struct BlockDef {
     pub id: String,
@@ -57,6 +88,14 @@ pub struct BlockDef {
     /// Colour of the top face when it differs from the sides (grass over dirt).
     #[serde(default)]
     pub top: Option<Rgb>,
+    /// A second colour some patterns use: ore specks, mortar.
+    #[serde(default)]
+    pub accent: Option<Rgb>,
+    #[serde(default)]
+    pub pattern: Pattern,
+    /// Minimum brightness 0..1 whatever the shade: crystals and lamps stay lit in shadow.
+    #[serde(default)]
+    pub glow: f32,
     /// Blocks movement and can be stood on.
     #[serde(default = "yes")]
     pub solid: bool,
@@ -92,6 +131,9 @@ impl BlockDef {
             name: "Air".into(),
             color: [0, 0, 0],
             top: None,
+            accent: None,
+            pattern: Pattern::Smooth,
+            glow: 0.0,
             solid: false,
             walkable: true,
             hp: 0.0,

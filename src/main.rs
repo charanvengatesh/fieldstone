@@ -73,7 +73,8 @@ fn main() {
         ))
         .init_asset::<Mesh>()
         .init_asset::<ColorMaterial>()
-        .init_asset::<Image>();
+        .init_asset::<Image>()
+        .init_asset::<world::mesh::BlockArt>();
     } else {
         app.add_plugins(
             DefaultPlugins
@@ -120,15 +121,20 @@ fn main() {
                 ),
             );
     } else {
-        app.add_plugins((camera::CameraPlugin, debug::DebugPlugin, ui::UiPlugin))
-            .add_systems(Startup, interact::spawn_highlight)
-            .add_systems(
-                Update,
-                (
-                    interact::track_cursor.before(interact::InteractSet),
-                    interact::show_highlight.after(interact::InteractSet),
-                ),
-            );
+        app.add_plugins((
+            bevy::sprite_render::Material2dPlugin::<world::mesh::BlockArt>::default(),
+            camera::CameraPlugin,
+            debug::DebugPlugin,
+            ui::UiPlugin,
+        ))
+        .add_systems(Startup, interact::spawn_highlight)
+        .add_systems(
+            Update,
+            (
+                interact::track_cursor.before(interact::InteractSet),
+                interact::show_highlight.after(interact::InteractSet),
+            ),
+        );
     }
     app.run();
 }

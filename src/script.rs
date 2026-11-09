@@ -348,7 +348,6 @@ impl Plugin for ScriptPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::physics::Body;
     use crate::world::{Chunk, empty_blocks};
 
     /// A world with one empty chunk, a stone block kind, and a player.
@@ -375,14 +374,7 @@ mod tests {
         world.init_resource::<Time>();
         world.init_resource::<ButtonInput<KeyCode>>();
         world.init_resource::<ScriptEvents>();
-        world.spawn((
-            Player {
-                body: Body::at(Vec3::new(1.5, 2.5, 3.0)),
-                shown_z: 3.0,
-                facing: 1.0,
-            },
-            Inventory::default(),
-        ));
+        world.spawn((Player::at(Vec3::new(1.5, 2.5, 3.0)), Inventory::default()));
         world.insert_non_send(Vm::new(
             scripts
                 .iter()

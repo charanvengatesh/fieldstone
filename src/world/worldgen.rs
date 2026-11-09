@@ -443,3 +443,30 @@ pub mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod scout {
+    use super::tests::base_gen;
+    use super::*;
+
+    /// Not a check: prints which seeds start near water, for picking snapshot seeds.
+    #[test]
+    #[ignore]
+    fn seeds_near_water() {
+        for seed in 1..60 {
+            let (wg, blocks) = base_gen(seed);
+            let water = blocks.idx("water").unwrap();
+            let s = wg.spawn().floor().as_ivec3();
+            let near = (1..14).find(|r| {
+                (-*r..=*r).any(|d| {
+                    [(d, -*r), (d, *r), (-*r, d), (*r, d)]
+                        .iter()
+                        .any(|(dx, dy)| wg.block(IVec3::new(s.x + dx, s.y + dy, wg.sea)) == water)
+                })
+            });
+            if let Some(r) = near {
+                println!("seed {seed}: water {r} blocks from spawn {s}");
+            }
+        }
+    }
+}

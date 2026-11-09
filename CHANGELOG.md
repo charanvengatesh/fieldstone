@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.7.1
+
+The art pass: pixel-art blocks, real lighting, a block shader.
+
+### New
+- Every block has two generated 16 x 16 pixel-art tiles (top and sides) drawn from its
+  colours by a `pattern`: grass with a ragged lip over soil, bark and growth rings, blotchy
+  stone, ore nuggets, rippled sand, leaves, waves. Colours come from hue-shifted ramps:
+  shadows lean cool, highlights warm. Tiles turn and mirror from block to block so they do
+  not repeat as a grid.
+- A pack can replace any tile with `textures/<id>_top.png` and `textures/<id>_side.png`.
+- Lighting: ambient occlusion darkens creases and corners, blocks cast shadows away from the
+  sun, shade is tinted cool and sunlight warm. `glow` keeps a block bright in shadow.
+- `assets/shaders/block.wgsl`: light is evaluated at each texel's centre and quantised into
+  bands, so shading stays pixel art instead of smooth gradients; outlines darken whole
+  texels; water rows slide and glint.
+- The player is a shaded two-frame figure that dims under trees and has a soft shadow on
+  the ground.
+- Item icons are drawn from each block's own tiles.
+
+### Changed
+- No outline is drawn between blocks of the same colour family, so ore sits in stone
+  without a grid around it.
+- Software snapshots mirror the shader, so `--snapshot` and F9's `-soft` picture show the
+  same lighting as the game.
+- Fewer boulders.
+
 ## 0.7.0
 
 A rebuild. The top-down survival game is retired to tag `v0.6.1`; this release is a small

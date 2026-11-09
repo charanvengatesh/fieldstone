@@ -14,13 +14,16 @@ use crate::core::settings::Keys;
 use crate::core::{BlockDef, Registry};
 use crate::inventory::Inventory;
 use crate::world::iso::{BLOCK_H, View};
+use crate::world::mesh::{sunlit, tint};
 use crate::world::physics::{Body, step};
 use crate::world::{AIR, Focus, HEIGHT, Map};
 
 /// Blocks per second.
 const SPEED: f32 = 4.5;
-/// Texels across and up the figure.
+/// Texels across and up one frame of the figure.
 pub const FIGURE: UVec2 = UVec2::new(16, 28);
+/// Frames in the figure strip.
+pub const FRAMES: usize = 2;
 /// How far in front of its true depth the figure is drawn, so its feet never fight the
 /// ground they stand on.
 const DEPTH_BIAS: f32 = 0.05;
@@ -34,7 +37,37 @@ pub struct Player {
     pub shown_z: f32,
     /// -1 or 1: which way the figure faces on screen.
     pub facing: f32,
+    /// Distance walked, which drives the two-frame stride.
+    pub stride: f32,
+    /// Which frame of the figure is showing: 0 standing, 1 mid-step.
+    pub frame: usize,
+    /// Brightness the figure is drawn at; eases between sun and shade.
+    pub lit: f32,
 }
+
+impl Player {
+    pub fn at(pos: Vec3) -> Self {
+        Self {
+            body: Body::at(pos),
+            shown_z: pos.z,
+            facing: 1.0,
+            stride: 0.0,
+            frame: 0,
+            lit: 1.0,
+        }
+    }
+}
+
+/// The soft dark patch on the ground under the player.
+#[derive(Component)]
+pub struct GroundShadow;
+
+/// How wide the ground shadow is, in blocks.
+const SHADOW_RADIUS: f32 = 0.34;
+/// Brightness of the figure in cast shadow.
+const SHADED: f32 = 0.66;
+/// Blocks walked per frame of the stride.
+const STEP: f32 = 0.42;
 
 /// A faint copy of the figure drawn over everything, so the player stays findable behind
 /// terrain.
@@ -55,6 +88,15 @@ pub fn closed(map: &Map, blocks: &Registry<BlockDef>, c: IVec3) -> bool {
         }
     }
     false
+}
+
+/// Texture coordinates of the figure quad for one frame of the strip.
+fn frame_uvs(frame: usize) -> Vec<[f32; 2]> {
+    let (u0, u1) = (
+        frame as f32 / FRAMES as f32,
+        (frame + 1) as f32 / FRAMES as f32,
+    );
+    vec![[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]]
 }
 
 pub fn spawn(
@@ -90,17 +132,10 @@ pub fn spawn(
             [-w / 2.0, h, top],
         ],
     )
-    .with_inserted_attribute(
-        Mesh::ATTRIBUTE_UV_0,
-        vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
-    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(0))
     .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     commands.spawn((
-        Player {
-            body: Body::at(focus.0),
-            shown_z: focus.0.z,
-            facing: 1.0,
-        },
+        Player::at(focus.0),
         inventory,
         Mesh2d(meshes.add(mesh)),
         MeshMaterial2d(materials.add(ColorMaterial {
@@ -116,10 +151,29 @@ pub fn spawn(
         Sprite {
             image,
             color: Color::srgba(1.0, 1.0, 1.0, 0.3),
+            rect: Some(Rect::new(0.0, 0.0, w, h)),
             ..default()
         },
         Anchor::BOTTOM_CENTER,
         RenderLayers::layer(OVERLAY_LAYER),
+        Transform::default(),
+    ));
+    // An eight-sided patch lying on the ground; its corners are set by `place`.
+    let ring: Vec<u32> = (1..=8).flat_map(|i| [0, i, i % 8 + 1]).collect();
+    let patch = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 9])
+    .with_inserted_indices(Indices::U32(ring));
+    commands.spawn((
+        GroundShadow,
+        Mesh2d(meshes.add(patch)),
+        MeshMaterial2d(materials.add(ColorMaterial {
+            color: Color::srgba(0.02, 0.02, 0.06, 0.34),
+            alpha_mode: AlphaMode2d::Blend,
+            ..default()
+        })),
         Transform::default(),
     ));
 }
@@ -150,9 +204,17 @@ pub fn movement(
         return;
     }
     let wish = view.ground_dir(screen) * SPEED;
+    let before = player.body.pos;
     step(&mut player.body, wish, time.delta_secs(), &|c| {
         closed(&map, &blocks, c)
     });
+    let walked = (player.body.pos - before).truncate().length();
+    if walked > 1e-4 && player.body.grounded {
+        player.stride += walked;
+        player.frame = (player.stride / STEP) as usize % FRAMES;
+    } else {
+        player.frame = 0;
+    }
     let target = player.body.pos.z;
     let ease = (time.delta_secs() * 18.0).min(1.0);
     player.shown_z += (target - player.shown_z) * ease;
@@ -162,24 +224,93 @@ pub fn movement(
     focus.0 = player.body.pos.with_z(player.shown_z);
 }
 
-/// Puts the figure and its ghost where the body is.
+/// Puts the figure, its ghost and its ground shadow where the body is, shows the right
+/// frame of the stride, and dims the figure when something stands between it and the sun.
 pub fn place(
+    time: Res<Time>,
     view: Res<View>,
-    player: Single<(&Player, &mut Transform), Without<Ghost>>,
-    mut ghost: Single<&mut Transform, With<Ghost>>,
+    map: Res<Map>,
+    blocks: Res<Registry<BlockDef>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut shown: Local<(Option<View>, usize)>,
+    mut player: Single<(
+        &mut Player,
+        &mut Transform,
+        &Mesh2d,
+        &MeshMaterial2d<ColorMaterial>,
+    )>,
+    mut ghost: Single<(&mut Transform, &mut Sprite), (With<Ghost>, Without<Player>)>,
+    mut shadow: Single<
+        (&mut Transform, &Mesh2d),
+        (With<GroundShadow>, Without<Player>, Without<Ghost>),
+    >,
 ) {
-    let (player, mut tf) = player.into_inner();
-    let mut at = view.project(player.body.pos.with_z(player.shown_z));
+    let (player, tf, mesh, material) = &mut *player;
+    let pos = player.body.pos.with_z(player.shown_z);
+    let mut at = view.project(pos);
     at.z += DEPTH_BIAS;
     tf.translation = at;
     tf.scale = Vec3::new(player.facing, 1.0, 1.0);
-    ghost.translation = at;
-    ghost.scale = tf.scale;
+    let (ghost_tf, ghost_sprite) = &mut *ghost;
+    ghost_tf.translation = at;
+    ghost_tf.scale = tf.scale;
+
+    // The stride frame.
+    if shown.1 != player.frame {
+        shown.1 = player.frame;
+        if let Some(mut m) = meshes.get_mut(&mesh.0) {
+            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(player.frame));
+        }
+        let (w, h) = (FIGURE.x as f32, FIGURE.y as f32);
+        let x = player.frame as f32 * w;
+        ghost_sprite.rect = Some(Rect::new(x, 0.0, x + w, h));
+    }
+
+    // Light: sampled at chest height, eased so walking under a tree fades.
+    let solid = |c: IVec3| {
+        let b = map.block(c);
+        b != AIR && blocks.at(b).solid && blocks.at(b).walkable
+    };
+    let target = if sunlit(pos + Vec3::Z * 0.9, *view, solid) {
+        1.0
+    } else {
+        SHADED
+    };
+    let before = player.lit;
+    player.lit += (target - player.lit) * (time.delta_secs() * 8.0).min(1.0);
+    if (player.lit - before).abs() > 1e-3
+        && let Some(mut m) = materials.get_mut(&material.0)
+    {
+        let c = tint(player.lit);
+        m.color = Color::linear_rgb(c[0], c[1], c[2]);
+    }
+
+    // The ground shadow lies on the first closed cell under the feet.
+    let feet = player.body.pos.floor().as_ivec3();
+    let ground = (0..8)
+        .map(|d| feet.z - d)
+        .find(|z| closed(&map, &blocks, IVec3::new(feet.x, feet.y, z - 1)))
+        .unwrap_or(feet.z) as f32;
+    let (shadow_tf, shadow_mesh) = &mut *shadow;
+    shadow_tf.translation = view.project(pos.with_z(ground)) + Vec3::Z * 0.03;
+    if shown.0 != Some(*view) {
+        shown.0 = Some(*view);
+        if let Some(mut m) = meshes.get_mut(&shadow_mesh.0) {
+            let mut ring = vec![[0.0f32; 3]];
+            for i in 0..8 {
+                let a = i as f32 * std::f32::consts::TAU / 8.0;
+                let offset = Vec3::new(a.cos(), a.sin(), 0.0) * SHADOW_RADIUS;
+                ring.push(view.project(offset).to_array());
+            }
+            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, ring);
+        }
+    }
 }
 
 /// The figure's quad as plain vertex data, for the software canvas: the same corners and
 /// depths as the mesh, mirrored when facing left.
-pub fn figure_faces(facing: f32) -> crate::world::mesh::Faces {
+pub fn figure_faces(facing: f32, frame: usize) -> crate::world::mesh::Faces {
     let (w, h) = (FIGURE.x as f32 * facing.signum(), FIGURE.y as f32);
     let top = h / BLOCK_H;
     crate::world::mesh::Faces {
@@ -189,37 +320,73 @@ pub fn figure_faces(facing: f32) -> crate::world::mesh::Faces {
             [w / 2.0, h, top],
             [-w / 2.0, h, top],
         ],
-        uvs: vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+        uvs: frame_uvs(frame),
         colors: vec![[1.0; 4]; 4],
+        flips: vec![false],
     }
 }
 
-/// A small outlined figure: head, tunic, legs. Generated so the base pack ships no images.
+/// The figure as a strip of [`FRAMES`] frames: standing, then mid-step. Drawn here so the
+/// base pack ships no images: hair, face, a tunic lit from the left, belt, trousers, boots,
+/// and one texel of ink around the lot.
 pub fn figure_texture() -> Image {
-    const SKIN: [u8; 4] = [232, 190, 150, 255];
-    const HAIR: [u8; 4] = [84, 56, 36, 255];
-    const TUNIC: [u8; 4] = [58, 110, 190, 255];
-    const TUNIC_DARK: [u8; 4] = [42, 82, 150, 255];
-    const LEGS: [u8; 4] = [70, 62, 84, 255];
-    const INK: [u8; 4] = [26, 24, 34, 255];
-    let (w, h) = (FIGURE.x as i32, FIGURE.y as i32);
+    const HAIR: [u8; 4] = [78, 50, 34, 255];
+    const SKIN: [u8; 4] = [236, 192, 150, 255];
+    const SKIN_DARK: [u8; 4] = [198, 148, 118, 255];
+    const TUNIC: [u8; 4] = [62, 116, 198, 255];
+    const TUNIC_LIGHT: [u8; 4] = [104, 156, 226, 255];
+    const TUNIC_DARK: [u8; 4] = [44, 78, 152, 255];
+    const BELT: [u8; 4] = [92, 62, 40, 255];
+    const LEGS: [u8; 4] = [84, 76, 104, 255];
+    const LEGS_DARK: [u8; 4] = [60, 54, 82, 255];
+    const BOOT: [u8; 4] = [52, 40, 38, 255];
+    const EYE: [u8; 4] = [40, 34, 48, 255];
+    const INK: [u8; 4] = [26, 24, 36, 255];
+    let (fw, h) = (FIGURE.x as i32, FIGURE.y as i32);
+    let w = fw * FRAMES as i32;
     let mut px = vec![[0u8; 4]; (w * h) as usize];
-    let mut rect = |x0: i32, y0: i32, x1: i32, y1: i32, c: [u8; 4]| {
-        for y in y0..y1 {
-            for x in x0..x1 {
-                px[(y * w + x) as usize] = c;
+    for frame in 0..FRAMES as i32 {
+        let ox = frame * fw;
+        let mut rect = |x0: i32, y0: i32, x1: i32, y1: i32, c: [u8; 4]| {
+            for y in y0.max(0)..y1.min(h) {
+                for x in x0.max(0)..x1.min(fw) {
+                    px[(y * w + ox + x) as usize] = c;
+                }
             }
+        };
+        let stepping = frame == 1;
+        // Head, facing right: hair over the crown and down the back.
+        rect(5, 1, 11, 4, HAIR);
+        rect(5, 4, 7, 7, HAIR);
+        rect(7, 4, 11, 9, SKIN);
+        rect(6, 7, 7, 9, SKIN_DARK);
+        rect(9, 6, 10, 7, EYE);
+        rect(7, 9, 10, 10, SKIN_DARK);
+        // Tunic: lit on the left, shaded on the right, belted.
+        rect(4, 10, 12, 19, TUNIC);
+        rect(4, 10, 6, 15, TUNIC_LIGHT);
+        rect(10, 10, 12, 19, TUNIC_DARK);
+        rect(4, 17, 12, 18, BELT);
+        // Arms swing against the legs when stepping.
+        let swing = if stepping { 1 } else { 0 };
+        rect(2, 11 - swing, 4, 17 - swing, TUNIC_LIGHT);
+        rect(2, 17 - swing, 4, 19 - swing, SKIN);
+        rect(12, 11 + swing, 14, 17 + swing, TUNIC_DARK);
+        rect(12, 17 + swing, 14, 19 + swing, SKIN_DARK);
+        // Legs and boots: together when standing, apart mid-step.
+        if stepping {
+            rect(4, 19, 7, 25, LEGS);
+            rect(3, 25, 7, 27, BOOT);
+            rect(10, 19, 13, 26, LEGS_DARK);
+            rect(10, 26, 14, 28, BOOT);
+        } else {
+            rect(5, 19, 8, 26, LEGS);
+            rect(9, 19, 12, 26, LEGS_DARK);
+            rect(4, 26, 8, 28, BOOT);
+            rect(9, 26, 13, 28, BOOT);
         }
-    };
-    rect(5, 1, 11, 4, HAIR);
-    rect(5, 4, 11, 9, SKIN);
-    rect(4, 9, 12, 19, TUNIC);
-    rect(9, 9, 12, 19, TUNIC_DARK);
-    rect(2, 10, 4, 17, TUNIC);
-    rect(12, 10, 14, 17, TUNIC_DARK);
-    rect(5, 19, 8, 27, LEGS);
-    rect(9, 19, 12, 27, LEGS);
-    // One texel of ink around everything that was drawn.
+    }
+    // One texel of ink around everything that was drawn, within each frame.
     let filled: Vec<bool> = px.iter().map(|p| p[3] != 0).collect();
     for y in 0..h {
         for x in 0..w {
@@ -228,7 +395,13 @@ pub fn figure_texture() -> Image {
             }
             let touches = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| {
                 let (nx, ny) = (x + dx, y + dy);
-                nx >= 0 && ny >= 0 && nx < w && ny < h && filled[(ny * w + nx) as usize]
+                // Ink never crosses from one frame into the next.
+                nx >= 0
+                    && ny >= 0
+                    && nx < w
+                    && ny < h
+                    && nx / fw == x / fw
+                    && filled[(ny * w + nx) as usize]
             });
             if touches {
                 px[(y * w + x) as usize] = INK;
@@ -237,8 +410,8 @@ pub fn figure_texture() -> Image {
     }
     let mut img = Image::new(
         Extent3d {
-            width: FIGURE.x,
-            height: FIGURE.y,
+            width: w as u32,
+            height: h as u32,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
@@ -310,7 +483,8 @@ mod tests {
         let img = figure_texture();
         let data = img.data.as_ref().unwrap();
         let opaque = data.chunks(4).filter(|p| p[3] == 255).count();
-        assert!(opaque > 150 && opaque < (FIGURE.x * FIGURE.y) as usize);
+        assert!(opaque > 300 && opaque < (FIGURE.x * FIGURE.y) as usize * FRAMES);
+        assert_eq!(img.width(), FIGURE.x * FRAMES as u32);
         // The corners stay transparent.
         assert_eq!(data[3], 0);
     }

@@ -67,6 +67,11 @@ impl View {
         self.unturn(Vec3::new((sum + diff) / 2.0, (sum - diff) / 2.0, z))
     }
 
+    /// A direction given relative to the view, in world space.
+    pub fn to_world(self, v: Vec3) -> Vec3 {
+        self.unturn(v)
+    }
+
     /// World direction from any point straight toward the viewer.
     pub fn toward_viewer(self) -> Vec3 {
         self.unturn(Vec3::ONE)

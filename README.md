@@ -34,7 +34,7 @@ A one-block hole hides its own floor behind its near walls. To fill it, click th
 cargo run                        # first build compiles Bevy and takes a few minutes
 cargo run -- --new               # ignore the save and start a fresh world
 cargo run -- --seed 42           # fix the world seed
-cargo test                       # 48 unit tests
+cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
                                  #   options: --scale N  --rot 0..3  --grid
@@ -50,8 +50,12 @@ cargo build --release
   function of the seed and its position, so chunks generate in any order and a save stores
   only chunks that were edited.
 - **Meshing.** One mesh per chunk with only the faces that look at the camera and touch
-  air. Colour is per vertex from the block's one colour; outlines come from a tiny generated
-  texture chosen per face edge.
+  air. Colour comes from a tile atlas; the vertex colour carries light.
+- **Art.** Each block's two 16 x 16 tiles are generated from its colours by a pattern
+  (`src/world/tiles.rs`), or read from PNGs a pack ships.
+- **Light.** Face angle to the sun, ambient occlusion in corners and cast shadows are
+  computed per vertex; `assets/shaders/block.wgsl` evaluates them per texel and bands them
+  so shading stays pixel art. Shade is cool, sun is warm.
 - **Physics.** A box that moves one axis at a time, falls, lands and climbs single steps.
 - **Scripts.** Lua 5.4 through `mlua`, sandboxed to `table`, `string`, `math`, `utf8`. The
   engine's functions act on the world directly, so a script reads a block and sees the answer
@@ -61,7 +65,8 @@ cargo build --release
 
 - `src/core/` schemas (`defs.rs`), id registries, pack loader, settings, save file
 - `src/world/` `iso.rs` projection and picking, block storage, `noise.rs`, `worldgen.rs`,
-  `stamp.rs`, `mesh.rs`, `stream.rs`, `physics.rs`
+  `stamp.rs`, `tiles.rs` pixel-art tiles, `mesh.rs` faces and light, `stream.rs`, `physics.rs`
+- `assets/shaders/block.wgsl` the block shader
 - `src/player.rs`, `src/interact.rs`, `src/inventory.rs`, `src/camera.rs`, `src/ui.rs`
 - `src/script.rs` Lua hooks and API
 - `src/debug.rs` screenshots, software snapshots, text dumps; `src/smoke.rs` the self-test
@@ -78,5 +83,5 @@ are on the Releases page. Unzip and run `fieldstone` from the folder; it finds `
 
 The engine stays small. Each of these returns as a mod, with at most one small generic
 capability added to the engine and exposed to Lua: crafting, day and night, health and hunger,
-creatures and combat, liquid and see-through blocks, a cutaway view for caves, sound, PNG
-block textures.
+creatures and combat, liquid and see-through blocks, a cutaway view for caves, sound, light
+sources that light their surroundings.
