@@ -148,6 +148,8 @@ fn setup_world(app: &mut App, options: &Options) {
     }
     world.get_resource_or_init::<Registry<ObjectDef>>();
     world.get_resource_or_init::<Registry<core::HintDef>>();
+    world.get_resource_or_init::<Registry<core::StructureDef>>();
+    world.get_resource_or_init::<Registry<core::LootDef>>();
     let gen_def = world
         .get_resource_or_init::<Registry<WorldGenDef>>()
         .iter()
@@ -156,6 +158,8 @@ fn setup_world(app: &mut App, options: &Options) {
         .expect("worldgen.ron must define one record");
     let terrain = world.resource::<Registry<TerrainDef>>();
     let objects = world.resource::<Registry<ObjectDef>>();
+    let structures = world.resource::<Registry<core::StructureDef>>();
+    let loot = world.resource::<Registry<core::LootDef>>();
     let loaded = if options.fresh {
         None
     } else {
@@ -178,7 +182,7 @@ fn setup_world(app: &mut App, options: &Options) {
                 |l| l.seed,
             )
         });
-    let wg = WorldGen::new(seed, &gen_def, terrain, objects);
+    let wg = WorldGen::new(seed, &gen_def, terrain, objects, structures, loot);
     let spawn = spawn_point(&wg, terrain, objects);
     let pending = match &loaded {
         Some(l) => PendingPlayer {

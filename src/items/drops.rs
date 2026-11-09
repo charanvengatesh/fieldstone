@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 
 use super::inventory::Inventory;
+use super::inventory::Stack;
 use crate::art::ShapeAssets;
 use crate::core::{ItemDef, LootDef, Registry, ShapeDef, hash01};
 use crate::player::Player;
@@ -37,17 +38,16 @@ pub struct PickedUp {
     pub n: u32,
 }
 
-/// Rolls a loot table into drop messages. `salt` keeps rolls deterministic per cell and hit.
-pub fn roll_loot(
+/// Rolls a loot table into stacks. `salt` keeps rolls deterministic per cell and hit.
+pub fn roll_stacks(
     table: &LootDef,
     items: &Registry<ItemDef>,
-    at: Vec2,
+    cell: IVec2,
     seed: u32,
     salt: u32,
-    out: &mut MessageWriter<SpawnDrop>,
-) {
+) -> Vec<Stack> {
+    let mut out = Vec::new();
     for (i, e) in table.entries.iter().enumerate() {
-        let cell = (at / CELL).round().as_ivec2();
         let r = hash01(seed, cell.x, cell.y, salt.wrapping_add(i as u32 * 7919));
         if r >= e.chance {
             continue;
@@ -59,8 +59,28 @@ pub fn roll_loot(
         let span = e.max.saturating_sub(e.min) + 1;
         let n = e.min + ((r / e.chance) * span as f32) as u32 % span;
         if n > 0 {
-            out.write(SpawnDrop { item, n, at });
+            out.push(Stack { item, n });
         }
+    }
+    out
+}
+
+/// Rolls a loot table into drop messages at a world position.
+pub fn roll_loot(
+    table: &LootDef,
+    items: &Registry<ItemDef>,
+    at: Vec2,
+    seed: u32,
+    salt: u32,
+    out: &mut MessageWriter<SpawnDrop>,
+) {
+    let cell = (at / CELL).round().as_ivec2();
+    for s in roll_stacks(table, items, cell, seed, salt) {
+        out.write(SpawnDrop {
+            item: s.item,
+            n: s.n,
+            at,
+        });
     }
 }
 

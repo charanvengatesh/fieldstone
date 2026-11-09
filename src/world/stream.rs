@@ -62,6 +62,8 @@ pub fn stream(
             if let Some(tiles) = saved.0.remove(&pos) {
                 chunk.tiles = tiles;
                 chunk.modified = true;
+            } else {
+                map.fresh.push(pos);
             }
             map.chunks.insert(pos, chunk);
             for dy in -1..=1 {
@@ -138,6 +140,7 @@ pub fn draw(
         layers,
         lights,
         parts,
+        fresh: _,
     } = &mut *map;
     let mut dirty: Vec<IVec2> = chunks
         .iter()

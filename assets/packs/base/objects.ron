@@ -2,6 +2,7 @@
 // `tool` restricts which tool tag can damage it; omit it to allow anything.
 [
     (id: "tree",       shape: "tree",       hp: 3.0, drops: Some("tree"), radius: 0.2, jitter: 0.22),
+    (id: "stump",      shape: "stump",      hp: 2.0, drops: Some("stump"), radius: 0.3),
     (id: "oak",        shape: "oak",        hp: 7.0, drops: Some("oak"), radius: 0.5, size: (2, 2)),
     (id: "bush",       shape: "bush",       hp: 1.0, drops: Some("bush"), solid: false, jitter: 0.25),
     (id: "rock",       shape: "rock",       hp: 3.0, drops: Some("rock"), radius: 0.38, jitter: 0.2),

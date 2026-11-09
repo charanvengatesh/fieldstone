@@ -2,6 +2,7 @@ pub mod blend;
 pub mod chunk;
 pub mod collide;
 pub mod stream;
+pub mod structure;
 pub mod tiles;
 pub mod worldgen;
 

@@ -1,7 +1,8 @@
 // How terrain is generated. Height and moisture are fractal noise in roughly -1..1.
 // `bands` pick terrain by height (lowest first; the last catches everything else).
 // `wet` swaps terrain where moisture exceeds a threshold. `scatter` sprinkles objects;
-// an optional `noise: (scale, threshold)` gate clusters them into veins and groves.
+// an optional `noise: (scale, threshold)` gate clusters them into veins and groves. A rule
+// with `structure:` instead of `object:` stamps a structures.ron grid.
 [(
     id: "default",
     height_scale: 90.0,
@@ -38,5 +39,7 @@
         (object: "lily",         on: ["water"],           density: 0.06, near: Some(["sand"])),
         (object: "ripple",       on: ["water"],           density: 0.03),
         (object: "rock_wet",     on: ["water"],           density: 0.012, near: Some(["sand"])),
+        // Structures: a 3x3 stamp from structures.ron, anchored bottom-left, only on flat land.
+        (structure: Some("campsite"), on: ["meadow"], density: 0.003),
     ],
 )]

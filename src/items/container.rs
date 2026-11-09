@@ -4,11 +4,14 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use super::drops::SpawnDrop;
+use super::drops::roll_stacks;
 use super::interact::{ObjectBroken, REACH, in_reach};
 use super::inventory::Stack;
-use crate::core::{ObjectDef, Registry};
+use crate::core::{ItemDef, LootDef, ObjectDef, Registry};
 use crate::player::Player;
-use crate::world::center_of;
+use crate::world::chunk::{CHUNK, local_index};
+use crate::world::worldgen::WorldGen;
+use crate::world::{ChunkMap, center_of};
 
 #[derive(Resource, Default)]
 pub struct Containers(pub HashMap<IVec2, Vec<Option<Stack>>>);
@@ -24,6 +27,45 @@ impl Containers {
             v.resize(size as usize, None);
         }
         v
+    }
+}
+
+/// Fills storage objects stamped by structures the first time their chunk is generated.
+/// Cells already in `Containers` (from a save, or an earlier visit) keep what they have.
+pub fn stock_structures(
+    mut map: ResMut<ChunkMap>,
+    wg: Res<WorldGen>,
+    objects: Res<Registry<ObjectDef>>,
+    items: Res<Registry<ItemDef>>,
+    loot: Res<Registry<LootDef>>,
+    mut containers: ResMut<Containers>,
+) {
+    let fresh = std::mem::take(&mut map.fresh);
+    for pos in fresh {
+        let Some(chunk) = map.chunks.get(&pos) else {
+            continue;
+        };
+        let origin = pos * CHUNK;
+        for y in 0..CHUNK {
+            for x in 0..CHUNK {
+                let cell = origin + IVec2::new(x, y);
+                let Some(obj) = chunk.tiles[local_index(cell)].object else {
+                    continue;
+                };
+                let storage = objects.at(obj).storage;
+                if storage == 0 || containers.0.contains_key(&cell) {
+                    continue;
+                }
+                let Some(table) = wg.stamp_loot(cell) else {
+                    continue;
+                };
+                let rolled = roll_stacks(loot.at(table), &items, cell, wg.seed, 4242);
+                let slots = containers.slots_mut(cell, storage);
+                for (slot, stack) in slots.iter_mut().zip(rolled) {
+                    *slot = Some(stack);
+                }
+            }
+        }
     }
 }
 

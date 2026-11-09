@@ -5,7 +5,10 @@ use bevy::prelude::*;
 use noise::{Fbm, MultiFractal, NoiseFn, Perlin};
 
 use super::chunk::{CHUNK, Chunk, Tile};
-use crate::core::{ObjectDef, Registry, Scatter, TerrainDef, WorldGenDef, hash01};
+use super::structure::{Cell as StampCell, Structure};
+use crate::core::{
+    LootDef, ObjectDef, Registry, Scatter, StructureDef, TerrainDef, WorldGenDef, hash01,
+};
 
 #[derive(Resource)]
 pub struct WorldGen {
@@ -25,6 +28,7 @@ pub struct WorldGen {
     bands: Vec<(f64, u16)>,
     wet: Vec<(u16, u16, f64)>,
     scatter: Vec<ScatterIdx>,
+    stamps: Vec<StampRule>,
 }
 
 struct ScatterIdx {
@@ -36,12 +40,23 @@ struct ScatterIdx {
     salt: u32,
 }
 
+/// A scatter rule that stamps a structure instead of one object.
+struct StampRule {
+    structure: Structure,
+    on: Vec<u16>,
+    density: f32,
+    salt: u32,
+    loot: Option<u16>,
+}
+
 impl WorldGen {
     pub fn new(
         seed: u32,
         def: &WorldGenDef,
         terrain: &Registry<TerrainDef>,
         objects: &Registry<ObjectDef>,
+        structures: &Registry<StructureDef>,
+        loot: &Registry<LootDef>,
     ) -> Self {
         let t = |id: &str| {
             terrain
@@ -71,10 +86,40 @@ impl WorldGen {
             walkable: terrain.iter().map(|(_, t)| t.walkable).collect(),
             bands: def.bands.iter().map(|(h, id)| (*h, t(id))).collect(),
             wet: def.wet.iter().map(|(a, b, m)| (t(a), t(b), *m)).collect(),
+            stamps: def
+                .scatter
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s): (usize, &Scatter)| {
+                    let id = s.structure.as_ref()?;
+                    let sdef = structures
+                        .get(id)
+                        .unwrap_or_else(|| panic!("worldgen: unknown structure '{id}'"));
+                    let structure = Structure::parse(sdef, terrain, objects)
+                        .unwrap_or_else(|e| panic!("worldgen: {e}"));
+                    let loot = sdef.loot.as_ref().map(|l| {
+                        loot.idx(l)
+                            .unwrap_or_else(|| panic!("structure '{id}': unknown loot '{l}'"))
+                    });
+                    Some(StampRule {
+                        structure,
+                        on: s.on.iter().map(|id| t(id)).collect(),
+                        density: s.density,
+                        salt: i as u32 + 100,
+                        loot,
+                    })
+                })
+                .collect(),
             scatter: def
                 .scatter
                 .iter()
                 .enumerate()
+                .filter(|(_, s)| {
+                    if s.structure.is_none() && s.object.is_empty() {
+                        panic!("worldgen: a scatter rule names neither an object nor a structure");
+                    }
+                    s.structure.is_none()
+                })
                 .map(|(i, s): (usize, &Scatter)| ScatterIdx {
                     object: o(&s.object),
                     on: s.on.iter().map(|id| t(id)).collect(),
@@ -129,6 +174,32 @@ impl WorldGen {
         let terrain = self.terrain(cell);
         let walkable = self.walkable[terrain as usize];
         let height = self.height_at(cell, terrain, walkable);
+        if let Some((rule, local)) = self.stamp_at(cell) {
+            match rule.structure.at(local) {
+                Some(StampCell::Object(o)) => {
+                    return Tile {
+                        terrain,
+                        object: Some(o),
+                        height,
+                    };
+                }
+                Some(StampCell::Terrain(t)) => {
+                    return Tile {
+                        terrain: t,
+                        object: None,
+                        height,
+                    };
+                }
+                Some(StampCell::Clear) => {
+                    return Tile {
+                        terrain,
+                        object: None,
+                        height,
+                    };
+                }
+                None => {}
+            }
+        }
         // A cliff foot (the cell to the south is lower... i.e. this cell is lower than its
         // northern neighbor) may get a natural ramp instead of scatter.
         if let Some(ramp) = self.ramp {
@@ -172,6 +243,43 @@ impl WorldGen {
         }
     }
 
+    /// The structure covering a cell, if a stamp rule fires on an anchor whose footprint
+    /// includes it, with the cell's offset from that anchor.
+    fn stamp_at(&self, cell: IVec2) -> Option<(&StampRule, IVec2)> {
+        self.stamps.iter().find_map(|rule| {
+            rule.structure.footprint().find_map(|local| {
+                let anchor = cell - local;
+                (hash01(self.seed, anchor.x, anchor.y, rule.salt) < rule.density
+                    && self.anchor_fits(rule, anchor))
+                .then_some((rule, local))
+            })
+        })
+    }
+
+    /// A stamp needs its anchor on an allowed terrain and the whole footprint walkable, on
+    /// land and at one height, so no cliff or shore cuts through it.
+    fn anchor_fits(&self, rule: &StampRule, anchor: IVec2) -> bool {
+        let terrain = self.terrain(anchor);
+        if !rule.on.contains(&terrain) {
+            return false;
+        }
+        let h0 = self.height_at(anchor, terrain, self.walkable[terrain as usize]);
+        rule.structure.footprint().all(|local| {
+            let c = anchor + local;
+            let t = self.terrain(c);
+            let walkable = self.walkable[t as usize];
+            walkable && self.land.contains(&t) && self.height_at(c, t, walkable) == h0
+        })
+    }
+
+    /// The loot table a stamped storage object on this cell starts with.
+    pub fn stamp_loot(&self, cell: IVec2) -> Option<u16> {
+        let (rule, local) = self.stamp_at(cell)?;
+        matches!(rule.structure.at(local), Some(StampCell::Object(_)))
+            .then_some(rule.loot)
+            .flatten()
+    }
+
     pub fn chunk(&self, pos: IVec2) -> Chunk {
         let mut c = Chunk::filled(Tile::default());
         let origin = pos * CHUNK;
@@ -181,5 +289,55 @@ impl WorldGen {
             }
         }
         c
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::Def;
+
+    fn load<T: Def>() -> Registry<T> {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/assets/packs/base/");
+        let text = std::fs::read_to_string(format!("{path}{}", T::FILE)).unwrap();
+        let mut reg = Registry::<T>::default();
+        for d in ron::from_str::<Vec<T>>(&text).unwrap() {
+            reg.insert(d);
+        }
+        reg
+    }
+
+    #[test]
+    fn base_pack_stamps_campsites_on_flat_meadow() {
+        let terrain = load::<TerrainDef>();
+        let objects = load::<ObjectDef>();
+        let structures = load::<StructureDef>();
+        let loot = load::<LootDef>();
+        let def = load::<WorldGenDef>().iter().last().unwrap().1.clone();
+        let wg = WorldGen::new(42, &def, &terrain, &objects, &structures, &loot);
+        let chest = objects.idx("chest").unwrap();
+        let campfire = objects.idx("campfire").unwrap();
+        let mut chests = 0;
+        for y in -200..200 {
+            for x in -200..200 {
+                let c = IVec2::new(x, y);
+                let t = wg.tile(c);
+                if t.object == Some(chest) {
+                    chests += 1;
+                    assert!(
+                        wg.stamp_loot(c).is_some(),
+                        "stamped chest without loot at {c}"
+                    );
+                    // The campfire sits two cells west and on the same terrace.
+                    let f = wg.tile(c - IVec2::new(2, 0));
+                    assert_eq!(f.object, Some(campfire));
+                    assert_eq!(f.height, t.height);
+                } else if t.object.is_none() {
+                    assert!(wg.stamp_loot(c).is_none(), "loot on a bare cell at {c}");
+                }
+            }
+        }
+        println!("campsites: {chests}");
+        assert!(chests > 0, "no campsite in a 400x400 area");
     }
 }

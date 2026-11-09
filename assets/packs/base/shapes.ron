@@ -44,6 +44,16 @@
         Circle(r: 0.42, color: "leaf_light", at: (0.10, 2.30)),
         Circle(r: 0.18, color: "leaf_light", at: (1.00, 2.40)),
     ]),
+    (id: "stump", parts: [
+        Rect(w: 0.70, h: 0.20, color: "shadow", at: (0.0, -0.40)),
+        Rect(w: 0.52, h: 0.42, color: "ink", at: (0.0, -0.18)),
+        Rect(w: 0.46, h: 0.36, color: "bark", at: (0.0, -0.18)),
+        Rect(w: 0.08, h: 0.30, color: "trunk_dark", at: (0.14, -0.18)),
+        Circle(r: 0.26, color: "ink", at: (0.0, 0.02)),
+        Circle(r: 0.22, color: "wood", at: (0.0, 0.02)),
+        Circle(r: 0.12, color: "plank", at: (0.0, 0.02)),
+        Circle(r: 0.04, color: "bark", at: (0.0, 0.02)),
+    ]),
     (id: "bush", parts: [
         Circle(r: 0.28, color: "shadow", at: (0.04, -0.10)),
         Circle(r: 0.34, color: "ink"),

@@ -30,6 +30,7 @@ impl Plugin for ItemsPlugin {
                     interact::mine,
                     interact::use_object,
                     interact::place,
+                    container::stock_structures,
                     container::upkeep,
                     container::follow_close,
                     craft::craft,

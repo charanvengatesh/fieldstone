@@ -50,6 +50,9 @@ pub struct ChunkMap {
     pub lights: bevy::platform::collections::HashSet<IVec2>,
     /// Footprint cell -> anchor cell for multi-tile objects.
     pub parts: HashMap<IVec2, IVec2>,
+    /// Chunks generated this frame straight from the generator (no saved tiles), waiting
+    /// for one-time setup such as stocking structure chests.
+    pub fresh: Vec<IVec2>,
 }
 
 pub fn chunk_of(cell: IVec2) -> IVec2 {

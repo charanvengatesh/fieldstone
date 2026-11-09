@@ -1,4 +1,5 @@
-// Replaces the base generator config: same as base plus a crystal vein rule.
+// Replaces the base generator config: same as base plus a crystal vein rule. A worldgen
+// override replaces the whole record, so keep this list in step with the base pack.
 [(
     id: "default",
     height_scale: 90.0,
@@ -15,7 +16,8 @@
         ("grass", "meadow", -0.25),
     ],
     scatter: [
-        (object: "tree",        on: ["forest"],          density: 0.28),
+        (object: "oak",         on: ["forest"],          density: 0.03),
+        (object: "tree",        on: ["forest"],          density: 0.26),
         (object: "tree",        on: ["grass"],           density: 0.03),
         (object: "bush",        on: ["grass", "meadow"], density: 0.03),
         (object: "rock",        on: ["grass", "meadow"], density: 0.015),
@@ -35,5 +37,6 @@
         (object: "lily",         on: ["water"],           density: 0.06, near: Some(["sand"])),
         (object: "ripple",       on: ["water"],           density: 0.03),
         (object: "rock_wet",     on: ["water"],           density: 0.012, near: Some(["sand"])),
+        (structure: Some("campsite"), on: ["meadow"], density: 0.003),
     ],
 )]

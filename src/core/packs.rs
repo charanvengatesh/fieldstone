@@ -68,6 +68,7 @@ pub fn load_all(app: &mut App) {
         merge::<ItemDef>(w, dir);
         merge::<RecipeDef>(w, dir);
         merge::<LootDef>(w, dir);
+        merge::<StructureDef>(w, dir);
         merge::<WorldGenDef>(w, dir);
         merge::<CreatureDef>(w, dir);
         merge::<FishTableDef>(w, dir);

@@ -4,8 +4,10 @@
 use bevy::prelude::*;
 
 use crate::core::{ItemDef, ObjectDef, Registry};
+use crate::items::container::Containers;
 use crate::items::inventory::Inventory;
 use crate::player::{Cursor, Player};
+use crate::world::worldgen::WorldGen;
 use crate::world::{ChunkMap, cell_of};
 
 #[derive(Resource, Default)]
@@ -13,6 +15,7 @@ pub struct Smoke {
     frame: u32,
     target: Option<IVec2>,
     place_at: Option<IVec2>,
+    chest: Option<IVec2>,
     failed: bool,
 }
 
@@ -23,7 +26,9 @@ pub fn drive(
     map: Res<ChunkMap>,
     objects: Res<Registry<ObjectDef>>,
     items: Res<Registry<ItemDef>>,
-    mut player: Single<(&Transform, &mut Inventory), With<Player>>,
+    wg: Res<WorldGen>,
+    containers: Res<Containers>,
+    mut player: Single<(&mut Transform, &mut Inventory), With<Player>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     smoke.frame += 1;
@@ -103,12 +108,61 @@ pub fn drive(
                 smoke.failed = true;
             }
         }
+        // Jump to the nearest generated campsite so its chunk streams in.
+        430 => {
+            let chest = (1..160)
+                .flat_map(|r| {
+                    (-r..=r).flat_map(move |dy| {
+                        (-r..=r)
+                            .map(move |dx| IVec2::new(dx, dy))
+                            .filter(move |d| d.abs().max_element() == r)
+                    })
+                })
+                .map(|d| here + d)
+                .find(|c| {
+                    wg.tile(*c)
+                        .object
+                        .is_some_and(|o| objects.at(o).storage > 0)
+                        && wg.stamp_loot(*c).is_some()
+                });
+            match chest {
+                Some(c) => {
+                    info!("smoke: structure chest at {c}");
+                    tf.translation =
+                        crate::world::center_of(c + IVec2::new(0, -2)).extend(tf.translation.z);
+                    smoke.chest = Some(c);
+                }
+                None => {
+                    error!("smoke: no structure chest within 160 cells");
+                    smoke.failed = true;
+                }
+            }
+        }
+        // Its chunk is loaded now; the stamp must have been stocked on generation.
+        540 => {
+            if let Some(c) = smoke.chest {
+                let stocked = containers
+                    .0
+                    .get(&c)
+                    .is_some_and(|s| s.iter().any(|x| x.is_some()));
+                let present = map
+                    .tile(c)
+                    .and_then(|t| t.object)
+                    .is_some_and(|o| objects.at(o).storage > 0);
+                if stocked && present {
+                    info!("smoke: structure chest stocked");
+                } else {
+                    error!("smoke: structure chest present={present} stocked={stocked}");
+                    smoke.failed = true;
+                }
+            }
+        }
         600 => {
             if smoke.failed {
                 error!("smoke test FAILED");
                 exit.write(AppExit::error());
             } else {
-                info!("smoke test ran 600 frames: mining and placing work");
+                info!("smoke test ran 600 frames: mining, placing and structure stocking work");
                 exit.write(AppExit::Success);
             }
         }

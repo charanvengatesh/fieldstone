@@ -72,7 +72,7 @@ cargo build --release                       # optimized binary in target/release
 ## Content and mods
 
 The engine knows about *kinds* of things (terrain, objects, items, recipes, loot tables, shapes,
-colors, the generator config) and nothing concrete. A pack is a folder of RON files, one per kind;
+colors, sprites, structure stamps, the generator config) and nothing concrete. A pack is a folder of RON files, one per kind;
 `assets/packs/base` is just the first pack. Later packs override earlier records with the same id.
 Schemas live in `src/core/defs.rs`.
 

@@ -3,6 +3,7 @@
 
 use bevy::math::IVec2;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Anything stored in a [`super::registry::Registry`]: has a unique string id within its kind.
 pub trait Def: serde::de::DeserializeOwned + Send + Sync + 'static {
@@ -301,7 +302,13 @@ def!(LootDef, "loot.ron");
 /// One rule for sprinkling objects over generated terrain.
 #[derive(Deserialize, Debug, Clone)]
 pub struct Scatter {
+    /// Object to place. Empty when the rule stamps a `structure` instead.
+    #[serde(default)]
     pub object: String,
+    /// A `structures.ron` id stamped with its bottom-left corner on the cell. The whole
+    /// footprint must be walkable, flat and free of water.
+    #[serde(default)]
+    pub structure: Option<String>,
     /// Terrain ids this may appear on.
     pub on: Vec<String>,
     /// Probability per eligible tile, 0..1.
@@ -313,6 +320,31 @@ pub struct Scatter {
     #[serde(default)]
     pub near: Option<Vec<String>>,
 }
+
+/// One legend entry of a structure stamp.
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum Stamp {
+    /// Place this object (its footprint anchor on the cell), keep the terrain.
+    Object(String),
+    /// Paint this terrain, remove whatever the generator scattered there.
+    Terrain(String),
+    /// Keep the terrain, remove scatter: the clear ground of a camp or yard.
+    Clear,
+}
+
+/// `structures.ron`: a hand-drawn stamp. `rows` are listed north to south and must all be
+/// the same width; every character must appear in `legend` except a space, which leaves the
+/// generated cell alone. `loot` fills any storage object in the stamp when the chunk is
+/// first generated.
+#[derive(Deserialize, Debug, Clone)]
+pub struct StructureDef {
+    pub id: String,
+    pub rows: Vec<String>,
+    pub legend: HashMap<char, Stamp>,
+    #[serde(default)]
+    pub loot: Option<String>,
+}
+def!(StructureDef, "structures.ron");
 
 /// `worldgen.ron`: a single record describing how terrain is generated from two noise fields
 /// (height and moisture, both in -1..1).
