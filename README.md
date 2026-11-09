@@ -83,8 +83,11 @@ release. Each zip holds the binary plus `assets/` and `mods/`; run it from insid
 
 ## Roadmap
 
-- v0.6.0 (this): pixel renderer, generated sprites and tile sheets with PNG overrides, hunger
-  and cooking, deer and bats
-- v0.6.1: multi-tile structures, connected walls, stack splitting, structure stamps
-- v0.6.2: biomes by temperature, rivers, ruins, map screen
-- v0.6.3: hot reload, additive worldgen patches, wider script API, generated API docs
+- v0.6.0: pixel renderer, generated sprites and tile sheets with PNG overrides, hunger and
+  cooking, deer and bats
+- v0.6.1 (this): 3/4 perspective and y-sorting, terraced elevation with cliffs and ramps,
+  multi-tile objects, connected walls, shelter, stack splitting and tooltips, structure stamps
+- v0.6.2: sleep as the day boundary, seasons, tool tiers and durability, fishing minigame,
+  per-tile light
+- v0.6.3: mines as floors, a village with NPC schedules, shop and coins
+- v0.6.4: hot reload, additive worldgen patches, wider script API, generated API docs
