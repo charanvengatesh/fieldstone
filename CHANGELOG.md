@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.8.0
+
+Rotation and performance, as engine capabilities plus two mods that drive them.
+
+### New
+- The view is a continuous angle. Q / E turn it a quarter as a smooth motion, and any
+  angle in between is a valid view.
+- Chunk meshes are built in world space with every exposed side, and the view's projection
+  is their transform. Turning the view rebuilds nothing; the smoke test checks that.
+- The sun is fixed in the world, so turning the view shows the lit and the shaded sides of
+  things instead of relighting them.
+- Streaming loads only chunks that can appear on screen (about 20 at the default zoom,
+  where 0.7 always loaded 81), at any zoom and angle, within a time budget per frame.
+- In the background the game ticks ten times a second instead of flat out.
+- Lua: `key_pressed`, `mouse_pressed`, `mouse_delta`, `scroll_delta`, `rotate_gesture`,
+  `capture_pointer`, `window_focused`, `view_angle`, `view_target`, `turn_view`,
+  `set_view_angle`, `snap_view`, `zoom`, `set_zoom`, `get_setting`, `set_setting`, `perf`,
+  `set_hud`.
+- `mods/camera`: hold Alt or the middle button and drag, or twist on a trackpad, to orbit
+  freely; letting go settles on the nearest quarter view. R resets, Ctrl or Cmd + scroll
+  zooms, C toggles a compass line.
+- `mods/performance`: F4 shows frame rate, frame time, chunks and faces. When the frame
+  rate stays low it steps quality down (smaller load margin, smaller mesh budget, no cast
+  shadows, no corner shading) and back up when it recovers. F6 sets the level by hand.
+- `--angle DEGREES` starts at a free view angle, for snapshots.
+
+### Changed
+- F3 shows smoothed frame rate, frame time, chunk and face counts and mesh time.
+- The interface repaints slots only when the inventory or a panel changed.
+- Chunk meshes are not frustum culled: they are on screen by construction, and the
+  culler's bounds are wrong for a projection transform.
+
+### Measured (dev build, Apple M3 Pro)
+- Chunks loaded at the default zoom: 81 before, 17 to 23 now.
+- Meshing one chunk: 0.66 ms with shadows and corner shading, 0.43 ms without shadows,
+  0.37 ms with neither.
+
 ## 0.7.1
 
 The art pass: pixel-art blocks, real lighting, a block shader.

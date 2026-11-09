@@ -10,11 +10,12 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 
 use crate::core::settings::{Keys, Settings};
-use crate::core::{BlockDef, ItemDef, Paused, Registry, SaveRequest, Toast, UiHovered};
+use crate::core::{BlockDef, Hud, ItemDef, Paused, Registry, SaveRequest, Toast, UiHovered};
 use crate::interact::Target;
 use crate::inventory::{HOTBAR, Inventory, SLOTS, Stack, transfer};
 use crate::player::Player;
 use crate::world::Map;
+use crate::world::stream::Perf;
 use crate::world::tiles::Tiles;
 
 const SLOT: f32 = 46.0;
@@ -51,6 +52,8 @@ struct HeldName;
 struct ToastText;
 #[derive(Component)]
 struct DebugText;
+#[derive(Component)]
+struct HudText;
 #[derive(Component)]
 struct InventoryPanel;
 #[derive(Component)]
@@ -275,6 +278,18 @@ fn spawn(mut commands: Commands) {
         },
         Visibility::Hidden,
     ));
+    // Lines scripts keep on screen, top right.
+    commands.spawn((
+        HudText,
+        label("", 13.0, Color::WHITE),
+        TextLayout::justify(Justify::Right),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(10.0),
+            right: Val::Px(12.0),
+            ..default()
+        },
+    ));
     // Tooltip beside the pointer.
     commands
         .spawn((
@@ -421,16 +436,20 @@ impl SlotPainter<'_, '_> {
     }
 }
 
+/// Repaints the slots, but only when what they show could have changed.
 fn paint(
-    inv: Single<&Inventory, With<Player>>,
+    inv: Single<Ref<Inventory>, With<Player>>,
     items: Res<Registry<ItemDef>>,
     hotbar: Single<&Children, With<Hotbar>>,
-    panel: Single<(&Visibility, &Children), With<InventoryPanel>>,
+    panel: Single<(Ref<Visibility>, &Children), With<InventoryPanel>>,
     mut name: Single<&mut Text, (With<HeldName>, Without<Count>)>,
     mut painter: SlotPainter,
 ) {
+    let (vis, children) = panel.into_inner();
+    if !inv.is_changed() && !vis.is_changed() {
+        return;
+    }
     painter.paint(&hotbar, &inv.slots, Some(inv.selected));
-    let (vis, children) = *panel;
     if *vis != Visibility::Hidden {
         painter.paint(children, &inv.slots, None);
     }
@@ -478,7 +497,8 @@ fn toggles(
 
 fn texts(
     toast: Res<Toast>,
-    time: Res<Time>,
+    hud: Res<Hud>,
+    perf: Res<Perf>,
     map: Res<Map>,
     target: Res<Target>,
     blocks: Res<Registry<BlockDef>>,
@@ -486,10 +506,14 @@ fn texts(
     mut lines: ParamSet<(
         Single<&mut Text, With<ToastText>>,
         Single<(&mut Text, &Visibility), With<DebugText>>,
+        Single<&mut Text, With<HudText>>,
     )>,
 ) {
     if lines.p0().0 != toast.text {
         lines.p0().0 = toast.text.clone();
+    }
+    if hud.is_changed() {
+        lines.p2().0 = hud.0.values().cloned().collect::<Vec<_>>().join("\n");
     }
     let mut debug = lines.p1();
     let (text, vis) = &mut *debug;
@@ -506,12 +530,8 @@ fn texts(
         )
     });
     text.0 = format!(
-        "{:.0} fps   pos {:.1} {:.1} {:.1}   chunks {}   aim {aim}",
-        1.0 / time.delta_secs().max(1e-4),
-        p.x,
-        p.y,
-        p.z,
-        map.chunks.len(),
+        "{:.0} fps  {:.1} ms   pos {:.1} {:.1} {:.1}   {} chunks  {} faces  mesh {:.1} ms   aim {aim}",
+        perf.fps, perf.frame_ms, p.x, p.y, p.z, perf.chunks, perf.quads, perf.mesh_ms,
     );
 }
 

@@ -28,6 +28,8 @@ pub struct Options {
     pub scale: f32,
     pub rot: u8,
     pub grid: bool,
+    /// `--angle DEGREES`: start at a free view angle instead of a quarter turn.
+    pub angle: Option<f32>,
 }
 
 fn main() {
@@ -59,6 +61,7 @@ fn main() {
         scale: value("--scale").and_then(|v| v.parse().ok()).unwrap_or(2.0),
         rot: value("--rot").and_then(|v| v.parse().ok()).unwrap_or(0),
         grid: args.iter().any(|a| a == "--grid"),
+        angle: value("--angle").and_then(|v| v.parse().ok()),
     };
     let mut app = App::new();
     if options.headless {
@@ -111,6 +114,12 @@ fn main() {
         ))
         .insert_resource(world::mesh::Grid(options.grid))
         .add_systems(Update, core::save::save.after(interact::InteractSet));
+    if options.snapshot.is_some() {
+        // Load what the 1280 x 800 picture will show, not what a window would.
+        app.insert_resource(world::stream::Viewport {
+            half: Vec2::new(640.0, 400.0) / options.scale.max(0.25),
+        });
+    }
     if options.headless {
         app.insert_resource(smoke::Smoke::new(options.snapshot.clone(), options.scale))
             .add_systems(
@@ -181,14 +190,16 @@ fn setup_world(app: &mut App, options: &Options) {
         world.resource::<core::Registry<core::StampDef>>(),
     );
     let mut map = world::Map::default();
-    let mut view = world::iso::View {
-        rot: options.rot % 4,
-    };
+    let mut view = world::iso::View::quarter(options.rot);
+    if let Some(degrees) = options.angle {
+        view.angle = degrees.to_radians();
+        view.target = view.angle;
+    }
     let (start, pending) = match loaded {
         Some(l) => {
             info!("world seed {seed}, loaded {} edited chunks", l.chunks.len());
             map.parked = l.chunks;
-            view.rot = l.rot;
+            view = world::iso::View::quarter(l.rot);
             (
                 l.player,
                 core::save::Pending {

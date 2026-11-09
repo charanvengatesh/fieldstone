@@ -18,7 +18,7 @@ use crate::interact::Target;
 use crate::inventory::Inventory;
 use crate::player::{Player, figure_faces, figure_texture};
 use crate::world::iso::View;
-use crate::world::mesh::{Faces, Grid, LEVELS, chunk_faces, unpack_flags};
+use crate::world::mesh::{Faces, Grid, LEVELS, Quality, chunk_faces, unpack_flags};
 use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CHUNK, Focus, Map};
@@ -82,12 +82,13 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     let time = world.resource::<Time>().elapsed_secs();
     let center = view.project(world.resource::<Focus>().0).truncate();
     let mut canvas = Canvas::new(1280, 800, scale, center, Color::srgb_u8(24, 28, 40));
+    let quality = *world.resource::<Quality>();
     for chunk in map.chunks.keys() {
-        let faces = chunk_faces(*chunk, view, grid, tiles, |p| {
+        let faces = chunk_faces(*chunk, grid, quality, tiles, |p| {
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
-        let at = view.project((*chunk * CHUNK).extend(0).as_vec3());
-        canvas.draw_blocks(at, &faces, tiles, time);
+        let origin = (*chunk * CHUNK).extend(0).as_vec3();
+        canvas.draw_blocks(origin, view, &faces, tiles, time);
     }
     let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
     canvas.draw(at, &figure_faces(facing, frame), &figure_texture());
@@ -124,10 +125,13 @@ pub fn report(world: &mut World) -> String {
     let _ = writeln!(out, "fieldstone {} debug dump", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(
         out,
-        "seed {seed:?}  view rot {}  grid {}  chunks {} loaded, {} parked, {} edited  packs {packs} ({} blocks, {} items)",
-        view.rot,
+        "seed {seed:?}  view rot {} ({:.0} degrees)  grid {}  chunks {} loaded, {} meshed, {} faces, {} parked, {} edited  packs {packs} ({} blocks, {} items)",
+        view.rot(),
+        view.angle.to_degrees(),
         world.resource::<Grid>().0,
         map.chunks.len(),
+        map.chunks.values().filter(|c| !c.dirty).count(),
+        map.chunks.values().map(|c| c.quads as usize).sum::<usize>(),
         map.parked.len(),
         map.chunks.values().filter(|c| c.modified).count(),
         blocks.len(),
@@ -314,7 +318,8 @@ impl Canvas {
             return;
         };
         let (tw, th) = (texture.width() as usize, texture.height() as usize);
-        self.raster(offset, faces, |faces, i, w| {
+        let place = |p: [f32; 3]| Vec3::from(p) + offset;
+        self.raster(place, faces, |faces, i, w| {
             let mix = |f: &dyn Fn(usize) -> f32| (0..3).map(|k| w[k] * f(i[k])).sum::<f32>();
             let u = mix(&|k| faces.uvs[k][0]).clamp(0.0, 0.9999);
             let v = mix(&|k| faces.uvs[k][1]).clamp(0.0, 0.9999);
@@ -334,13 +339,23 @@ impl Canvas {
     /// Draws block faces the way `assets/shaders/block.wgsl` does: light evaluated at each
     /// texel's centre and banded, outlines from the mask in the vertex alpha, water rows
     /// slid by `time`. Keep the two in step.
-    pub fn draw_blocks(&mut self, offset: Vec3, faces: &Faces, tiles: &Tiles, time: f32) {
+    ///
+    /// The faces are in world space relative to `origin`; `view` puts them on screen.
+    pub fn draw_blocks(
+        &mut self,
+        origin: Vec3,
+        view: View,
+        faces: &Faces,
+        tiles: &Tiles,
+        time: f32,
+    ) {
         let Some(tex) = tiles.image.data.as_ref() else {
             return;
         };
         let size = tiles.size.as_vec2();
         let tile = TILE as f32;
-        self.raster(offset, faces, |faces, i, w| {
+        let place = |p: [f32; 3]| view.project(origin + Vec3::from(p));
+        self.raster(place, faces, |faces, i, w| {
             let uv_of = |k: usize| Vec2::from(faces.uvs[k]);
             let uv = uv_of(i[0]) * w[0] + uv_of(i[1]) * w[1] + uv_of(i[2]) * w[2];
             let px = uv * size;
@@ -390,24 +405,26 @@ impl Canvas {
     }
 
     /// Fills every triangle with whatever `shade` returns for a pixel, given the three
-    /// vertex indices and the pixel's weights on them, keeping the nearest result.
+    /// vertex indices and the pixel's weights on them, keeping the nearest result. `place`
+    /// turns a vertex position into screen texels and depth.
     fn raster(
         &mut self,
-        offset: Vec3,
+        place: impl Fn([f32; 3]) -> Vec3,
         faces: &Faces,
         shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 3]>,
     ) {
         let (width, height, scale, center) = (self.width, self.height, self.scale, self.center);
-        let to_px = |p: [f32; 3]| {
+        let to_px = |p: Vec3| {
             Vec2::new(
-                (p[0] + offset.x - center.x) * scale + width as f32 / 2.0,
-                height as f32 / 2.0 - (p[1] + offset.y - center.y) * scale,
+                (p.x - center.x) * scale + width as f32 / 2.0,
+                height as f32 / 2.0 - (p.y - center.y) * scale,
             )
         };
         for q in 0..faces.len() {
             for tri in faces.triangles(q) {
                 let i = tri.map(|k| q * 4 + k);
-                let p = i.map(|k| to_px(faces.positions[k]));
+                let screen = i.map(|k| place(faces.positions[k]));
+                let p = screen.map(to_px);
                 let area = (p[1] - p[0]).perp_dot(p[2] - p[0]);
                 if area.abs() < 1e-6 {
                     continue;
@@ -429,8 +446,7 @@ impl Canvas {
                         if w.iter().any(|v| *v < 0.0) {
                             continue;
                         }
-                        let depth =
-                            (0..3).map(|k| w[k] * faces.positions[i[k]][2]).sum::<f32>() + offset.z;
+                        let depth = (0..3).map(|k| w[k] * screen[k].z).sum::<f32>();
                         let at = (y * width + x) as usize;
                         if depth < self.depth[at] {
                             continue;
@@ -490,11 +506,11 @@ impl Canvas {
 /// A block drawn alone as a 32 x 32 cut-out, for item icons: the same faces, tiles and
 /// shading as in the world.
 pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
-    let faces = chunk_faces(IVec2::ZERO, View::default(), false, tiles, |p| {
+    let faces = chunk_faces(IVec2::ZERO, false, Quality::default(), tiles, |p| {
         if p == IVec3::ZERO { block } else { 0 }
     });
     let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
-    canvas.draw_blocks(Vec3::ZERO, &faces, tiles, 0.0);
+    canvas.draw_blocks(Vec3::ZERO, View::default(), &faces, tiles, 0.0);
     canvas.into_image(true)
 }
 

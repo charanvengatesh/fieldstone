@@ -1,0 +1,10 @@
+// Performance. The engine already loads only what the camera can see and meshes on a time
+// budget; this mod watches the frame rate and trades lighting detail and load margin for
+// speed when the machine struggles, and puts the numbers on screen (F4).
+// Set enabled: false to play without it.
+(
+    name: "performance",
+    format: 2,
+    depends: ["base"],
+    scripts: ["scripts/performance.lua"],
+)

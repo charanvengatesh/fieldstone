@@ -109,14 +109,34 @@ Functions you can call. They act immediately: a `set_block` is visible to the ne
 | `count_item(item_id)` | how many the player holds |
 | `sort_inventory()` | merges and orders the bag (not the hotbar) |
 | `player_pos()` | `x, y, z` of the player's feet |
-| `key_just_pressed(name)` | `true` the frame a key goes down; names as in `settings.ron` |
+| `key_just_pressed(name)`, `key_pressed(name)` | the frame a key goes down; while it is held. Names as in `settings.ron` |
+| `mouse_pressed("left" / "right" / "middle")` | while a mouse button is held |
+| `mouse_delta()` | `dx, dy` the pointer moved this frame, in screen pixels |
+| `scroll_delta()` | lines scrolled this frame |
+| `rotate_gesture()` | radians of trackpad twist this frame |
+| `capture_pointer(on)` | while on, the pointer breaks and places nothing (for drags of your own) |
+| `window_focused()` | `false` while the game is in the background, where it idles at ten ticks a second |
+| `view_angle()`, `view_target()` | degrees the view is at, and is heading to |
+| `turn_view(degrees)` | turn smoothly from wherever the view is heading |
+| `set_view_angle(degrees)` | put the view at an angle at once |
+| `snap_view(step)` | head for the nearest multiple of `step` degrees (default 90) |
+| `zoom()`, `set_zoom(n)` | screen pixels per texel, 1 to 6 |
+| `get_setting(name)`, `set_setting(name, value)` | `shadows`, `occlusion`, `grid` (booleans), `mesh_budget_ms`, `view_margin` (numbers) |
+| `perf()` | a table: `fps`, `frame_ms`, `chunks`, `faces`, `mesh_ms`, `meshed` |
+| `set_hud(key, text)` | keep a line on screen, top right; empty text removes it |
 | `screenshot(name)`, `snapshot(name)`, `dump_state(name)`, `append_file(name, line)` | debug output under `debug/` |
 
 Scripts run in a sandbox: `table`, `string`, `math` and `utf8` only. There is no `io`, `os` or
 `require`. Scripts load once at startup; there is no hot reload yet.
 
-## The two mods in this folder
+## The mods in this folder
 
+- `camera/` adds free orbit to the engine's quarter turns: Alt-drag, middle-drag or a
+  trackpad twist, settling on the nearest quarter view; R resets; Ctrl or Cmd + scroll
+  zooms; C toggles a compass. Its constants (drag speed, snap step) are at the top of the
+  script.
+- `performance/` shows the numbers (F4) and adapts quality to the frame rate, or lets you
+  set it (F6). Its levels and thresholds are a table at the top of the script.
 - `example-crystal/` is a complete small mod to copy: two blocks (an ore and a glowing
   crystal), one feature rule, one script.
 - `debug/` is a probe: F9 saves a window screenshot, a software snapshot and a text dump for

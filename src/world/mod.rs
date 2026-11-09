@@ -33,6 +33,23 @@ pub struct Chunk {
     pub dirty: bool,
     /// Differs from generation output, so it belongs in the save file.
     pub modified: bool,
+    /// Faces in the current mesh.
+    pub quads: u32,
+    /// How many times this chunk's mesh has been built since it was loaded.
+    pub builds: u32,
+}
+
+impl Chunk {
+    /// A freshly loaded chunk, waiting for its first mesh.
+    pub fn new(blocks: Blocks, modified: bool) -> Self {
+        Self {
+            blocks,
+            dirty: true,
+            modified,
+            quads: 0,
+            builds: 0,
+        }
+    }
 }
 
 /// Loaded chunks, the entity drawing each, and edited chunks that are currently unloaded.
@@ -128,17 +145,29 @@ impl Plugin for WorldPlugin {
             .init_resource::<Focus>()
             .init_resource::<iso::View>()
             .init_resource::<mesh::Grid>()
+            .init_resource::<mesh::Quality>()
+            .init_resource::<stream::Viewport>()
+            .init_resource::<stream::Streaming>()
+            .init_resource::<stream::Perf>()
             .add_systems(Startup, mesh::setup)
             .add_systems(
                 Update,
                 (
                     mesh::tick,
+                    stream::measure,
+                    stream::ease_view,
                     stream::stream,
-                    stream::view_changed,
+                    stream::settings_changed,
                     stream::remesh,
                 )
                     .chain()
                     .in_set(WorldSet),
+            )
+            .add_systems(
+                PostUpdate,
+                stream::apply_view
+                    .after(TransformSystems::Propagate)
+                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
             );
     }
 }
@@ -153,9 +182,8 @@ mod tests {
             map.chunks.insert(
                 *c,
                 Chunk {
-                    blocks: empty_blocks(),
                     dirty: false,
-                    modified: false,
+                    ..Chunk::new(empty_blocks(), false)
                 },
             );
         }

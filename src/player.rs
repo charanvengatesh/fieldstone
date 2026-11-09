@@ -272,7 +272,7 @@ pub fn place(
         let b = map.block(c);
         b != AIR && blocks.at(b).solid && blocks.at(b).walkable
     };
-    let target = if sunlit(pos + Vec3::Z * 0.9, *view, solid) {
+    let target = if sunlit(pos + Vec3::Z * 0.9, solid) {
         1.0
     } else {
         SHADED
@@ -457,9 +457,8 @@ mod tests {
         map.chunks.insert(
             IVec2::ZERO,
             Chunk {
-                blocks: empty_blocks(),
                 dirty: false,
-                modified: false,
+                ..Chunk::new(empty_blocks(), false)
             },
         );
         for x in 0..4 {

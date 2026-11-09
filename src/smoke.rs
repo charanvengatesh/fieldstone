@@ -23,6 +23,10 @@ pub struct Smoke {
     dug: Option<(IVec3, u16)>,
     failed: bool,
     done: bool,
+    /// Meshes built and the quarter view before the turn test.
+    meshed: u64,
+    rot: u8,
+    loaded: Vec<(IVec2, u32)>,
 }
 
 impl Smoke {
@@ -35,6 +39,9 @@ impl Smoke {
             dug: None,
             failed: false,
             done: false,
+            meshed: 0,
+            rot: 0,
+            loaded: Vec::new(),
         }
     }
 }
@@ -51,7 +58,8 @@ pub fn drive(
     mut cursor: ResMut<Cursor>,
     items: Res<Registry<ItemDef>>,
     map: Res<Map>,
-    view: Res<View>,
+    mut view: ResMut<View>,
+    perf: Res<crate::world::stream::Perf>,
     wg: Res<WorldGen>,
     blocks: Res<Registry<BlockDef>>,
     path: Res<crate::core::save::SavePath>,
@@ -84,8 +92,15 @@ pub fn drive(
     match smoke.frame {
         // The world has streamed in and the player has settled on the ground.
         120 => {
+            // Every chunk the camera can see is loaded, meshed and drawn.
             let meshed = map.chunks.values().filter(|c| !c.dirty).count();
-            if map.chunks.len() != 81 || meshed != 81 || map.entities.len() != 81 {
+            let drawn = map.chunks.values().filter(|c| c.quads > 0).count();
+            info!(
+                "smoke: {} chunks loaded, {meshed} meshed, {} drawn",
+                map.chunks.len(),
+                map.entities.len()
+            );
+            if map.chunks.len() < 6 || meshed != map.chunks.len() || map.entities.len() != drawn {
                 fail(
                     &mut smoke,
                     format!(
@@ -263,7 +278,39 @@ pub fn drive(
                 (Some(_), None) => {}
             }
         }
-        560 => smoke.done = true,
+        // Turn the view a quarter. Meshes are in world space, so no loaded chunk may be
+        // rebuilt; only chunks the turn brings into view are built.
+        556 => {
+            smoke.loaded = map.chunks.iter().map(|(p, c)| (*p, c.builds)).collect();
+            smoke.meshed = perf.meshed;
+            smoke.rot = view.rot();
+            view.turn_by(std::f32::consts::FRAC_PI_2);
+        }
+        640 => {
+            if view.turning() || view.rot() != (smoke.rot + 1) % 4 {
+                fail(
+                    &mut smoke,
+                    format!("the view did not finish its turn: {:?}", *view),
+                );
+            } else {
+                // Chunks that were loaded before the turn must still be on their old mesh.
+                let rebuilt = smoke
+                    .loaded
+                    .iter()
+                    .filter(|(p, builds)| map.chunks.get(p).is_some_and(|c| c.builds != *builds))
+                    .count();
+                let built = perf.meshed - smoke.meshed;
+                if rebuilt > 0 {
+                    fail(
+                        &mut smoke,
+                        format!("the turn rebuilt {rebuilt} loaded chunks"),
+                    );
+                } else {
+                    info!("smoke: turned a quarter; {built} chunks came into view, none rebuilt");
+                }
+            }
+        }
+        650 => smoke.done = true,
         _ => {}
     }
 }

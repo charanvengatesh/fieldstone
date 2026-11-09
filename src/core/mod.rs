@@ -48,6 +48,15 @@ impl Toast {
     }
 }
 
+/// Status lines scripts keep on screen, by a key each script chooses.
+#[derive(Resource, Default)]
+pub struct Hud(pub std::collections::BTreeMap<String, String>);
+
+/// Set by a script that is using the pointer for something of its own (dragging the view):
+/// while true, the pointer breaks and places nothing.
+#[derive(Resource, Default)]
+pub struct PointerCaptured(pub bool);
+
 /// Set by the pause menu and the save key: write the save now, and optionally exit after.
 #[derive(Resource, Default)]
 pub struct SaveRequest {
@@ -63,6 +72,8 @@ impl Plugin for CorePlugin {
             .init_resource::<UiHovered>()
             .init_resource::<Toast>()
             .init_resource::<SaveRequest>()
+            .init_resource::<Hud>()
+            .init_resource::<PointerCaptured>()
             .add_systems(Update, toast_tick);
     }
 }

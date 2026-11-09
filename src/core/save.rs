@@ -219,7 +219,7 @@ pub fn save(
     let file = pack(
         wg.seed,
         player.body.pos,
-        view.rot,
+        view.rot(),
         inv,
         edited,
         &blocks,

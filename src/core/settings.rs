@@ -168,6 +168,8 @@ pub fn parse_key(name: &str) -> Option<KeyCode> {
         "ControlRight" => ControlRight,
         "AltLeft" | "Alt" => AltLeft,
         "AltRight" => AltRight,
+        "SuperLeft" | "Cmd" | "Super" => SuperLeft,
+        "SuperRight" => SuperRight,
         "Minus" | "-" => Minus,
         "Equal" | "=" => Equal,
         "Backquote" | "`" => Backquote,

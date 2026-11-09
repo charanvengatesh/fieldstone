@@ -3,6 +3,8 @@
 //! point's distance toward the viewer is simply `x + y + z`, which every vertex carries as
 //! its depth so the depth buffer resolves all occlusion.
 
+use std::f32::consts::{FRAC_PI_2, TAU};
+
 use bevy::prelude::*;
 
 /// Texels across a floor diamond.
@@ -12,10 +14,13 @@ pub const TILE_H: f32 = 16.0;
 /// Texels a block rises on screen.
 pub const BLOCK_H: f32 = 16.0;
 
-/// Which of the four diagonal directions the camera looks from.
-#[derive(Resource, Clone, Copy, Default, Debug, PartialEq, Eq)]
+/// Where the camera looks from: a turn about the vertical axis, in radians. A quarter turn
+/// is one of the four classic diagonal views. `angle` is what is drawn now; it eases toward
+/// `target`, so a turn is a motion rather than a cut.
+#[derive(Resource, Clone, Copy, Default, Debug, PartialEq)]
 pub struct View {
-    pub rot: u8,
+    pub angle: f32,
+    pub target: f32,
 }
 
 /// The block under a screen point and the face the view ray entered it through.
@@ -26,27 +31,71 @@ pub struct Hit {
 }
 
 impl View {
-    pub fn turned(self, steps: i32) -> View {
+    /// One of the four diagonal views, at rest.
+    pub fn quarter(rot: u8) -> View {
+        let angle = (rot % 4) as f32 * FRAC_PI_2;
         View {
-            rot: (self.rot as i32 + steps).rem_euclid(4) as u8,
+            angle,
+            target: angle,
         }
     }
 
-    /// World space to view space: a quarter turn about z per `rot`.
-    fn turn(self, p: Vec3) -> Vec3 {
-        match self.rot % 4 {
-            0 => p,
-            1 => Vec3::new(p.y, -p.x, p.z),
-            2 => Vec3::new(-p.x, -p.y, p.z),
-            _ => Vec3::new(-p.y, p.x, p.z),
+    /// The quarter view this one is at or heading to.
+    pub fn rot(self) -> u8 {
+        (self.target / FRAC_PI_2).round().rem_euclid(4.0) as u8
+    }
+
+    /// Whether the view is still moving toward its target.
+    pub fn turning(self) -> bool {
+        self.angle != self.target
+    }
+
+    /// Asks for a turn by `radians` from wherever the view is heading.
+    pub fn turn_by(&mut self, radians: f32) {
+        self.target += radians;
+    }
+
+    /// Heads for the nearest multiple of `step` radians.
+    pub fn snap(&mut self, step: f32) {
+        self.target = (self.target / step).round() * step;
+    }
+
+    /// Moves `angle` toward `target`; exact on arrival, and both stay within one turn.
+    pub fn ease(&mut self, dt: f32) {
+        let gap = self.target - self.angle;
+        if gap.abs() < 0.002 {
+            self.target = self.target.rem_euclid(TAU);
+            self.angle = self.target;
+        } else {
+            self.angle += gap * (dt * 12.0).min(1.0);
         }
+    }
+
+    /// Sine and cosine of the angle, exact at quarter turns so the classic views stay on
+    /// whole texels.
+    fn sin_cos(self) -> (f32, f32) {
+        let (s, c) = self.angle.sin_cos();
+        let clean = |v: f32| {
+            if v.abs() < 1e-6 {
+                0.0
+            } else if (v.abs() - 1.0).abs() < 1e-6 {
+                v.signum()
+            } else {
+                v
+            }
+        };
+        (clean(s), clean(c))
+    }
+
+    /// World space to view space: a turn about z.
+    fn turn(self, p: Vec3) -> Vec3 {
+        let (s, c) = self.sin_cos();
+        Vec3::new(p.x * c + p.y * s, -p.x * s + p.y * c, p.z)
     }
 
     fn unturn(self, p: Vec3) -> Vec3 {
-        View {
-            rot: (4 - self.rot % 4) % 4,
-        }
-        .turn(p)
+        let (s, c) = self.sin_cos();
+        Vec3::new(p.x * c - p.y * s, p.x * s + p.y * c, p.z)
     }
 
     /// Screen texels in x and y, depth toward the viewer in z. Linear, so it may be applied
@@ -60,6 +109,16 @@ impl View {
         )
     }
 
+    /// [`View::project`] as a matrix: a mesh in world space drawn with this as its
+    /// transform lands on screen, so turning the view never rebuilds a mesh.
+    pub fn matrix(self) -> Mat3 {
+        Mat3::from_cols(
+            self.project(Vec3::X),
+            self.project(Vec3::Y),
+            self.project(Vec3::Z),
+        )
+    }
+
     /// The world point at height `z` that lands on `screen`.
     pub fn unproject(self, screen: Vec2, z: f32) -> Vec3 {
         let diff = screen.x / (TILE_W / 2.0);
@@ -67,23 +126,23 @@ impl View {
         self.unturn(Vec3::new((sum + diff) / 2.0, (sum - diff) / 2.0, z))
     }
 
-    /// A direction given relative to the view, in world space.
-    pub fn to_world(self, v: Vec3) -> Vec3 {
-        self.unturn(v)
-    }
-
     /// World direction from any point straight toward the viewer.
     pub fn toward_viewer(self) -> Vec3 {
         self.unturn(Vec3::ONE)
     }
 
-    /// The two side faces of a block the camera can see, as world normals: `(left, right)`
-    /// on screen.
+    /// The two side faces of a block that face the camera most, as world normals:
+    /// `(left, right)` on screen.
     pub fn sides(self) -> (IVec3, IVec3) {
-        (
-            self.unturn(Vec3::Y).round().as_ivec3(),
-            self.unturn(Vec3::X).round().as_ivec3(),
-        )
+        let axis = |v: Vec3| {
+            let d = self.unturn(v).truncate();
+            if d.x.abs() >= d.y.abs() {
+                IVec3::new(d.x.signum() as i32, 0, 0)
+            } else {
+                IVec3::new(0, d.y.signum() as i32, 0)
+            }
+        };
+        (axis(Vec3::Y), axis(Vec3::X))
     }
 
     /// The ground direction that moves a walker along a screen direction (x right, y up).
@@ -98,16 +157,23 @@ impl View {
         let dir = -self.toward_viewer();
         let start = self.unproject(screen, top as f32) + dir * 1e-4;
         let mut cell = start.floor().as_ivec3();
-        let step = dir.signum().as_ivec3();
-        // Distance along the ray to the next boundary on each axis; every component of
-        // `dir` has magnitude 1, so distances are plain offsets.
-        let mut next = Vec3::ZERO;
+        let mut step = IVec3::ZERO;
+        // Ray distance to the next boundary on each axis, and between boundaries. An axis
+        // the ray runs along never comes up.
+        let mut next = Vec3::splat(f32::INFINITY);
+        let mut gap = Vec3::splat(f32::INFINITY);
         for a in 0..3 {
+            if dir[a].abs() < 1e-6 {
+                continue;
+            }
+            step[a] = dir[a].signum() as i32;
             let frac = start[a] - cell[a] as f32;
-            next[a] = if step[a] > 0 { 1.0 - frac } else { frac };
+            let ahead = if step[a] > 0 { 1.0 - frac } else { frac };
+            next[a] = ahead / dir[a].abs();
+            gap[a] = 1.0 / dir[a].abs();
         }
         let mut normal = IVec3::Z;
-        for _ in 0..(top * 3 + 8) {
+        for _ in 0..(top * 4 + 8) {
             if cell.z < 0 {
                 return None;
             }
@@ -125,7 +191,7 @@ impl View {
                 2
             };
             cell[a] += step[a];
-            next[a] += 1.0;
+            next[a] += gap[a];
             normal = IVec3::ZERO;
             normal[a] = -step[a];
         }
@@ -145,8 +211,14 @@ mod tests {
         Vec3::new(-0.5, -0.5, 0.25),
     ];
 
+    /// The four quarter views and three in-between angles.
     fn views() -> impl Iterator<Item = View> {
-        (0..4).map(|rot| View { rot })
+        (0..4)
+            .map(View::quarter)
+            .chain([0.3, 1.0, 4.0].map(|angle| View {
+                angle,
+                target: angle,
+            }))
     }
 
     #[test]
@@ -213,6 +285,42 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_matrix_is_the_projection() {
+        for view in views() {
+            for p in POINTS {
+                assert!((view.matrix() * p - view.project(p)).length() < 1e-2);
+            }
+        }
+    }
+
+    #[test]
+    fn turns_ease_onto_their_target_exactly() {
+        let mut view = View::default();
+        view.turn_by(FRAC_PI_2);
+        assert!(view.turning());
+        assert_eq!(view.rot(), 1);
+        for _ in 0..200 {
+            view.ease(1.0 / 60.0);
+        }
+        assert_eq!(view, View::quarter(1));
+        // A quarter view lands on whole texels, like the default one.
+        assert_eq!(view.project(Vec3::X).truncate(), Vec2::new(16.0, 8.0));
+        // Turning past a full circle wraps, and a free angle snaps to the nearest quarter.
+        view.turn_by(TAU);
+        for _ in 0..200 {
+            view.ease(1.0 / 60.0);
+        }
+        assert_eq!(view.rot(), 1);
+        assert!(view.angle < TAU);
+        let mut free = View {
+            angle: 2.9,
+            target: 2.9,
+        };
+        free.snap(FRAC_PI_2);
+        assert_eq!(free.rot(), 2);
     }
 
     #[test]

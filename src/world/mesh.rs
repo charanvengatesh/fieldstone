@@ -1,6 +1,7 @@
-//! Turns a chunk's blocks into one mesh. Only faces that look at the camera and touch air
-//! are emitted. Each vertex is already in screen texels with its depth in z, so the depth
-//! buffer sorts blocks, and anything standing among them, per pixel.
+//! Turns a chunk's blocks into one mesh of every face that touches air, in world space.
+//! The view's projection matrix is the mesh's transform, which puts each vertex on screen
+//! with its depth in z, so the depth buffer sorts blocks, and anything standing among
+//! them, per pixel, and turning the view never rebuilds a mesh.
 //!
 //! Colour comes from the tile atlas; the vertex colour carries light. Light is the face's
 //! angle to the sun, ambient occlusion in corners, and shadows cast by blocks between the
@@ -12,14 +13,17 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::sprite_render::{AlphaMode2d, Material2d};
 
-use super::iso::View;
 use super::tiles::{TILE, Tiles, atlas};
 use super::{AIR, CHUNK, HEIGHT};
 use crate::core::packs::LoadedPacks;
 use crate::core::{BlockDef, Registry, hash01};
 
-/// Brightness of the three visible faces: top, left, right.
-pub const SHADE: [f32; 3] = [1.0, 0.80, 0.60];
+/// Brightness of a face that looks straight up.
+pub const TOP_SHADE: f32 = 1.0;
+/// Brightness of a side face square to the sun's compass direction, and how much it gains
+/// or loses turned fully toward or away from it.
+const SIDE_SHADE: f32 = 0.70;
+const SIDE_SWING: f32 = 0.20;
 /// Brightness by how open a corner is: 0 is boxed in by two neighbours, 3 is clear.
 pub const OCCLUSION: [f32; 4] = [0.52, 0.70, 0.86, 1.0];
 /// Share of light a cast shadow removes.
@@ -28,9 +32,34 @@ pub const SHADOW: f32 = 0.40;
 const RISE: f32 = 0.025;
 /// The height that gets plain brightness.
 const MID: f32 = 12.0;
-/// Direction to the sun in view space: behind and to the left, so the right face is the
-/// dark one and shadows fall to the right on screen. It rises one block per unit.
-const SUN: Vec3 = Vec3::new(-0.6, 0.3, 1.0);
+/// Direction to the sun, fixed in the world. It rises one block per unit, so shadows are
+/// 0.67 blocks long per block of height.
+pub const SUN: Vec3 = Vec3::new(-0.6, 0.3, 1.0);
+
+/// Which lighting effects the mesher computes. Turning one off makes meshing cheaper.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Quality {
+    pub shadows: bool,
+    pub occlusion: bool,
+}
+
+impl Default for Quality {
+    fn default() -> Self {
+        Self {
+            shadows: true,
+            occlusion: true,
+        }
+    }
+}
+
+/// Brightness of a face from its normal alone.
+pub fn face_shade(normal: IVec3) -> f32 {
+    if normal.z > 0 {
+        return TOP_SHADE;
+    }
+    let toward = normal.as_vec3().truncate().dot(SUN.truncate().normalize());
+    SIDE_SHADE + SIDE_SWING * toward
+}
 /// How many blocks of height a shadow ray climbs before giving up.
 const SHADOW_REACH: i32 = 8;
 /// Horizontal distance a block's shadow or occlusion can reach, for marking meshes dirty.
@@ -147,9 +176,10 @@ pub fn tint(light: f32) -> [f32; 3] {
     (SHADE_TINT.lerp(SUN_TINT, t) * light).to_array()
 }
 
-/// Vertex data for one chunk, in texels relative to the chunk origin.
+/// Vertex data for one chunk.
 #[derive(Default)]
 pub struct Faces {
+    /// Block units relative to the chunk origin.
     pub positions: Vec<[f32; 3]>,
     /// Atlas coordinates 0..1.
     pub uvs: Vec<[f32; 2]>,
@@ -208,23 +238,21 @@ fn shadowed(from: Vec3, sun: Vec3, casts: &impl Fn(IVec3) -> bool) -> bool {
 }
 
 /// Whether the sun reaches `point`, for lighting things that are not blocks.
-pub fn sunlit(point: Vec3, view: View, casts: impl Fn(IVec3) -> bool) -> bool {
-    !shadowed(point, view.to_world(SUN), &casts)
+pub fn sunlit(point: Vec3, casts: impl Fn(IVec3) -> bool) -> bool {
+    !shadowed(point, SUN, &casts)
 }
 
-/// Builds the visible faces of chunk `pos`. `block` answers for any world position,
-/// including cells in neighbouring chunks.
+/// Builds every exposed face of chunk `pos` except undersides, which no view shows.
+/// `block` answers for any world position, including cells in neighbouring chunks.
 pub fn chunk_faces(
     pos: IVec2,
-    view: View,
     grid: bool,
+    quality: Quality,
     tiles: &Tiles,
     block: impl Fn(IVec3) -> u16,
 ) -> Faces {
     let mut out = Faces::default();
     let origin = (pos * CHUNK).extend(0);
-    let (left, right) = view.sides();
-    let sun = view.to_world(SUN);
     let water = |b: u16| tiles.water.get(b as usize).copied().unwrap_or(false);
     let family = |b: u16| tiles.family.get(b as usize).copied().unwrap_or(b);
     // Anything but air and water blocks light.
@@ -232,27 +260,21 @@ pub fn chunk_faces(
         let b = block(c);
         b != AIR && !water(b)
     };
-    // Normal, the four edge directions in corner order, which shade, which tile.
-    let tangent = |n: IVec3| IVec3::new(-n.y, n.x, 0);
+    // Normal, the four edge directions in corner order, which tile.
+    let side = |n: IVec3| {
+        let t = IVec3::new(-n.y, n.x, 0);
+        (n, [IVec3::NEG_Z, t, IVec3::Z, -t], 1)
+    };
     let faces = [
         (
             IVec3::Z,
             [IVec3::NEG_Y, IVec3::X, IVec3::Y, IVec3::NEG_X],
             0,
-            0,
         ),
-        (
-            left,
-            [IVec3::NEG_Z, tangent(left), IVec3::Z, -tangent(left)],
-            1,
-            1,
-        ),
-        (
-            right,
-            [IVec3::NEG_Z, tangent(right), IVec3::Z, -tangent(right)],
-            2,
-            1,
-        ),
+        side(IVec3::X),
+        side(IVec3::Y),
+        side(IVec3::NEG_X),
+        side(IVec3::NEG_Y),
     ];
     for z in 0..HEIGHT {
         for y in 0..CHUNK {
@@ -263,7 +285,7 @@ pub fn chunk_faces(
                 if id == AIR {
                     continue;
                 }
-                for (normal, edges, shade, tile) in faces {
+                for (normal, edges, tile) in faces {
                     if block(p + normal) != AIR {
                         continue;
                     }
@@ -290,7 +312,8 @@ pub fn chunk_faces(
                     };
                     let flags = pack_flags(tile_mask(mask, rot, flip), water(id));
                     let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
-                    let lit = normal.as_vec3().dot(sun) > 0.0;
+                    let shade = face_shade(normal);
+                    let lit = quality.shadows && normal.as_vec3().dot(SUN) > 0.0;
                     let corners = corners(local, normal);
                     let centre = corners.iter().sum::<Vec3>() / 4.0;
                     let block_centre = local.as_vec3() + Vec3::splat(0.5);
@@ -298,29 +321,33 @@ pub fn chunk_faces(
                     let tile_origin = tiles.origin(id, tile);
                     let mut lights = [0.0f32; 4];
                     for (i, corner) in corners.iter().enumerate() {
-                        // The two neighbours beside this corner and the one diagonal to
-                        // it, all in the layer the face looks into.
-                        let toward = (*corner - block_centre).signum().as_ivec3();
-                        let mut sides = [IVec3::ZERO; 2];
-                        let mut n = 0;
-                        for a in 0..3 {
-                            if normal[a] == 0 {
-                                sides[n][a] = toward[a];
-                                n += 1;
+                        let mut open = 3;
+                        if quality.occlusion {
+                            // The two neighbours beside this corner and the one diagonal
+                            // to it, all in the layer the face looks into.
+                            let toward = (*corner - block_centre).signum().as_ivec3();
+                            let mut sides = [IVec3::ZERO; 2];
+                            let mut n = 0;
+                            for a in 0..3 {
+                                if normal[a] == 0 {
+                                    sides[n][a] = toward[a];
+                                    n += 1;
+                                }
                             }
+                            let s1 = casts(p + normal + sides[0]);
+                            let s2 = casts(p + normal + sides[1]);
+                            let diagonal = casts(p + normal + sides[0] + sides[1]);
+                            open = if s1 && s2 {
+                                0
+                            } else {
+                                3 - (s1 as usize + s2 as usize + diagonal as usize)
+                            };
                         }
-                        let (s1, s2) = (casts(p + normal + sides[0]), casts(p + normal + sides[1]));
-                        let diagonal = casts(p + normal + sides[0] + sides[1]);
-                        let open = if s1 && s2 {
-                            0
-                        } else {
-                            3 - (s1 as usize + s2 as usize + diagonal as usize)
-                        };
                         // Shadow is sampled a quarter of the way in from the corner.
                         let sample =
                             origin.as_vec3() + corner.lerp(centre, 0.5) + normal.as_vec3() * 0.02;
-                        let shade_cast = lit && shadowed(sample, sun, &casts);
-                        let light = SHADE[shade]
+                        let shade_cast = lit && shadowed(sample, SUN, &casts);
+                        let light = shade
                             * OCCLUSION[open]
                             * lift
                             * if shade_cast { 1.0 - SHADOW } else { 1.0 };
@@ -330,7 +357,7 @@ pub fn chunk_faces(
                             + Vec2::splat(INSET)
                             + tile_corner(i, rot, flip) * (TILE as f32 - 2.0 * INSET))
                             / tiles.size.as_vec2();
-                        out.positions.push(view.project(*corner).to_array());
+                        out.positions.push(corner.to_array());
                         out.uvs.push(uv.to_array());
                         out.colors.push([c[0], c[1], c[2], flags]);
                     }
@@ -365,6 +392,7 @@ pub fn corners(p: IVec3, normal: IVec3) -> [Vec3; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::iso::View;
 
     fn tiles() -> Tiles {
         let mut blocks = Registry::<BlockDef>::default();
@@ -374,6 +402,10 @@ mod tests {
         blocks
             .insert(ron::from_str(r#"(id: "lamp", color: (250, 240, 200), glow: 0.95)"#).unwrap());
         atlas(&blocks, None).1
+    }
+
+    fn mesh(world: impl Fn(IVec3) -> u16) -> Faces {
+        chunk_faces(IVec2::ZERO, false, Quality::default(), &tiles(), world)
     }
 
     fn masks(f: &Faces) -> Vec<u32> {
@@ -407,24 +439,22 @@ mod tests {
     }
 
     #[test]
-    fn a_lone_block_shows_three_outlined_faces() {
-        let world = |p: IVec3| (p == IVec3::new(3, 4, 5)) as u16;
-        for rot in 0..4 {
-            let f = chunk_faces(IVec2::ZERO, View { rot }, false, &tiles(), world);
-            assert_eq!(f.len(), 3);
-            // Every edge is a silhouette.
-            assert_eq!(masks(&f), vec![15, 15, 15]);
-            // Top, left, right get darker in that order.
-            let (t, l, r) = (lights(&f, 0)[0], lights(&f, 1)[0], lights(&f, 2)[0]);
-            assert!(t > l && l > r, "{t} {l} {r}");
-        }
+    fn a_lone_block_shows_five_outlined_faces_lit_by_the_sun() {
+        let f = mesh(|p| (p == IVec3::new(3, 4, 5)) as u16);
+        // The top and all four sides; never the underside.
+        assert_eq!(f.len(), 5);
+        assert_eq!(masks(&f), vec![15; 5]);
+        // Faces come out as top, +x, +y, -x, -y. The sun stands toward -x and a little +y.
+        let l: Vec<f32> = (0..5).map(|q| lights(&f, q)[0]).collect();
+        assert!(l[0] > l[3], "top is brightest: {l:?}");
+        assert!(l[3] > l[2] && l[2] > l[4] && l[4] > l[1], "{l:?}");
     }
 
     #[test]
     fn a_flat_floor_is_one_clean_evenly_lit_surface() {
         let floor = |p: IVec3| (p.z == 0) as u16;
         let t = tiles();
-        let f = chunk_faces(IVec2::ZERO, View::default(), false, &t, floor);
+        let f = mesh(floor);
         // Top faces only: neighbours hide every side, including across chunk borders.
         assert_eq!(f.len(), (CHUNK * CHUNK) as usize);
         assert!(masks(&f).iter().all(|m| *m == 0));
@@ -436,14 +466,14 @@ mod tests {
         assert!(f.uvs.iter().all(|uv| {
             uv[0] > o.x && uv[0] < o.x + span.x && uv[1] > o.y && uv[1] < o.y + span.y
         }));
-        let g = chunk_faces(IVec2::ZERO, View::default(), true, &t, floor);
+        let g = chunk_faces(IVec2::ZERO, true, Quality::default(), &t, floor);
         assert!(masks(&g).iter().all(|m| *m == 15));
     }
 
     #[test]
     fn a_change_of_block_is_inked_on_both_sides() {
         // Kind 1 for x < 8, kind 2 from x = 8.
-        let floor = |p: IVec3| {
+        let f = mesh(|p| {
             if p.z != 0 {
                 0
             } else if p.x < 8 {
@@ -451,24 +481,35 @@ mod tests {
             } else {
                 2
             }
-        };
-        let f = chunk_faces(IVec2::ZERO, View::default(), false, &tiles(), floor);
+        });
         let inked = masks(&f).iter().filter(|m| **m != 0).count();
         assert_eq!(inked, 2 * CHUNK as usize);
     }
 
     #[test]
-    fn faces_carry_true_depth() {
-        let world = |p: IVec3| (p == IVec3::new(1, 1, 0)) as u16;
-        let f = chunk_faces(IVec2::ZERO, View::default(), false, &tiles(), world);
-        // The top face spans depth 3 (far corner) to 5 (near corner).
-        let top: Vec<f32> = f.positions[..4].iter().map(|p| p[2]).collect();
-        assert_eq!(top, vec![3.0, 4.0, 5.0, 4.0]);
+    fn positions_are_in_world_space_and_the_view_gives_them_depth() {
+        let f = mesh(|p| (p == IVec3::new(1, 1, 0)) as u16);
+        // The top face is the unit square at z = 1.
+        assert_eq!(
+            f.positions[..4],
+            [
+                [1.0, 1.0, 1.0],
+                [2.0, 1.0, 1.0],
+                [2.0, 2.0, 1.0],
+                [1.0, 2.0, 1.0]
+            ]
+        );
+        // Through the default view it spans depth 3 (far corner) to 5 (near corner).
+        let depth: Vec<f32> = f.positions[..4]
+            .iter()
+            .map(|p| (View::default().matrix() * Vec3::from(*p)).z)
+            .collect();
+        assert_eq!(depth, vec![3.0, 4.0, 5.0, 4.0]);
     }
 
     /// The top face of the floor block at `(x, y)` in a mesh of a floor at z 0.
     fn floor_quad(f: &Faces, x: i32, y: i32) -> usize {
-        let want = View::default().project(Vec3::new(x as f32, y as f32, 1.0));
+        let want = Vec3::new(x as f32, y as f32, 1.0);
         (0..f.len())
             .find(|q| Vec3::from(f.positions[q * 4]).distance(want) < 1e-3)
             .expect("floor face")
@@ -478,7 +519,7 @@ mod tests {
     fn corners_against_a_wall_are_occluded() {
         // A floor with one block standing on it at (5, 5).
         let world = |p: IVec3| (p.z == 0 || p == IVec3::new(5, 5, 1)) as u16;
-        let f = chunk_faces(IVec2::ZERO, View::default(), false, &tiles(), world);
+        let f = mesh(world);
         // The floor block at (6, 5) touches the standing block along its x = 6 edge:
         // corners 0 and 3 are in the crease, 1 and 2 are clear.
         let l = lights(&f, floor_quad(&f, 6, 5));
@@ -487,12 +528,21 @@ mod tests {
         let far = lights(&f, floor_quad(&f, 12, 2));
         assert!(far.iter().all(|v| (*v - far[0]).abs() < 1e-6));
         assert!(far[0] > l[1] - 1e-6);
+        // With occlusion off the crease is as bright as open ground (it lies sunward of
+        // the block, so no shadow falls on it either).
+        let plain = Quality {
+            occlusion: false,
+            ..default()
+        };
+        let g = chunk_faces(IVec2::ZERO, false, plain, &tiles(), world);
+        let flat = lights(&g, floor_quad(&g, 4, 5));
+        assert!(flat.iter().all(|v| (*v - far[0]).abs() < 1e-6), "{flat:?}");
     }
 
     #[test]
     fn a_pillar_casts_a_shadow_away_from_the_sun() {
         let world = |p: IVec3| (p.z == 0 || (p.x == 8 && p.y == 8 && p.z < 4)) as u16;
-        let f = chunk_faces(IVec2::ZERO, View::default(), false, &tiles(), world);
+        let f = mesh(world);
         let open = lights(&f, floor_quad(&f, 2, 2))[0];
         // The sun is toward -x and +y, so the shadow lies toward +x and -y. A one-block
         // pillar throws a narrow shadow: it darkens part of the cells it crosses.
@@ -502,13 +552,80 @@ mod tests {
         // The sunward side stays lit.
         let lit = lights(&f, floor_quad(&f, 6, 9));
         assert!(lit.iter().all(|v| (*v - open).abs() < 1e-6), "{lit:?}");
+        // With shadows off the same cell is fully lit.
+        let plain = Quality {
+            shadows: false,
+            ..default()
+        };
+        let g = chunk_faces(IVec2::ZERO, false, plain, &tiles(), world);
+        let unshaded = lights(&g, floor_quad(&g, 10, 7));
+        assert!(
+            unshaded.iter().all(|v| (*v - open).abs() < 1e-6),
+            "{unshaded:?}"
+        );
+    }
+
+    /// Not a check: prints how long real chunks take to mesh at each quality, reading
+    /// blocks from loaded chunks the way the game does.
+    #[test]
+    #[ignore]
+    fn mesh_timing() {
+        use crate::world::{Chunk, Map};
+        let (wg, blocks) = crate::world::worldgen::tests::base_gen(42);
+        let tiles = atlas(&blocks, None).1;
+        let mut map = Map::default();
+        for cy in -3..3 {
+            for cx in -3..3 {
+                let pos = IVec2::new(cx, cy);
+                map.chunks.insert(
+                    pos,
+                    Chunk {
+                        dirty: false,
+                        ..Chunk::new(wg.chunk(pos), false)
+                    },
+                );
+            }
+        }
+        for (name, quality) in [
+            ("shadows and occlusion", Quality::default()),
+            (
+                "occlusion only",
+                Quality {
+                    shadows: false,
+                    occlusion: true,
+                },
+            ),
+            (
+                "neither",
+                Quality {
+                    shadows: false,
+                    occlusion: false,
+                },
+            ),
+        ] {
+            let started = std::time::Instant::now();
+            let mut faces = 0;
+            for cy in -2..2 {
+                for cx in -2..2 {
+                    let pos = IVec2::new(cx, cy);
+                    faces += chunk_faces(pos, false, quality, &tiles, |p| {
+                        map.get(p).unwrap_or_else(|| wg.block(p))
+                    })
+                    .len();
+                }
+            }
+            println!(
+                "{name}: {:.2} ms per chunk, {} faces per chunk",
+                started.elapsed().as_secs_f32() * 1000.0 / 16.0,
+                faces / 16
+            );
+        }
     }
 
     #[test]
     fn glowing_blocks_ignore_shade() {
-        let world = |p: IVec3| if p == IVec3::new(3, 3, 3) { 3 } else { 0 };
-        let f = chunk_faces(IVec2::ZERO, View::default(), false, &tiles(), world);
-        // Even the dark right face is at least as bright as the glow.
-        assert!(lights(&f, 2).iter().all(|v| *v >= 0.95));
+        let f = mesh(|p| if p == IVec3::new(3, 3, 3) { 3 } else { 0 });
+        // Even the face turned away from the sun is at least as bright as the glow.
+        assert!((0..5).all(|q| lights(&f, q).iter().all(|v| *v >= 0.95)));
     }
 }

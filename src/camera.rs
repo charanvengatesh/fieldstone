@@ -1,6 +1,8 @@
 //! The camera looks at [`Focus`] through the current [`View`]. Zoom is a whole number of
 //! screen pixels per texel so block edges stay crisp.
 
+use std::f32::consts::FRAC_PI_2;
+
 use bevy::camera::visibility::RenderLayers;
 use bevy::input::gestures::PinchGesture;
 use bevy::prelude::*;
@@ -9,6 +11,7 @@ use crate::core::settings::{Keys, Settings};
 use crate::world::Focus;
 use crate::world::iso::View;
 use crate::world::mesh::Grid;
+use crate::world::stream::Viewport;
 
 /// Both cameras: the world camera and the overlay drawn on top of it.
 #[derive(Component)]
@@ -49,6 +52,7 @@ pub fn setup(settings: Res<Settings>, mut commands: Commands) {
 pub fn follow(
     focus: Res<Focus>,
     view: Res<View>,
+    mut viewport: ResMut<Viewport>,
     mut cams: Query<(&mut Transform, &Projection), With<MainCamera>>,
 ) {
     for (mut tf, proj) in &mut cams {
@@ -58,6 +62,11 @@ pub fn follow(
             let step = o.scale.max(1e-4);
             p.x = (p.x / step).round() * step;
             p.y = (p.y / step).round() * step;
+            // Tell the streamer how much world the screen shows.
+            let half = o.area.half_size();
+            if half.x > 1.0 && viewport.half != half {
+                viewport.half = half;
+            }
         }
         tf.translation = p;
     }
@@ -93,9 +102,12 @@ pub fn zoom(
     }
     if delta != 0 {
         settings.pixel_scale = (settings.pixel_scale as i32 + delta).clamp(1, 6) as u32;
+    }
+    // Whoever changed the setting (keys, pinch or a script), the cameras follow it.
+    if settings.is_changed() {
         for mut proj in &mut cams {
             if let Projection::Orthographic(o) = &mut *proj {
-                o.scale = 1.0 / settings.pixel_scale as f32;
+                o.scale = 1.0 / settings.pixel_scale.clamp(1, 6) as f32;
             }
         }
     }
@@ -109,10 +121,10 @@ pub fn view_keys(
     mut grid: ResMut<Grid>,
 ) {
     if keys.just(&input, &keys.rotate_left) {
-        *view = view.turned(1);
+        view.turn_by(FRAC_PI_2);
     }
     if keys.just(&input, &keys.rotate_right) {
-        *view = view.turned(-1);
+        view.turn_by(-FRAC_PI_2);
     }
     if keys.just(&input, &keys.grid) {
         grid.0 = !grid.0;
@@ -123,7 +135,15 @@ pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, setup).add_systems(
+        // In the background the game ticks ten times a second instead of flat out.
+        app.insert_resource(bevy::winit::WinitSettings {
+            focused_mode: bevy::winit::UpdateMode::Continuous,
+            unfocused_mode: bevy::winit::UpdateMode::reactive_low_power(
+                std::time::Duration::from_millis(100),
+            ),
+        })
+        .add_systems(Startup, setup)
+        .add_systems(
             Update,
             (view_keys, zoom, follow)
                 .chain()

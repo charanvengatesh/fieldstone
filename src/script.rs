@@ -9,20 +9,30 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+use bevy::input::gestures::RotationGesture;
+use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, StdLib, Table};
 
 use crate::core::packs::LoadedPacks;
-use crate::core::settings::parse_key;
-use crate::core::{BlockDef, ItemDef, Registry, Toast};
+use crate::core::settings::{Settings, parse_key};
+use crate::core::{BlockDef, Hud, ItemDef, PointerCaptured, Registry, Toast};
 use crate::interact::{BlockBroken, BlockPlaced};
 use crate::inventory::{HOTBAR, Inventory, sort_slots};
 use crate::player::Player;
 use crate::world::Map;
+use crate::world::iso::View;
+use crate::world::mesh::{Grid, Quality};
+use crate::world::stream::{Perf, Streaming};
 
 /// Things that happened since the scripts last ran.
 #[derive(Resource, Default)]
 pub struct ScriptEvents(Vec<Event>);
+
+/// Trackpad twist since the scripts last ran, in radians.
+#[derive(Resource, Default)]
+pub struct Twist(f32);
 
 enum Event {
     Broken(IVec3, u16),
@@ -78,8 +88,11 @@ pub fn setup(world: &mut World) {
 pub fn collect(
     mut broken: MessageReader<BlockBroken>,
     mut placed: MessageReader<BlockPlaced>,
+    mut twists: MessageReader<RotationGesture>,
+    mut twist: ResMut<Twist>,
     mut out: ResMut<ScriptEvents>,
 ) {
+    twist.0 = twists.read().map(|g| g.0).sum();
     out.0
         .extend(broken.read().map(|b| Event::Broken(b.at, b.block)));
     out.0
@@ -251,6 +264,216 @@ pub fn run(world: &mut World) {
             })?,
         )?;
         g.set(
+            "key_pressed",
+            scope.create_function(|_, name: String| {
+                let w = shared.borrow();
+                Ok(parse_key(&name)
+                    .is_some_and(|k| w.resource::<ButtonInput<KeyCode>>().pressed(k)))
+            })?,
+        )?;
+        g.set(
+            "mouse_pressed",
+            scope.create_function(|_, name: String| {
+                let button = match name.as_str() {
+                    "left" => MouseButton::Left,
+                    "right" => MouseButton::Right,
+                    "middle" => MouseButton::Middle,
+                    _ => return Ok(false),
+                };
+                let w = shared.borrow();
+                Ok(w.resource::<ButtonInput<MouseButton>>().pressed(button))
+            })?,
+        )?;
+        g.set(
+            "mouse_delta",
+            scope.create_function(|_, ()| {
+                let d = shared.borrow().resource::<AccumulatedMouseMotion>().delta;
+                Ok((d.x, d.y))
+            })?,
+        )?;
+        g.set(
+            "scroll_delta",
+            scope.create_function(|_, ()| {
+                let w = shared.borrow();
+                let s = w.resource::<AccumulatedMouseScroll>();
+                Ok(match s.unit {
+                    MouseScrollUnit::Line => s.delta.y,
+                    MouseScrollUnit::Pixel => s.delta.y / 40.0,
+                })
+            })?,
+        )?;
+        g.set(
+            "rotate_gesture",
+            scope.create_function(|_, ()| Ok(shared.borrow().resource::<Twist>().0))?,
+        )?;
+        g.set(
+            "capture_pointer",
+            scope.create_function(|_, on: bool| {
+                shared.borrow_mut().resource_mut::<PointerCaptured>().0 = on;
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "window_focused",
+            scope.create_function(|_, ()| {
+                let mut w = shared.borrow_mut();
+                let world: &mut World = &mut w;
+                Ok(world
+                    .query_filtered::<&Window, With<PrimaryWindow>>()
+                    .iter(world)
+                    .next()
+                    .is_none_or(|win| win.focused))
+            })?,
+        )?;
+        g.set(
+            "view_angle",
+            scope.create_function(|_, ()| {
+                Ok(shared.borrow().resource::<View>().angle.to_degrees())
+            })?,
+        )?;
+        g.set(
+            "view_target",
+            scope.create_function(|_, ()| {
+                Ok(shared.borrow().resource::<View>().target.to_degrees())
+            })?,
+        )?;
+        g.set(
+            "turn_view",
+            scope.create_function(|_, degrees: f32| {
+                shared
+                    .borrow_mut()
+                    .resource_mut::<View>()
+                    .turn_by(degrees.to_radians());
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "set_view_angle",
+            scope.create_function(|_, degrees: f32| {
+                let mut w = shared.borrow_mut();
+                let mut view = w.resource_mut::<View>();
+                view.angle = degrees.to_radians();
+                view.target = view.angle;
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "snap_view",
+            scope.create_function(|_, step: Option<f32>| {
+                shared
+                    .borrow_mut()
+                    .resource_mut::<View>()
+                    .snap(step.unwrap_or(90.0).max(1.0).to_radians());
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "zoom",
+            scope
+                .create_function(|_, ()| Ok(shared.borrow().resource::<Settings>().pixel_scale))?,
+        )?;
+        g.set(
+            "set_zoom",
+            scope.create_function(|_, scale: f32| {
+                let mut w = shared.borrow_mut();
+                let wanted = scale.round().clamp(1.0, 6.0) as u32;
+                if w.resource::<Settings>().pixel_scale != wanted {
+                    w.resource_mut::<Settings>().pixel_scale = wanted;
+                }
+                Ok(wanted)
+            })?,
+        )?;
+        g.set(
+            "get_setting",
+            scope.create_function(|_, name: String| {
+                let w = shared.borrow();
+                let quality = w.resource::<Quality>();
+                let streaming = w.resource::<Streaming>();
+                Ok(match name.as_str() {
+                    "shadows" => Some(mlua::Value::Boolean(quality.shadows)),
+                    "occlusion" => Some(mlua::Value::Boolean(quality.occlusion)),
+                    "grid" => Some(mlua::Value::Boolean(w.resource::<Grid>().0)),
+                    "mesh_budget_ms" => Some(mlua::Value::Number(streaming.budget_ms as f64)),
+                    "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
+                    _ => None,
+                })
+            })?,
+        )?;
+        g.set(
+            "set_setting",
+            scope.create_function(|_, (name, value): (String, mlua::Value)| {
+                let mut w = shared.borrow_mut();
+                let flag = value.as_boolean();
+                let number = value.as_number().or(value.as_integer().map(|i| i as f64));
+                // Only real changes are written, so nothing is rebuilt for a no-op.
+                let done = match (name.as_str(), flag, number) {
+                    ("shadows", Some(on), _) => {
+                        if w.resource::<Quality>().shadows != on {
+                            w.resource_mut::<Quality>().shadows = on;
+                        }
+                        true
+                    }
+                    ("occlusion", Some(on), _) => {
+                        if w.resource::<Quality>().occlusion != on {
+                            w.resource_mut::<Quality>().occlusion = on;
+                        }
+                        true
+                    }
+                    ("grid", Some(on), _) => {
+                        if w.resource::<Grid>().0 != on {
+                            w.resource_mut::<Grid>().0 = on;
+                        }
+                        true
+                    }
+                    ("mesh_budget_ms", _, Some(ms)) => {
+                        w.resource_mut::<Streaming>().budget_ms = (ms as f32).clamp(0.5, 16.0);
+                        true
+                    }
+                    ("view_margin", _, Some(texels)) => {
+                        w.resource_mut::<Streaming>().margin = (texels as f32).clamp(0.0, 512.0);
+                        true
+                    }
+                    _ => false,
+                };
+                if !done {
+                    warn!("script: no setting '{name}' takes that value");
+                }
+                Ok(done)
+            })?,
+        )?;
+        g.set(
+            "perf",
+            scope.create_function(|lua, ()| {
+                let p = *shared.borrow().resource::<Perf>();
+                let t = lua.create_table()?;
+                t.set("fps", p.fps)?;
+                t.set("frame_ms", p.frame_ms)?;
+                t.set("chunks", p.chunks)?;
+                t.set("faces", p.quads)?;
+                t.set("mesh_ms", p.mesh_ms)?;
+                t.set("meshed", p.meshed)?;
+                Ok(t)
+            })?,
+        )?;
+        g.set(
+            "set_hud",
+            scope.create_function(|_, (key, text): (String, Option<String>)| {
+                let mut w = shared.borrow_mut();
+                let mut hud = w.resource_mut::<Hud>();
+                match text.filter(|t| !t.is_empty()) {
+                    Some(text) => {
+                        if hud.0.get(&key) != Some(&text) {
+                            hud.0.insert(key, text);
+                        }
+                    }
+                    None => {
+                        hud.0.remove(&key);
+                    }
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
             "screenshot",
             scope.create_function(|_, name: String| {
                 crate::debug::screenshot(&mut shared.borrow_mut(), &name);
@@ -333,6 +556,7 @@ pub struct ScriptPlugin;
 impl Plugin for ScriptPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ScriptEvents>()
+            .init_resource::<Twist>()
             .add_systems(Startup, setup)
             .add_systems(
                 Update,
@@ -362,9 +586,8 @@ mod tests {
         map.chunks.insert(
             IVec2::ZERO,
             Chunk {
-                blocks: empty_blocks(),
                 dirty: false,
-                modified: false,
+                ..Chunk::new(empty_blocks(), false)
             },
         );
         world.insert_resource(blocks);
@@ -374,6 +597,18 @@ mod tests {
         world.init_resource::<Time>();
         world.init_resource::<ButtonInput<KeyCode>>();
         world.init_resource::<ScriptEvents>();
+        world.init_resource::<Twist>();
+        world.init_resource::<ButtonInput<MouseButton>>();
+        world.init_resource::<AccumulatedMouseMotion>();
+        world.init_resource::<AccumulatedMouseScroll>();
+        world.init_resource::<PointerCaptured>();
+        world.init_resource::<Hud>();
+        world.init_resource::<View>();
+        world.init_resource::<Grid>();
+        world.init_resource::<Quality>();
+        world.init_resource::<Streaming>();
+        world.init_resource::<Perf>();
+        world.insert_resource(Settings::default());
         world.spawn((Player::at(Vec3::new(1.5, 2.5, 3.0)), Inventory::default()));
         world.insert_non_send(Vm::new(
             scripts
@@ -428,6 +663,51 @@ mod tests {
         run(&mut world);
         assert_eq!(stone_count(&mut world), 2);
         assert_eq!(world.resource::<Toast>().text, "stone at 4,5,6 from 1.5");
+    }
+
+    #[test]
+    fn scripts_steer_the_view_and_the_settings() {
+        let mut world = world(&[(
+            "cam.lua",
+            r#"
+            function on_script_loaded()
+                turn_view(90)
+                set_setting("shadows", false)
+                set_setting("mesh_budget_ms", 1.5)
+                set_zoom(5)
+                capture_pointer(true)
+                set_hud("cam", "view " .. view_target())
+            end
+            function on_tick()
+                -- A wrong name or a wrong type is refused, and a refusal changes nothing.
+                if set_setting("shadows", 3) or set_setting("nonsense", true) then
+                    error("bad settings were accepted")
+                end
+                if get_setting("shadows") ~= false or get_setting("occlusion") ~= true then
+                    error("settings read back wrong")
+                end
+                if perf().chunks ~= 0 or not window_focused() or key_pressed("W") then
+                    error("readouts are wrong")
+                end
+                set_view_angle(100)
+                snap_view(90)
+                set_hud("gone", "x")
+                set_hud("gone", "")
+            end
+            "#,
+        )]);
+        run(&mut world);
+        let view = *world.resource::<View>();
+        assert_eq!(view.rot(), 1);
+        assert!((view.angle.to_degrees() - 100.0).abs() < 1e-3);
+        assert!(!world.resource::<Quality>().shadows);
+        assert!(world.resource::<Quality>().occlusion);
+        assert_eq!(world.resource::<Streaming>().budget_ms, 1.5);
+        assert_eq!(world.resource::<Settings>().pixel_scale, 5);
+        assert!(world.resource::<PointerCaptured>().0);
+        let hud = &world.resource::<Hud>().0;
+        assert_eq!(hud.get("cam").map(String::as_str), Some("view 90.0"));
+        assert!(!hud.contains_key("gone"));
     }
 
     #[test]

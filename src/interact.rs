@@ -11,7 +11,7 @@ use bevy::window::PrimaryWindow;
 
 use crate::camera::{MainCamera, Overlay};
 use crate::core::settings::Keys;
-use crate::core::{BlockDef, ItemDef, Registry, UiHovered};
+use crate::core::{BlockDef, ItemDef, PointerCaptured, Registry, UiHovered};
 use crate::inventory::{HOTBAR, Inventory};
 use crate::player::Player;
 use crate::world::iso::{Hit, View};
@@ -75,12 +75,13 @@ pub fn aim(
     view: Res<View>,
     map: Res<Map>,
     ui: Res<UiHovered>,
+    captured: Res<PointerCaptured>,
     player: Single<&Player>,
     mut target: ResMut<Target>,
 ) {
     target.0 = cursor
         .0
-        .filter(|_| !ui.0)
+        .filter(|_| !ui.0 && !captured.0)
         .and_then(|at| view.pick(at, HEIGHT, |c| map.block(c) != AIR))
         .filter(|hit| within_reach(player.body.pos, hit.block));
 }
@@ -180,8 +181,15 @@ pub fn select_slot(
             inv.selected = i;
         }
     }
+    // With a modifier held the wheel belongs to something else (zoom).
+    let modified = input.any_pressed([
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+        KeyCode::SuperLeft,
+        KeyCode::SuperRight,
+    ]);
     for w in wheel.read() {
-        if !ui.0 {
+        if !ui.0 && !modified {
             *acc += match w.unit {
                 MouseScrollUnit::Line => w.y,
                 MouseScrollUnit::Pixel => w.y / 40.0,

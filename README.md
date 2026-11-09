@@ -16,12 +16,16 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 | Right click (two-finger click) | Place the held block against the face under the pointer |
 | 1-0, two-finger scroll | Choose a hotbar slot |
 | Tab or I | Bag. Click a slot to swap it with the held slot, shift-click splits half, right-click one |
-| Q / E | Turn the view a quarter |
+| Q / E | Turn the view a quarter, smoothly |
+| Alt + drag, middle-drag, or trackpad twist | Orbit freely; letting go settles on the nearest quarter (`mods/camera`) |
+| R | Back to the starting view (`mods/camera`) |
+| Ctrl or Cmd + scroll | Zoom (`mods/camera`) |
 | Pinch, or - / = | Zoom in whole pixel steps |
 | G | Outline every block (the classic grid look) or only steps and material changes |
 | Esc | Pause: resume, save, save and quit |
 | F5 | Save to `saves/iso.ron`, loaded on the next start |
-| F3 | Debug line |
+| F3 | Debug line: frame rate, position, chunks, faces, target |
+| F4 / F6 | Performance line; quality level by hand (`mods/performance`) |
 | F9 | Debug capture (with `mods/debug` enabled): pictures and a text dump under `debug/` |
 
 Keys are rebindable in `settings.ron`, written next to the executable on first run.
@@ -37,24 +41,27 @@ cargo run -- --seed 42           # fix the world seed
 cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
-                                 #   options: --scale N  --rot 0..3  --grid
+                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --grid
 cargo build --release
 ```
 
 ## How it works
 
-- **Projection.** 2:1 dimetric with four rotations. The view direction is exactly
-  `(1, 1, 1)`, so a point's nearness is `x + y + z`. Every vertex carries that as depth and
-  the depth buffer sorts blocks and the player per pixel; there is no sorting code.
+- **Projection.** 2:1 dimetric about any angle; the four quarter turns are the classic
+  views. Nearness along the view is a linear function of position, so the projection is one
+  matrix. Chunk meshes are in world space with that matrix as their transform: every vertex
+  lands on screen with its depth, the depth buffer sorts blocks and the player per pixel,
+  and turning the view rebuilds nothing.
 - **World.** Chunks of 16 x 16 columns by 32 levels of block ids. Each block is a pure
   function of the seed and its position, so chunks generate in any order and a save stores
-  only chunks that were edited.
-- **Meshing.** One mesh per chunk with only the faces that look at the camera and touch
-  air. Colour comes from a tile atlas; the vertex colour carries light.
+  only chunks that were edited. Only chunks that can appear on screen are loaded, and
+  generation and meshing share a time budget per frame.
+- **Meshing.** One mesh per chunk with every face that touches air. Colour comes from a
+  tile atlas; the vertex colour carries light.
 - **Art.** Each block's two 16 x 16 tiles are generated from its colours by a pattern
   (`src/world/tiles.rs`), or read from PNGs a pack ships.
-- **Light.** Face angle to the sun, ambient occlusion in corners and cast shadows are
-  computed per vertex; `assets/shaders/block.wgsl` evaluates them per texel and bands them
+- **Light.** The sun is fixed in the world. Face angle to it, ambient occlusion in corners
+  and cast shadows are computed per vertex; `assets/shaders/block.wgsl` evaluates them per texel and bands them
   so shading stays pixel art. Shade is cool, sun is warm.
 - **Physics.** A box that moves one axis at a time, falls, lands and climbs single steps.
 - **Scripts.** Lua 5.4 through `mlua`, sandboxed to `table`, `string`, `math`, `utf8`. The

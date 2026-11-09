@@ -1,0 +1,9 @@
+// Camera control. The engine itself only turns the view a quarter at a time (Q / E); this
+// mod adds free orbit with snap, reset, modifier-scroll zoom and a compass.
+// Set enabled: false to play without it.
+(
+    name: "camera",
+    format: 2,
+    depends: ["base"],
+    scripts: ["scripts/camera.lua"],
+)
