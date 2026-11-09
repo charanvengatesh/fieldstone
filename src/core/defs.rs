@@ -1,6 +1,7 @@
 //! Every content schema in one place. Packs (`assets/packs/*`, `mods/*`) are RON files
 //! holding `Vec<...>` of these; the engine never hardcodes a concrete item, tile, or recipe.
 
+use bevy::math::IVec2;
 use serde::{Deserialize, Serialize};
 
 /// Anything stored in a [`super::registry::Registry`]: has a unique string id within its kind.
@@ -181,6 +182,22 @@ pub struct ObjectDef {
     /// built things stay aligned.
     #[serde(default)]
     pub jitter: f32,
+    /// Footprint in cells; the anchor cell is the bottom-left. Other cells hold `__part`.
+    #[serde(default = "one_by_one")]
+    pub size: [u32; 2],
+    /// Group tag; objects in the same group join visually (walls, fences): 16 frames by mask.
+    #[serde(default)]
+    pub connects: Option<String>,
+    /// Low enough for arrows to pass (fences).
+    #[serde(default)]
+    pub low: bool,
+}
+
+/// Engine-owned object id that fills the extra cells of a multi-tile object.
+pub const PART_ID: &str = "__part";
+
+fn one_by_one() -> [u32; 2] {
+    [1, 1]
 }
 
 impl ObjectDef {
@@ -191,7 +208,13 @@ impl ObjectDef {
     /// Set dressing: walkable, worthless, gone in a tap. Never a click target, never in the
     /// way of building, and a swing goes to the creature standing on it.
     pub fn decor(&self) -> bool {
-        !self.solid && self.drops.is_none() && self.hp <= 0.5
+        !self.solid && self.drops.is_none() && self.hp <= 0.5 && self.id != PART_ID
+    }
+    pub fn is_part(&self) -> bool {
+        self.id == PART_ID
+    }
+    pub fn footprint(&self) -> IVec2 {
+        IVec2::new(self.size[0].max(1) as i32, self.size[1].max(1) as i32)
     }
 }
 def!(ObjectDef, "objects.ron");
@@ -415,6 +438,8 @@ pub enum HintWhen {
     Night,
     Day(u32),
     Level(u32),
+    /// Player stands inside an enclosure.
+    Indoors,
 }
 
 /// `hints.ron`: one-shot guidance lines shown top-center when their trigger first holds.

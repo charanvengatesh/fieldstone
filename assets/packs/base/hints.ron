@@ -10,5 +10,6 @@
     (id: "night",    when: Night,              text: "Night. Things wake up. Stay near torches, or carry a sword.", secs: 7.0),
     (id: "day2",     when: Day(1),             text: "A chest keeps your haul; a bed sets your respawn and skips the dark.", secs: 7.0),
     (id: "gold",     when: HasItem("gold_ore"), text: "Gold. Eight stone and two gold make a Sun Shrine. Three Sun Cores end the night for good.", secs: 8.0),
+    (id: "shelter",  when: Indoors,            text: "Shelter. Nothing spawns inside walls you close.", secs: 6.0),
     (id: "level",    when: Level(2),           text: "Level up: more health, harder hits. Skills grow with what you do.", secs: 6.0),
 ]

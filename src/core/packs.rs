@@ -73,6 +73,12 @@ pub fn load_all(app: &mut App) {
         merge::<FishTableDef>(w, dir);
         merge::<HintDef>(w, dir);
     }
+    // The filler for multi-tile footprints: solid, unbreakable, never drawn.
+    let part: ObjectDef = ron::from_str(&format!(
+        r#"(id: "{PART_ID}", shape: "", solid: true, hp: 1.0e9, xp: 0.0)"#
+    ))
+    .expect("part def");
+    w.get_resource_or_init::<Registry<ObjectDef>>().insert(part);
     app.insert_resource(LoadedPacks(packs));
 }
 

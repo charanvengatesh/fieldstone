@@ -23,10 +23,12 @@ pub fn run(
     mut toast: ResMut<Toast>,
     mut elapsed: Local<f32>,
     mut placed_seen: Local<Vec<u16>>,
-    player: Single<(&Inventory, &Progress), With<Player>>,
+    map: Res<crate::world::ChunkMap>,
+    terrain: Res<Registry<crate::core::TerrainDef>>,
+    player: Single<(&Inventory, &Progress, &Transform), With<Player>>,
 ) {
     *elapsed += time.delta_secs();
-    let (inv, progress) = *player;
+    let (inv, progress, tf) = *player;
     placed_seen.extend(placed.read().map(|p| p.object));
     if toast.left > 0.0 {
         return;
@@ -43,6 +45,12 @@ pub fn run(
             HintWhen::Night => clock.day_frac() >= 0.5,
             HintWhen::Day(n) => clock.day() >= *n,
             HintWhen::Level(n) => progress.level >= *n,
+            HintWhen::Indoors => crate::world::indoors(
+                &map,
+                &terrain,
+                &objects,
+                crate::world::cell_of(tf.translation.truncate()),
+            ),
         };
         if fire {
             shown.0.push(i);

@@ -84,6 +84,18 @@ pub fn y_sort(mut q: Query<(&YSorted, &mut Transform)>) {
     }
 }
 
+/// Which of 16 connection frames to show (bit 0 N, 1 E, 2 S, 3 W). Applied once on spawn.
+#[derive(Component)]
+pub struct ConnectFrame(pub usize);
+
+pub fn apply_connect_frames(mut q: Query<(&ConnectFrame, &mut Sprite), Added<ConnectFrame>>) {
+    for (f, mut s) in &mut q {
+        if let Some(atlas) = &mut s.texture_atlas {
+            atlas.index = f.0 % 16;
+        }
+    }
+}
+
 /// Loops a sprite strip at `fps`. Facing-driven strips (fps 0) are stepped by their owner.
 #[derive(Component)]
 pub struct Animated {
@@ -106,6 +118,7 @@ pub fn build_shapes(
     settings: Res<Settings>,
     shapes: Res<Registry<ShapeDef>>,
     sprites: Option<Res<Registry<SpriteDef>>>,
+    objects: Option<Res<Registry<crate::core::ObjectDef>>>,
     palette: Res<Registry<ColorDef>>,
     packs: Res<LoadedPacks>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -195,11 +208,18 @@ pub fn build_shapes(
         let loaded = def
             .and_then(|d| d.image.as_deref())
             .and_then(|rel| load_png(&packs, rel));
+        // Shapes used by connecting objects get 16 generated frames (one per neighbor mask).
+        let connecting = objects.as_ref().is_some_and(|r| {
+            r.iter()
+                .any(|(_, o)| o.shape == shape.id && o.connects.is_some())
+        });
+        let had_image = loaded.is_some();
         let (image, frame) = match loaded {
             Some(img) => {
                 let size = img.size().as_vec2();
                 (img, Vec2::new(size.x / frames as f32, size.y))
             }
+            None if connecting => connect_strip(&shape.parts, &assets.colors, ink),
             None => {
                 let rotate = def.is_some_and(|d| d.rotate && d.frames > 1);
                 pixel_strip(
@@ -210,7 +230,13 @@ pub fn build_shapes(
                 )
             }
         };
-        let frames = if loaded_or_rotated(def) { frames } else { 1 };
+        let frames = if loaded_or_rotated(def) {
+            frames
+        } else if connecting && !had_image {
+            16
+        } else {
+            1
+        };
         // Lowest point of the shape, in cells, relative to the canvas center.
         let canvas_cells = frame.y / PX;
         let low = lowest(&shape.parts);
@@ -414,6 +440,92 @@ pub fn pixel_strip(
     (image, Vec2::splat(size as f32))
 }
 
+/// Sixteen frames of a connecting object: the base shape plus an arm toward each joined side
+/// (bit 0 N, 1 E, 2 S, 3 W), drawn in the shape's dominant color so walls and fences read as
+/// one run. Frames share one canvas size.
+pub fn connect_strip(parts: &[Part], colors: &HashMap<String, Color>, ink: Color) -> (Image, Vec2) {
+    use bevy::asset::RenderAssetUsages;
+    use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
+    let body = parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::Rect { w, h, color, .. } if color != "ink" && color != "shadow" => {
+                Some((w * h, color.clone()))
+            }
+            _ => None,
+        })
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, c)| c)
+        .unwrap_or_else(|| "plank".to_string());
+    let top = parts
+        .iter()
+        .map(|p| match p {
+            Part::Rect { h, at, .. } => at[1] + h / 2.0,
+            Part::Circle { r, at, .. } | Part::Poly { r, at, .. } => at[1] + r,
+        })
+        .fold(0.5, f32::max);
+    let mut frames: Vec<(Image, Vec2)> = Vec::with_capacity(16);
+    for mask in 0..16u32 {
+        let mut p = parts.to_vec();
+        let arm = |w: f32, h: f32, at: [f32; 2], color: &str| Part::Rect {
+            w,
+            h,
+            color: color.to_string(),
+            at,
+            rot: 0.0,
+        };
+        // Arms reach the cell edge; an ink backing keeps the outline continuous.
+        let span = (top + 0.5).max(1.0);
+        if mask & 2 != 0 {
+            p.push(arm(0.6, span, [0.5, top / 2.0 - 0.25], "ink"));
+            p.push(arm(0.6, span - 0.12, [0.5, top / 2.0 - 0.25], &body));
+        }
+        if mask & 8 != 0 {
+            p.push(arm(0.6, span, [-0.5, top / 2.0 - 0.25], "ink"));
+            p.push(arm(0.6, span - 0.12, [-0.5, top / 2.0 - 0.25], &body));
+        }
+        if mask & 1 != 0 {
+            p.push(arm(0.5, 0.6, [0.0, top - 0.1], "ink"));
+            p.push(arm(0.38, 0.6, [0.0, top - 0.1], &body));
+        }
+        if mask & 4 != 0 {
+            p.push(arm(0.5, 0.6, [0.0, -0.3], "ink"));
+            p.push(arm(0.38, 0.6, [0.0, -0.3], &body));
+        }
+        frames.push(pixel_strip(&p, colors, ink, 1));
+    }
+    // Stitch at the largest frame size.
+    let size = frames.iter().map(|(_, f)| f.x as u32).max().unwrap_or(16);
+    let mut data = vec![0u8; (size * 16 * size * 4) as usize];
+    for (f, (img, fsize)) in frames.iter().enumerate() {
+        let fs = fsize.x as u32;
+        let off = (size - fs) / 2;
+        let src = img.data.as_ref().expect("cpu image");
+        for y in 0..fs {
+            for x in 0..fs {
+                let si = ((y * fs + x) * 4) as usize;
+                let dx = f as u32 * size + off + x;
+                let dy = off + y;
+                let di = ((dy * size * 16 + dx) * 4) as usize;
+                data[di..di + 4].copy_from_slice(&src[si..si + 4]);
+            }
+        }
+    }
+    let mut image = Image::new(
+        Extent3d {
+            width: size * 16,
+            height: size,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::nearest();
+    (image, Vec2::splat(size as f32))
+}
+
 pub const ICON_SIZE: u32 = 48;
 
 /// Draws a shape into a small RGBA image with 3x supersampling. Shapes are authored in cell
@@ -600,7 +712,7 @@ impl Plugin for ArtPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ShapeAssets>()
             .add_systems(PreStartup, build_shapes)
-            .add_systems(Update, animate)
+            .add_systems(Update, (animate, apply_connect_frames))
             .add_systems(
                 PostUpdate,
                 y_sort.before(bevy::transform::TransformSystems::Propagate),

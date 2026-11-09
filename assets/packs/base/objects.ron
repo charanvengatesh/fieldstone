@@ -2,14 +2,16 @@
 // `tool` restricts which tool tag can damage it; omit it to allow anything.
 [
     (id: "tree",       shape: "tree",       hp: 3.0, drops: Some("tree"), radius: 0.2, jitter: 0.22),
+    (id: "oak",        shape: "oak",        hp: 7.0, drops: Some("oak"), radius: 0.5, size: (2, 2)),
     (id: "bush",       shape: "bush",       hp: 1.0, drops: Some("bush"), solid: false, jitter: 0.25),
     (id: "rock",       shape: "rock",       hp: 3.0, drops: Some("rock"), radius: 0.38, jitter: 0.2),
     (id: "iron_ore",   shape: "iron_ore",   hp: 4.0, drops: Some("iron_ore"), tool: Some("pickaxe"), hardness: 1, radius: 0.4, jitter: 0.12),
     (id: "coal_ore",   shape: "coal_ore",   hp: 3.0, drops: Some("coal_ore"), tool: Some("pickaxe"), hardness: 1, radius: 0.4, jitter: 0.12),
     (id: "gold_ore",   shape: "gold_ore",   hp: 5.0, drops: Some("gold_ore"), tool: Some("pickaxe"), hardness: 2, radius: 0.4, jitter: 0.12),
 
-    (id: "wall_wood",  shape: "wall_wood",  hp: 2.0, drops: Some("wall_wood")),
-    (id: "wall_stone", shape: "wall_stone", hp: 4.0, drops: Some("wall_stone"), tool: Some("pickaxe")),
+    (id: "wall_wood",  shape: "wall_wood",  hp: 2.0, drops: Some("wall_wood"), connects: Some("wall_wood")),
+    (id: "fence_wood", shape: "fence_wood", hp: 1.0, drops: Some("fence_wood"), connects: Some("fence"), low: true),
+    (id: "wall_stone", shape: "wall_stone", hp: 4.0, drops: Some("wall_stone"), tool: Some("pickaxe"), connects: Some("wall_stone")),
     (id: "workbench",  shape: "workbench",  hp: 2.0, drops: Some("workbench"), station: Some("workbench"), radius: 0.45),
     (id: "torch",      shape: "torch",      hp: 0.5, drops: Some("torch"), solid: false, light: Some(6.0), xp: 0.0),
     // Ramps let you climb a terrace; natural ones are placed at cliff feet by the generator.
@@ -33,7 +35,8 @@
     (id: "wheat_2", shape: "wheat_2", hp: 0.3, solid: false, xp: 0.0, grows_into: Some(("wheat_3", 90.0))),
     (id: "wheat_3", shape: "wheat_3", hp: 0.3, solid: false, xp: 2.0, drops: Some("wheat")),
     (id: "chest",       shape: "chest",       hp: 2.0, drops: Some("chest"), storage: 20),
-    (id: "bed",         shape: "bed",         hp: 1.5, drops: Some("bed"), bed: true, solid: false),
+    (id: "bed",         shape: "bed",         hp: 1.5, drops: Some("bed"), bed: true, solid: false, size: (1, 2)),
+    (id: "stone_table", shape: "stone_table", hp: 3.0, drops: Some("stone_table"), station: Some("table"), size: (2, 1), tool: Some("pickaxe")),
     (id: "door_closed", shape: "door_closed", hp: 2.0, drops: Some("door"), use_swaps: Some("door_open")),
     (id: "door_open",   shape: "door_open",   hp: 2.0, drops: Some("door"), use_swaps: Some("door_closed"), solid: false),
     // Shrine: place it, then bring three sun cores. The base script ends the game at the third.

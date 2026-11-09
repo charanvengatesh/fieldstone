@@ -103,7 +103,7 @@ pub fn natural_spawns(
     {
         return;
     }
-    if lit(&map, &objects, cell) {
+    if lit(&map, &objects, cell) || crate::world::indoors(&map, &terrain, &objects, cell) {
         return;
     }
     let ground = terrain.id_of(tile.terrain);

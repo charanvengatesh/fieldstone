@@ -12,6 +12,8 @@
     (id: "mushroom", name: "Mushroom", shape: "mushroom_item", use: Eat(hp: 3.0, stamina: 6.0, food: 10.0)),
 
     (id: "wall_wood",  name: "Wood Wall",  shape: "wall_wood",  use: Place("wall_wood")),
+    (id: "fence_wood", name: "Fence",      shape: "fence_wood", use: Place("fence_wood")),
+    (id: "stone_table", name: "Stone Table", shape: "stone_table", use: Place("stone_table"), stack_max: 1),
     (id: "wall_stone", name: "Stone Wall", shape: "wall_stone", use: Place("wall_stone")),
     (id: "workbench",  name: "Workbench",  shape: "workbench",  use: Place("workbench"), stack_max: 1),
     (id: "furnace",    name: "Furnace",    shape: "furnace",    use: Place("furnace"), stack_max: 1),

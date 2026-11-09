@@ -5,6 +5,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
+use super::chunk::footprint;
 use super::chunk::*;
 use super::worldgen::WorldGen;
 use crate::art::{ShapeAssets, palette_color};
@@ -96,6 +97,7 @@ fn unload(map: &mut ChunkMap, saved: &mut SavedChunks, pos: IVec2, commands: &mu
         for x in 0..CHUNK {
             let cell = origin + IVec2::new(x, y);
             map.lights.remove(&cell);
+            map.parts.remove(&cell);
             if let Some(e) = map.objects.remove(&cell) {
                 commands.entity(e).despawn();
             }
@@ -135,6 +137,7 @@ pub fn draw(
         water: water_entities,
         layers,
         lights,
+        parts,
     } = &mut *map;
     let mut dirty: Vec<IVec2> = chunks
         .iter()
@@ -320,15 +323,24 @@ pub fn draw(
         }
         for (cell, obj) in new_objects {
             let def = objects.at(obj);
+            if def.is_part() {
+                continue;
+            }
             if def.light.is_some() {
                 lights.insert(cell);
             }
-            let shape = shapes.idx(&def.shape);
-            let e = crate::art::spawn_standing(
+            for c in footprint(cell, def.footprint()).skip(1) {
+                parts.insert(c, cell);
+            }
+            let e = spawn_object_visual(
                 &mut commands,
                 &assets,
-                shape,
-                Transform::from_translation(object_pos(cell, def).extend(1.0)),
+                &objects,
+                &shapes,
+                chunks,
+                parts,
+                cell,
+                obj,
             );
             obj_entities.insert(cell, e);
         }
@@ -394,17 +406,33 @@ fn terrain_mesh(field: &[super::blend::Weights], colors: &[[f32; 4]]) -> Mesh {
     .with_inserted_indices(Indices::U32(idx))
 }
 
-/// Removes the object entity on a cell, if any, and clears the tile's object.
+/// Removes whatever occupies `cell` (the whole footprint for multi-tile objects) and its
+/// visual. Returns the removed object id. Neighbors that connect visually are redrawn by
+/// the caller via [`refresh_neighbors`].
 pub fn clear_object(map: &mut ChunkMap, cell: IVec2, commands: &mut Commands) -> Option<u16> {
-    let old = map.set_object(cell, None)?.object;
-    map.lights.remove(&cell);
-    if let Some(e) = map.objects.remove(&cell) {
-        commands.entity(e).despawn();
+    let anchor = map.anchor_of(cell);
+    let old = map.tile(anchor)?.object?;
+    // Footprint cells are whichever parts point at this anchor, plus the anchor itself.
+    let cells: Vec<IVec2> = map
+        .parts
+        .iter()
+        .filter(|(_, a)| **a == anchor)
+        .map(|(c, _)| *c)
+        .chain(std::iter::once(anchor))
+        .collect();
+    for c in cells {
+        map.set_object(c, None);
+        map.parts.remove(&c);
+        map.lights.remove(&c);
+        if let Some(e) = map.objects.remove(&c) {
+            commands.entity(e).despawn();
+        }
     }
-    old
+    Some(old)
 }
 
-/// Sets an object on a cell and spawns its entity.
+/// Sets an object anchored at `cell` (bottom-left of its footprint), fills the rest of the
+/// footprint with parts, spawns its visual and redraws connecting neighbors.
 pub fn put_object(
     map: &mut ChunkMap,
     cell: IVec2,
@@ -422,6 +450,33 @@ pub fn put_object(
     if def.light.is_some() {
         map.lights.insert(cell);
     }
+    let part = objects.idx(crate::core::PART_ID);
+    for c in footprint(cell, def.footprint()).skip(1) {
+        clear_object(map, c, commands);
+        map.set_object(c, part);
+        map.parts.insert(c, cell);
+    }
+    let ChunkMap { chunks, parts, .. } = &mut *map;
+    let e = spawn_object_visual(
+        commands, assets, objects, shapes, chunks, parts, cell, object,
+    );
+    map.objects.insert(cell, e);
+    refresh_neighbors(map, cell, objects, shapes, assets, commands);
+}
+
+/// Spawns the visual for an object anchored at `cell`: feet at the bottom-center of its
+/// footprint, connect frame chosen by same-group neighbors.
+pub fn spawn_object_visual(
+    commands: &mut Commands,
+    assets: &ShapeAssets,
+    objects: &Registry<ObjectDef>,
+    shapes: &Registry<ShapeDef>,
+    chunks: &bevy::platform::collections::HashMap<IVec2, Chunk>,
+    parts: &bevy::platform::collections::HashMap<IVec2, IVec2>,
+    cell: IVec2,
+    object: u16,
+) -> Entity {
+    let def = objects.at(object);
     let shape = shapes.idx(&def.shape);
     let e = crate::art::spawn_standing(
         commands,
@@ -429,7 +484,47 @@ pub fn put_object(
         shape,
         Transform::from_translation(object_pos(cell, def).extend(1.0)),
     );
-    map.objects.insert(cell, e);
+    if let Some(group) = &def.connects {
+        let same = |c: IVec2| {
+            let a = parts.get(&c).copied().unwrap_or(c);
+            chunks
+                .get(&chunk_of(a))
+                .and_then(|ch| ch.tiles[local_index(a)].object)
+                .is_some_and(|o| objects.at(o).connects.as_deref() == Some(group.as_str()))
+        };
+        let mask = same(cell + IVec2::Y) as usize
+            | (same(cell + IVec2::X) as usize) << 1
+            | (same(cell - IVec2::Y) as usize) << 2
+            | (same(cell - IVec2::X) as usize) << 3;
+        commands.entity(e).insert(crate::art::ConnectFrame(mask));
+    }
+    e
+}
+
+/// Redraws the four neighbors of `cell` that belong to a connect group.
+pub fn refresh_neighbors(
+    map: &mut ChunkMap,
+    cell: IVec2,
+    objects: &Registry<ObjectDef>,
+    shapes: &Registry<ShapeDef>,
+    assets: &ShapeAssets,
+    commands: &mut Commands,
+) {
+    for d in [IVec2::Y, IVec2::X, IVec2::NEG_Y, IVec2::NEG_X] {
+        let n = map.anchor_of(cell + d);
+        let Some(o) = map.tile(n).and_then(|t| t.object) else {
+            continue;
+        };
+        if objects.at(o).connects.is_none() {
+            continue;
+        }
+        if let Some(e) = map.objects.remove(&n) {
+            commands.entity(e).despawn();
+        }
+        let ChunkMap { chunks, parts, .. } = &mut *map;
+        let e = spawn_object_visual(commands, assets, objects, shapes, chunks, parts, n, o);
+        map.objects.insert(n, e);
+    }
 }
 
 /// Material for a terrain's tile sheet (first water frame for water) and whether it is water.
@@ -443,11 +538,13 @@ fn sheet_material(sheets: &super::tiles::TileSheets, t: u16) -> (Handle<ColorMat
 /// Where an object draws: the cell center nudged by its `jitter`, deterministic per cell, so
 /// forests and scattered decor stop lining up on the grid.
 pub fn object_pos(cell: IVec2, def: &ObjectDef) -> Vec2 {
+    let fp = def.footprint();
+    let base = center_of(cell) + Vec2::new((fp.x - 1) as f32 * CELL / 2.0, 0.0);
     if def.jitter <= 0.0 {
-        return center_of(cell);
+        return base;
     }
     let dx = crate::core::hash01(5, cell.x, cell.y, 21) - 0.5;
     let dy = crate::core::hash01(5, cell.x, cell.y, 22) - 0.5;
     // Whole units so pixel art stays on the texel grid.
-    (center_of(cell) + Vec2::new(dx, dy) * 2.0 * def.jitter * CELL).round()
+    (base + Vec2::new(dx, dy) * 2.0 * def.jitter * CELL).round()
 }

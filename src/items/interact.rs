@@ -18,7 +18,7 @@ use crate::items::container::OpenContainer;
 use crate::player::{Cursor, Player};
 use crate::stats::SpawnPoint;
 use crate::stats::{GainXp, Progress, Stats};
-use crate::world::stream::{clear_object, put_object};
+use crate::world::stream::{clear_object, put_object, refresh_neighbors};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CELL, ChunkMap, PLAYER_R, center_of, overlapping_cells};
 
@@ -146,14 +146,17 @@ pub fn mine(
     items: Res<Registry<ItemDef>>,
     objects: Res<Registry<ObjectDef>>,
     loot: Res<Registry<LootDef>>,
+    (shapes, assets): (Res<Registry<ShapeDef>>, Res<ShapeAssets>),
     mut map: ResMut<ChunkMap>,
     mut damage: ResMut<Damage>,
     mut target: ResMut<Target>,
     ui: Res<UiHovered>,
     player: Single<(&Transform, &Inventory, &Progress), With<Player>>,
-    mut drops: MessageWriter<SpawnDrop>,
-    mut broken: MessageWriter<ObjectBroken>,
-    mut xp: MessageWriter<GainXp>,
+    (mut drops, mut broken, mut xp): (
+        MessageWriter<SpawnDrop>,
+        MessageWriter<ObjectBroken>,
+        MessageWriter<GainXp>,
+    ),
     mut commands: Commands,
 ) {
     let (tf, inv, progress) = *player;
@@ -168,6 +171,8 @@ pub fn mine(
             return;
         }
     };
+    // Parts of a multi-tile object are mined through their anchor.
+    let cell = map.anchor_of(cell);
     let Some(obj) = map.tile(cell).and_then(|t| t.object) else {
         target.0 = None;
         return;
@@ -192,6 +197,7 @@ pub fn mine(
     damage.0.remove(&cell);
     target.0 = None;
     clear_object(&mut map, cell, &mut commands);
+    refresh_neighbors(&mut map, cell, &objects, &shapes, &assets, &mut commands);
     if let Some(table) = def.drops.as_deref().and_then(|id| loot.get(id)) {
         roll_loot(
             table,
@@ -344,17 +350,23 @@ pub fn place(
         );
         return;
     };
-    let Some(tile) = map.tile(cell) else { return };
-    let ground = terrain.at(tile.terrain);
     let def = objects.at(obj);
-    let occupied = tile.object.is_some_and(|o| !objects.at(o).decor());
-    let blocked = occupied
-        || !ground.walkable
-        || def
-            .on
-            .as_ref()
-            .is_some_and(|allowed| !allowed.iter().any(|t| t == &ground.id))
-        || (def.solid && overlapping_cells(pos, PLAYER_R + def.radius * CELL).any(|c| c == cell));
+    let Some(anchor_tile) = map.tile(cell) else {
+        return;
+    };
+    let height = anchor_tile.height;
+    let blocked = crate::world::chunk::footprint(cell, def.footprint()).any(|c| {
+        let Some(tile) = map.tile(c) else { return true };
+        let ground = terrain.at(tile.terrain);
+        tile.object.is_some_and(|o| !objects.at(o).decor())
+            || !ground.walkable
+            || tile.height != height
+            || def
+                .on
+                .as_ref()
+                .is_some_and(|allowed| !allowed.iter().any(|t| t == &ground.id))
+            || (def.solid && overlapping_cells(pos, PLAYER_R + def.radius * CELL).any(|p| p == c))
+    });
     if blocked {
         return;
     }

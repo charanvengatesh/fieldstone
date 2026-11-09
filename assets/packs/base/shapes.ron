@@ -220,6 +220,22 @@
         Rect(w: 0.84, h: 0.08, color: "plank", at: (0.0, 0.14)),
     ]),
 
+    (id: "fence_wood", parts: [
+        Rect(w: 0.22, h: 0.90, color: "ink", at: (0.0, 0.05)),
+        Rect(w: 0.14, h: 0.84, color: "bark", at: (0.0, 0.05)),
+        Rect(w: 0.14, h: 0.10, color: "plank", at: (0.0, 0.42)),
+    ]),
+    (id: "stone_table", parts: [
+        Rect(w: 1.90, h: 0.26, color: "shadow", at: (0.5, -0.42)),
+        Rect(w: 0.22, h: 0.50, color: "ink", at: (-0.30, -0.20)),
+        Rect(w: 0.22, h: 0.50, color: "ink", at: (1.30, -0.20)),
+        Rect(w: 0.16, h: 0.46, color: "dark_stone", at: (-0.30, -0.20)),
+        Rect(w: 0.16, h: 0.46, color: "dark_stone", at: (1.30, -0.20)),
+        Rect(w: 1.96, h: 0.50, color: "ink", at: (0.5, 0.22)),
+        Rect(w: 1.90, h: 0.24, color: "stone_light", at: (0.5, 0.32)),
+        Rect(w: 1.90, h: 0.18, color: "stone", at: (0.5, 0.10)),
+    ]),
+
     // ---- Decor ----
     (id: "grass_tuft", parts: [
         Rect(w: 0.05, h: 0.26, color: "leaf_light", at: (-0.10, 0.0), rot: 15),

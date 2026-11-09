@@ -18,7 +18,8 @@
         ("grass", "meadow", -0.25),
     ],
     scatter: [
-        (object: "tree",     on: ["forest"],          density: 0.28),
+        (object: "oak",      on: ["forest"],          density: 0.03),
+        (object: "tree",     on: ["forest"],          density: 0.26),
         (object: "tree",     on: ["grass"],           density: 0.03),
         (object: "bush",     on: ["grass", "meadow"], density: 0.03),
         (object: "rock",     on: ["grass", "meadow"], density: 0.015),

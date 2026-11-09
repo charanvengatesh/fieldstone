@@ -48,6 +48,8 @@ pub struct ChunkMap {
     pub layers: HashMap<IVec2, Vec<Entity>>,
     /// Cells holding a light-giving object, kept current by `stream`.
     pub lights: bevy::platform::collections::HashSet<IVec2>,
+    /// Footprint cell -> anchor cell for multi-tile objects.
+    pub parts: HashMap<IVec2, IVec2>,
 }
 
 pub fn chunk_of(cell: IVec2) -> IVec2 {
@@ -67,11 +69,21 @@ pub fn center_of(c: IVec2) -> Vec2 {
     c.as_vec2() * CELL
 }
 
+/// Cells covered by a footprint of `size` anchored (bottom-left) at `anchor`.
+pub fn footprint(anchor: IVec2, size: IVec2) -> impl Iterator<Item = IVec2> {
+    (0..size.y).flat_map(move |dy| (0..size.x).map(move |dx| anchor + IVec2::new(dx, dy)))
+}
+
 impl ChunkMap {
     pub fn tile(&self, cell: IVec2) -> Option<Tile> {
         self.chunks
             .get(&chunk_of(cell))
             .map(|c| c.tiles[local_index(cell)])
+    }
+
+    /// The anchor cell of whatever occupies `cell` (itself for single-cell objects).
+    pub fn anchor_of(&self, cell: IVec2) -> IVec2 {
+        self.parts.get(&cell).copied().unwrap_or(cell)
     }
 
     /// Height of a loaded cell; unloaded cells report 0 so edges of the world stay flat.

@@ -5,6 +5,8 @@
     (id: "workbench",     inputs: [("plank", 4), ("stick", 2)],      output: ("workbench", 1)),
 
     (id: "wall_wood",     inputs: [("plank", 2)],                    output: ("wall_wood", 1),     station: Some("workbench")),
+    (id: "fence_wood",    inputs: [("stick", 2), ("plank", 1)],      output: ("fence_wood", 3),    station: Some("workbench")),
+    (id: "stone_table",   inputs: [("stone", 4)],                    output: ("stone_table", 1),   station: Some("workbench")),
     (id: "wall_stone",    inputs: [("stone", 2)],                    output: ("wall_stone", 1),    station: Some("workbench")),
     (id: "pickaxe_wood",  inputs: [("plank", 3), ("stick", 2)],      output: ("pickaxe_wood", 1),  station: Some("workbench")),
     (id: "axe_wood",      inputs: [("plank", 3), ("stick", 2)],      output: ("axe_wood", 1),      station: Some("workbench")),

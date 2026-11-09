@@ -137,8 +137,14 @@ pub fn fly(
                 amount: p.damage,
             });
         }
-        let blocked = solid_half(&map, &terrain, &objects, cell_of(pos))
-            .is_some_and(|h| (pos - center_of(cell_of(pos))).abs().max_element() < h);
+        let cell = cell_of(pos);
+        let low = map
+            .tile(map.anchor_of(cell))
+            .and_then(|t| t.object)
+            .is_some_and(|o| objects.at(o).low);
+        let blocked = !low
+            && solid_half(&map, &terrain, &objects, cell)
+                .is_some_and(|h| (pos - center_of(cell)).abs().max_element() < h);
         if hit.is_some() || p.left <= 0.0 || blocked {
             commands.entity(e).despawn();
         }

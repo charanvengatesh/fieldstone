@@ -58,6 +58,50 @@ pub fn blocker<'a>(
     }
 }
 
+/// Whether `cell` sits inside an enclosure: a flood fill over walkable, non-solid cells that
+/// never reaches `cap` cells or the edge of loaded chunks. Cliffs count as walls.
+pub fn indoors(
+    map: &ChunkMap,
+    terrain: &Registry<TerrainDef>,
+    objects: &Registry<ObjectDef>,
+    cell: IVec2,
+) -> bool {
+    const CAP: usize = 400;
+    let h0 = map.height(cell);
+    let open = |c: IVec2| {
+        map.tile(c).map(|t| {
+            terrain.at(t.terrain).walkable
+                && t.height == h0
+                && !t.object.is_some_and(|o| {
+                    let d = objects.at(map
+                        .tile(map.anchor_of(c))
+                        .and_then(|t| t.object)
+                        .unwrap_or(o));
+                    d.solid && d.radius >= 0.4
+                })
+        })
+    };
+    let mut seen = std::collections::HashSet::new();
+    let mut stack = vec![cell];
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c) {
+            continue;
+        }
+        match open(c) {
+            None => return false,
+            Some(false) => continue,
+            Some(true) => {}
+        }
+        if seen.len() > CAP {
+            return false;
+        }
+        for d in [IVec2::X, IVec2::NEG_X, IVec2::Y, IVec2::NEG_Y] {
+            stack.push(c + d);
+        }
+    }
+    true
+}
+
 /// Whether a straight line between two points crosses no solid box (sampled every ~8 units).
 pub fn clear_line(
     map: &ChunkMap,
@@ -106,7 +150,8 @@ mod tests {
 
     fn world(heights: &[(IVec2, u8)], ramps: &[IVec2]) -> (ChunkMap, Registry<ObjectDef>) {
         let mut objects = Registry::<ObjectDef>::default();
-        let ramp: ObjectDef = ron::from_str(r#"(id: "ramp", shape: "ramp", solid: false)"#).unwrap();
+        let ramp: ObjectDef =
+            ron::from_str(r#"(id: "ramp", shape: "ramp", solid: false)"#).unwrap();
         let ramp_id = objects.insert(ramp);
         let mut chunk = Chunk::filled(Tile::default());
         for (c, h) in heights {
