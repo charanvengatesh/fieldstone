@@ -3,7 +3,7 @@
 //! queued and applied by a Bevy system, so scripts never touch the ECS directly.
 
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, Ordering};
 
 use bevy::prelude::*;
 use bevy_mod_scripting::asset::Language;
@@ -26,6 +26,7 @@ callback_labels!(
     OnDeath => "on_death",
     OnDayStart => "on_day_start",
     OnObjectUsed => "on_object_used",
+    OnTick => "on_tick",
 );
 
 /// What scripts asked for since the last frame.
@@ -39,6 +40,11 @@ enum Request {
 
 static QUEUE: Mutex<Vec<Request>> = Mutex::new(Vec::new());
 static NIGHT: AtomicBool = AtomicBool::new(false);
+/// Frame snapshot readable from scripts without touching the ECS.
+static PLAYER_X: AtomicI32 = AtomicI32::new(0);
+static PLAYER_Y: AtomicI32 = AtomicI32::new(0);
+static DAY_FRAC: AtomicU32 = AtomicU32::new(0);
+static JUST_PRESSED: Mutex<Vec<KeyCode>> = Mutex::new(Vec::new());
 
 fn push(r: Request) {
     QUEUE.lock().unwrap().push(r);
@@ -84,7 +90,25 @@ pub fn register_api(world: &mut World) {
             push(Request::ShowText(msg, secs as f32))
         })
         .register("win", |msg: String| push(Request::Win(msg)))
-        .register("set_day_frac", |f: f64| push(Request::SetDayFrac(f as f32)));
+        .register("set_day_frac", |f: f64| push(Request::SetDayFrac(f as f32)))
+        .register("player_x", || PLAYER_X.load(Ordering::Relaxed) as i64)
+        .register("player_y", || PLAYER_Y.load(Ordering::Relaxed) as i64)
+        .register("day_frac", || {
+            f32::from_bits(DAY_FRAC.load(Ordering::Relaxed)) as f64
+        })
+        .register("key_just_pressed", |name: String| {
+            crate::core::settings::parse_key(&name)
+                .is_some_and(|k| JUST_PRESSED.lock().unwrap().contains(&k))
+        })
+        .register("screenshot", |name: String| {
+            crate::debug::push(crate::debug::Probe::Screenshot(name))
+        })
+        .register("dump_state", |name: String| {
+            crate::debug::push(crate::debug::Probe::Dump(name))
+        })
+        .register("append_file", |name: String, line: String| {
+            crate::debug::push(crate::debug::Probe::Append(name, line))
+        });
 }
 
 /// Applies queued script requests.
@@ -143,6 +167,9 @@ pub fn apply_requests(
 /// Turns engine messages into script callbacks.
 pub fn bridge(
     clock: Res<GameTime>,
+    time: Res<Time>,
+    input: Res<ButtonInput<KeyCode>>,
+    player: Option<Single<&Transform, With<Player>>>,
     objects: Res<Registry<crate::core::ObjectDef>>,
     recipes: Res<Registry<crate::core::RecipeDef>>,
     creatures: Res<Registry<CreatureDef>>,
@@ -155,6 +182,17 @@ pub fn bridge(
     mut out: MessageWriter<ScriptCallbackMessage>,
 ) {
     NIGHT.store(clock.day_frac() >= 0.5, Ordering::Relaxed);
+    DAY_FRAC.store(clock.day_frac().to_bits(), Ordering::Relaxed);
+    if let Some(p) = &player {
+        let c = (p.translation.truncate() / CELL).round().as_ivec2();
+        PLAYER_X.store(c.x, Ordering::Relaxed);
+        PLAYER_Y.store(c.y, Ordering::Relaxed);
+    }
+    *JUST_PRESSED.lock().unwrap() = input.get_just_pressed().copied().collect();
+    out.write(ScriptCallbackMessage::new_for_all_scripts(
+        OnTick,
+        vec![ScriptValue::Float(time.delta_secs_f64())],
+    ));
     let s = |v: &str| ScriptValue::String(v.to_owned().into());
     let i = |v: i32| ScriptValue::Integer(v as i64);
     for b in broken.read() {
@@ -222,6 +260,7 @@ impl Plugin for ScriptPlugin {
                     event_handler::<OnDeath, LuaScriptingPlugin>,
                     event_handler::<OnDayStart, LuaScriptingPlugin>,
                     event_handler::<OnObjectUsed, LuaScriptingPlugin>,
+                    event_handler::<OnTick, LuaScriptingPlugin>,
                     apply_requests,
                 )
                     .chain()

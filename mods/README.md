@@ -38,13 +38,14 @@ functions and the engine calls them:
 | `on_death(creature_id, x, y)` | `"player"` when the player dies |
 | `on_day_start(day)` | fires at each dawn after the first |
 | `on_object_used(x, y, from_id, to_id)` | an object with `use_swaps` was used (doors, shrine stages) |
+| `on_tick(dt)` | every frame, `dt` in seconds |
 
 Pixel art: a sprite PNG is a horizontal strip of equal frames; a tile sheet is a 4x4 grid where
 tile index = corner mask (bit 0 bottom-left, 1 bottom-right, 2 top-left, 3 top-right). Anything
 you do not provide is generated from the shape recipe, so a mod can start with shapes and swap
 in PNGs one at a time.
 
-Coordinates are cell indices (one cell is 25 world units). Scripts load once at startup; there is no
+Coordinates are cell indices (one cell is 16 world units). Scripts load once at startup; there is no
 hot reload yet. `give_item` drops the items at the player's feet rather than inserting them.
 
 Functions scripts can call:
@@ -58,6 +59,12 @@ Functions scripts can call:
 | `show_text(message, seconds)` | toast line at the top of the screen |
 | `win(message)` | ends the game: eternal day and an ending card |
 | `set_day_frac(f)` | moves the clock within the current day (0 dawn, 0.5 dusk) |
+| `player_x()`, `player_y()` | the player's cell |
+| `day_frac()` | 0 dawn .. 0.5 dusk .. 1 |
+| `key_just_pressed(name)` | `true` the frame a key goes down; names as in `settings.ron` (`"F9"`, `"K"`) |
+| `screenshot(name)` | saves `debug/<name>.png` |
+| `dump_state(name)` | saves `debug/<name>.txt`: clocks, player, inventory, creatures, chests, ASCII maps |
+| `append_file(name, line)` | appends a line to `debug/<name>` |
 
 `format` is the pack format the mod was written for; the engine warns when a mod is newer than it
 understands. Objects can declare `storage` (chest slots), `use_swaps` / `use_consumes` (doors,
@@ -65,4 +72,5 @@ multi-stage builds), `bed`, `radius` (hitbox), `on` (terrain restriction), `ligh
 
 See `mods/example-autumn/` for a data-only mod (eight palette overrides, nothing else) and
 `mods/example-crystal/` for a complete mod: a new ore in the world generator, items,
-recipes, a light source, and a script that reacts to mining and placing.
+recipes, a light source, and a script that reacts to mining and placing. `mods/debug/` is a
+probe: F9 saves a screenshot and a world-state dump under `debug/` for bug reports.

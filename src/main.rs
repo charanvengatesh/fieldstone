@@ -6,6 +6,7 @@ mod art;
 mod combat;
 mod core;
 mod daylight;
+mod debug;
 mod farm;
 mod fish;
 mod fx;
@@ -78,7 +79,15 @@ fn main() {
                     }),
                     ..default()
                 })
-                .set(ImagePlugin::default_nearest()),
+                .set(ImagePlugin::default_nearest())
+                // Assets live under the content root, wherever the process was started.
+                .set(AssetPlugin {
+                    file_path: core::paths::root()
+                        .join("assets")
+                        .to_string_lossy()
+                        .into_owned(),
+                    ..default()
+                }),
         )
         .add_plugins((
             ui::UiPlugin,
@@ -108,6 +117,7 @@ fn main() {
             fish::FishPlugin,
             stats::StatsPlugin,
             script::ScriptPlugin,
+            debug::DebugPlugin,
         ))
         .configure_sets(
             Update,

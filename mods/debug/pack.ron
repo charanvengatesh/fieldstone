@@ -1,0 +1,8 @@
+// Debug probe: adds no content. Press F9 in game to save a screenshot and a world-state dump
+// under debug/ in the user directory; F10 toggles automatic capture; every hook the engine
+// fires is appended to debug/events.log. Set enabled: false to switch it off.
+(
+    name: "debug",
+    depends: ["base"],
+    scripts: ["scripts/debug.lua"],
+)
