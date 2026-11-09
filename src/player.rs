@@ -52,7 +52,7 @@ pub fn spawn(
         .idx("player")
         .expect("creatures.ron must define 'player'");
     let def = creatures.at(id);
-    let e = crate::art::spawn_shape(
+    let e = crate::art::spawn_standing(
         &mut commands,
         &assets,
         shapes.idx(&def.shape),

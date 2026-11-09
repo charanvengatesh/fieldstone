@@ -84,7 +84,7 @@ pub fn slash(
             &mut commands,
             &assets,
             shapes.idx("slash"),
-            Transform::from_translation(at.extend(2.5))
+            Transform::from_translation(at.extend(3.2))
                 .with_rotation(Quat::from_rotation_z(s.dir.to_angle())),
         );
         commands.entity(e).insert(Transient {
@@ -126,7 +126,7 @@ pub fn break_particles(
             commands.spawn((
                 Mesh2d(assets.unit_circle.clone()),
                 MeshMaterial2d(material.clone()),
-                Transform::from_translation((center + dir * CELL * 0.2).extend(2.4))
+                Transform::from_translation((center + dir * CELL * 0.2).extend(3.1))
                     .with_scale(Vec3::splat(r)),
                 Transient {
                     left: 0.45,

@@ -82,11 +82,16 @@ pub fn spawn(
             shapes.idx(&items.at(d.item).shape),
             tf,
         );
-        commands.entity(e).insert(Drop {
-            item: d.item,
-            n: d.n,
-            age: 0.0,
-        });
+        commands.entity(e).insert((
+            Drop {
+                item: d.item,
+                n: d.n,
+                age: 0.0,
+            },
+            crate::art::YSorted {
+                layer: crate::art::LAYER_DROPS,
+            },
+        ));
     }
 }
 
@@ -115,7 +120,6 @@ pub fn collect(
             let step = (p - target).normalize_or_zero() * -(400.0 * time.delta_secs());
             tf.translation += step.extend(0.0);
         }
-        tf.translation.z = 1.5 + (d.age * 3.0).sin() * 0.01;
         if dist < PICKUP {
             let before = d.n;
             d.n = inv.add(d.item, d.n, &items);

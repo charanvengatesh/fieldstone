@@ -33,6 +33,8 @@ pub struct SpriteVisual {
     pub layout: Option<Handle<TextureAtlasLayout>>,
     /// Bevy anchor: (0, 0) is the center, range -0.5..0.5.
     pub anchor: Vec2,
+    /// Anchor that puts the shape's lowest point on the entity position (3/4 view "feet").
+    pub feet: Vec2,
 }
 
 #[derive(Resource, Default)]
@@ -54,6 +56,31 @@ pub struct ShapeAssets {
 impl ShapeAssets {
     pub fn pixel(&self) -> bool {
         self.mode == RenderMode::Pixel
+    }
+}
+
+/// Where a visual is pinned to its entity position.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Pin {
+    /// Feet on the position: world objects, creatures, the player.
+    Standing,
+    /// Centered on the position: drops, held items, effects.
+    Centered,
+}
+
+/// Draw order follows screen height: things lower on screen draw over things above them.
+#[derive(Component, Clone, Copy)]
+pub struct YSorted {
+    pub layer: f32,
+}
+
+pub const LAYER_STANDING: f32 = 1.0;
+pub const LAYER_DROPS: f32 = 1.0;
+
+pub fn y_sort(mut q: Query<(&YSorted, &mut Transform)>) {
+    for (s, mut tf) in &mut q {
+        let t = (0.5 - tf.translation.y / 100_000.0).clamp(0.0, 0.99);
+        tf.translation.z = s.layer + t;
     }
 }
 
@@ -184,6 +211,13 @@ pub fn build_shapes(
             }
         };
         let frames = if loaded_or_rotated(def) { frames } else { 1 };
+        // Lowest point of the shape, in cells, relative to the canvas center.
+        let canvas_cells = frame.y / PX;
+        let low = lowest(&shape.parts);
+        let feet = def
+            .map(|d| Vec2::new(d.anchor[0] - 0.5, d.anchor[1] - 0.5))
+            .filter(|_| def.is_some_and(|d| d.anchor != [0.5, 0.5]))
+            .unwrap_or(Vec2::new(0.0, (low / canvas_cells).clamp(-0.5, 0.5)));
         let layout = (frames > 1).then(|| {
             layouts.add(TextureAtlasLayout::from_grid(
                 frame.as_uvec2(),
@@ -204,6 +238,7 @@ pub fn build_shapes(
                 fps,
                 layout,
                 anchor,
+                feet,
             },
         );
     }
@@ -241,6 +276,26 @@ pub fn load_png(packs: &LoadedPacks, rel: &str) -> Option<Image> {
     }
     debug!("image '{rel}' not found in any pack");
     None
+}
+
+/// Lowest y any part reaches, in cells (negative = below the origin). Shadows do not count.
+fn lowest(parts: &[Part]) -> f32 {
+    parts
+        .iter()
+        .filter(|p| {
+            let c = match p {
+                Part::Circle { color, .. }
+                | Part::Rect { color, .. }
+                | Part::Poly { color, .. } => color,
+            };
+            c != "shadow"
+        })
+        .map(|p| match p {
+            Part::Circle { r, at, .. } => at[1] - r,
+            Part::Rect { h, at, .. } => at[1] - h / 2.0,
+            Part::Poly { r, at, .. } => at[1] - r,
+        })
+        .fold(0.0, f32::min)
 }
 
 /// Half-extent of a shape in cells (how far any part reaches from the origin).
@@ -306,9 +361,11 @@ pub fn pixel_strip(
                         sample[3] = a + sample[3] * (1.0 - a);
                     }
                 }
-                // Hard pixels: anything half-covered or more is solid.
+                // Hard pixels: half-covered or more is solid; faint coverage is a soft shadow texel.
                 if sample[3] >= 0.5 {
                     sample[3] = 1.0;
+                } else if sample[3] >= 0.15 {
+                    sample = [0.05, 0.08, 0.05, 0.38];
                 } else {
                     sample = [0.0; 4];
                 }
@@ -448,13 +505,38 @@ fn inside(part: &Part, p: Vec2) -> bool {
     }
 }
 
-/// Spawns a visual at `transform`: a sprite in pixel mode, shape parts in vector mode.
-/// Unknown ids get an empty entity so callers can still attach components.
+/// Centered visual (drops, held items, effects). See [`spawn_visual`].
 pub fn spawn_shape(
     commands: &mut Commands,
     assets: &ShapeAssets,
     shape: Option<u16>,
     transform: Transform,
+) -> Entity {
+    spawn_visual(commands, assets, shape, transform, Pin::Centered)
+}
+
+/// Standing visual (objects, creatures, the player): feet on the position, y-sorted.
+pub fn spawn_standing(
+    commands: &mut Commands,
+    assets: &ShapeAssets,
+    shape: Option<u16>,
+    transform: Transform,
+) -> Entity {
+    let e = spawn_visual(commands, assets, shape, transform, Pin::Standing);
+    commands.entity(e).insert(YSorted {
+        layer: LAYER_STANDING,
+    });
+    e
+}
+
+/// Spawns a visual at `transform`: a sprite in pixel mode, shape parts in vector mode.
+/// Unknown ids get an empty entity so callers can still attach components.
+pub fn spawn_visual(
+    commands: &mut Commands,
+    assets: &ShapeAssets,
+    shape: Option<u16>,
+    transform: Transform,
+    pin: Pin,
 ) -> Entity {
     if assets.pixel() {
         if let Some(v) = shape.and_then(|s| assets.sprites.get(&s)) {
@@ -466,7 +548,11 @@ pub fn spawn_shape(
                     index: 0,
                 });
             }
-            let mut e = commands.spawn((sprite, Anchor(v.anchor), transform));
+            let anchor = match pin {
+                Pin::Standing => v.feet,
+                Pin::Centered => v.anchor,
+            };
+            let mut e = commands.spawn((sprite, Anchor(anchor), transform));
             if v.fps > 0.0 && v.frames > 1 {
                 e.insert(Animated {
                     fps: v.fps,
@@ -478,14 +564,20 @@ pub fn spawn_shape(
         }
         return commands.spawn((transform, Visibility::default())).id();
     }
+    let lift = match (pin, shape.and_then(|s| assets.sprites.get(&s))) {
+        (Pin::Standing, Some(v)) => -v.feet.y * v.frame.y,
+        _ => 0.0,
+    };
     let mut parent = commands.spawn((transform, Visibility::default()));
     if let Some(parts) = shape.and_then(|s| assets.shapes.get(&s)) {
         parent.with_children(|p| {
             for part in parts {
+                let mut t = part.transform;
+                t.translation.y += lift;
                 p.spawn((
                     Mesh2d(part.mesh.clone()),
                     MeshMaterial2d(part.material.clone()),
-                    part.transform,
+                    t,
                 ));
             }
         });
@@ -508,6 +600,10 @@ impl Plugin for ArtPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ShapeAssets>()
             .add_systems(PreStartup, build_shapes)
-            .add_systems(Update, animate);
+            .add_systems(Update, animate)
+            .add_systems(
+                PostUpdate,
+                y_sort.before(bevy::transform::TransformSystems::Propagate),
+            );
     }
 }

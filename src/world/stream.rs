@@ -303,7 +303,7 @@ pub fn draw(
                 lights.insert(cell);
             }
             let shape = shapes.idx(&def.shape);
-            let e = crate::art::spawn_shape(
+            let e = crate::art::spawn_standing(
                 &mut commands,
                 &assets,
                 shape,
@@ -402,7 +402,7 @@ pub fn put_object(
         map.lights.insert(cell);
     }
     let shape = shapes.idx(&def.shape);
-    let e = crate::art::spawn_shape(
+    let e = crate::art::spawn_standing(
         commands,
         assets,
         shape,

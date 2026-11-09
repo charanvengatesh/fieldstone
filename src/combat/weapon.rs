@@ -81,7 +81,7 @@ pub fn attack(
                 &mut commands,
                 &assets,
                 shapes.idx(shape),
-                Transform::from_translation((origin + dir * CELL * 0.5).extend(1.8))
+                Transform::from_translation((origin + dir * CELL * 0.5).extend(3.0))
                     .with_rotation(Quat::from_rotation_z(dir.to_angle())),
             );
             commands.entity(e).insert(Projectile {

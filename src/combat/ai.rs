@@ -28,7 +28,16 @@ pub fn think(
     terrain: Res<Registry<TerrainDef>>,
     objects: Res<Registry<ObjectDef>>,
     player: Single<(Entity, &Transform), With<Player>>,
-    mut mobs: Query<(&Creature, &Stats, &mut Ai, &mut Transform), Without<Player>>,
+    mut mobs: Query<
+        (
+            &Creature,
+            &Stats,
+            &mut Ai,
+            &mut Transform,
+            Option<&mut Sprite>,
+        ),
+        Without<Player>,
+    >,
     mut calm: MessageReader<crate::stats::CalmHostiles>,
     mut damage: MessageWriter<Damage>,
 ) {
@@ -37,7 +46,7 @@ pub fn think(
     let target = ptf.translation.truncate();
     let dt = time.delta_secs();
     let solid = |c| solid_half(&map, &terrain, &objects, c);
-    for (c, stats, mut ai, mut tf) in &mut mobs {
+    for (c, stats, mut ai, mut tf, sprite) in &mut mobs {
         let def = creatures.at(c.0);
         let pos = tf.translation.truncate();
         let to_player = target - pos;
@@ -93,5 +102,20 @@ pub fn think(
             ai.timer = 0.0;
         }
         tf.translation = p.extend(tf.translation.z);
+        // Facing: four-frame strips pick a quadrant, single frames mirror left/right.
+        if let Some(mut sprite) = sprite
+            && ai.dir != Vec2::ZERO
+        {
+            match &mut sprite.texture_atlas {
+                Some(atlas) => {
+                    let a = ai.dir.to_angle();
+                    atlas.index = (((a + std::f32::consts::FRAC_PI_4)
+                        .rem_euclid(std::f32::consts::TAU))
+                        / std::f32::consts::FRAC_PI_2) as usize
+                        % 4;
+                }
+                None => sprite.flip_x = ai.dir.x < 0.0,
+            }
+        }
     }
 }

@@ -35,7 +35,7 @@ pub fn spawn_creature(
     at: Vec2,
 ) -> Entity {
     let def = creatures.at(id);
-    let e = crate::art::spawn_shape(
+    let e = crate::art::spawn_standing(
         commands,
         assets,
         shapes.idx(&def.shape),
