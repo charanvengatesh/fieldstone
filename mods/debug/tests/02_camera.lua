@@ -149,12 +149,18 @@ test("zooming toward the pointer keeps the block under it", function()
         before = target()
         if before then
             zoom_at(6, p[1], p[2])
-            wait(60)
+            -- Long enough for the 0.15 s zoom ease, short enough that the pan has not
+            -- started drifting home (1.5 s), even on a slow machine.
+            wait(20)
             -- The same screen pixel is now that many fewer texels from the middle.
             aim_screen(p[1] * z / 6, p[2] * z / 6)
             wait(2)
             after = target()
             if after then break end
+            local cx, cy = camera_center()
+            local px, py, pz = player_pos()
+            log(string.format("zoom test: no target after zooming at %d,%d (zoom %d, centre %.0f,%.0f, player %.1f,%.1f,%.1f, before %d,%d,%d %s)",
+                p[1], p[2], zoom(), cx, cy, px, py, pz, before.x, before.y, before.z, before.block))
             clear_aim()
             set_zoom(z)
             wait(60)
