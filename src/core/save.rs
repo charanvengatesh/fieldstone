@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use super::settings::Keys;
+use super::time::GameTime;
 use super::{BlockDef, ItemDef, Registry, SaveRequest, Toast};
 use crate::inventory::{Inventory, Stack};
 use crate::player::Player;
@@ -32,6 +33,9 @@ pub struct SaveFile {
     /// Tilt preset name; older files have none and get the classic tilt.
     #[serde(default)]
     pub tilt: String,
+    /// Game clock in seconds; older files have none and start at the default morning.
+    #[serde(default)]
+    pub time: f64,
     pub selected: usize,
     /// Slots as `(item id, count)`.
     pub inventory: Vec<Option<(String, u32)>>,
@@ -47,6 +51,7 @@ pub struct Loaded {
     pub player: Vec3,
     pub rot: u8,
     pub tilt: String,
+    pub time: f64,
     pub selected: usize,
     pub inventory: Vec<Option<Stack>>,
     pub chunks: HashMap<IVec2, Blocks>,
@@ -93,6 +98,7 @@ pub fn pack<'a>(
     player: Vec3,
     rot: u8,
     tilt: &str,
+    time: f64,
     inv: &Inventory,
     chunks: impl Iterator<Item = (IVec2, &'a Blocks)>,
     blocks: &Registry<BlockDef>,
@@ -118,6 +124,7 @@ pub fn pack<'a>(
         player: (player.x, player.y, player.z),
         rot,
         tilt: tilt.to_owned(),
+        time,
         selected: inv.selected,
         inventory: inv
             .slots
@@ -160,6 +167,7 @@ pub fn unpack(
         player: Vec3::new(file.player.0, file.player.1, file.player.2),
         rot: file.rot % 4,
         tilt: file.tilt.clone(),
+        time: file.time,
         selected: file.selected,
         inventory: file
             .inventory
@@ -204,6 +212,7 @@ pub fn save(
     path: Res<SavePath>,
     wg: Res<WorldGen>,
     view: Res<View>,
+    clock: Res<GameTime>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
     items: Res<Registry<ItemDef>>,
@@ -228,6 +237,7 @@ pub fn save(
         player.body.pos,
         view.rot(),
         view.target_tilt.name(),
+        clock.secs,
         inv,
         edited,
         &blocks,
@@ -298,6 +308,7 @@ mod tests {
             Vec3::new(1.5, -2.5, 9.0),
             2,
             "high",
+            1234.5,
             &inv,
             [(IVec2::new(-1, 4), &chunk)].into_iter(),
             &blocks,
@@ -311,6 +322,7 @@ mod tests {
         let loaded = unpack(&file, &blocks2, &items2).unwrap();
         assert_eq!((loaded.seed, loaded.rot, loaded.selected), (77, 2, 3));
         assert_eq!(loaded.tilt, "high");
+        assert_eq!(loaded.time, 1234.5);
         assert_eq!(loaded.player, Vec3::new(1.5, -2.5, 9.0));
         let got = &loaded.chunks[&IVec2::new(-1, 4)];
         assert_eq!(got[0], blocks2.idx("stone").unwrap());
@@ -337,6 +349,7 @@ mod tests {
             Vec3::ZERO,
             0,
             "classic",
+            0.0,
             &inv,
             [(IVec2::ZERO, &chunk)].into_iter(),
             &blocks,

@@ -9,11 +9,14 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::sprite_render::AlphaMode2d;
 
 use crate::core::settings::Keys;
+use crate::core::time::{Daylight, GameTime, daylight};
 use crate::core::{BlockDef, Registry};
 use crate::inventory::Inventory;
 use crate::world::iso::{Tilt, View};
-use crate::world::mesh::{sunlit, tint};
+use crate::world::light::{REACH, level_at};
+use crate::world::mesh::{compose, sunlit};
 use crate::world::physics::{Body, step};
+use crate::world::tiles::Tiles;
 use crate::world::{AIR, Focus, HEIGHT, Map};
 
 /// Blocks per second.
@@ -197,13 +200,22 @@ pub fn movement(
     focus.0 = player.body.pos.with_z(player.shown_z);
 }
 
+/// The figure's colour: lit by the sun (`lit` 1 in the open, less in shade) and by
+/// block light `lamp` 0..15, mixed by the time of day like the blocks are.
+pub fn figure_light(lit: f32, lamp: u8, day: &Daylight) -> Vec3 {
+    compose(Vec3::new(lit, lamp as f32 / REACH as f32, lit), day, 1.0)
+}
+
 /// Puts the figure, its ghost and its ground shadow where the body is, shows the right
 /// frame of the stride, and dims the figure when something stands between it and the sun.
 pub fn place(
     time: Res<Time>,
+    clock: Res<GameTime>,
     view: Res<View>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
+    tiles: Option<Res<Tiles>>,
+    mut last_color: Local<Vec3>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut shown: Local<(Option<View>, usize)>,
@@ -240,13 +252,23 @@ pub fn place(
     } else {
         SHADED
     };
-    let before = player.lit;
     player.lit += (target - player.lit) * (time.delta_secs() * 8.0).min(1.0);
-    if (player.lit - before).abs() > 1e-3
+    let lamp = tiles
+        .map(|t| {
+            level_at(
+                &map,
+                &t.light,
+                |b| t.passes.get(b as usize).copied().unwrap_or(false),
+                (pos + Vec3::Z * 0.9).floor().as_ivec3(),
+            )
+        })
+        .unwrap_or(0);
+    let color = figure_light(player.lit, lamp, &daylight(clock.frac()));
+    if (color - *last_color).abs().max_element() > 1e-3
         && let Some(mut m) = materials.get_mut(&material.0)
     {
-        let c = tint(player.lit);
-        m.color = Color::linear_rgb(c[0], c[1], c[2]);
+        *last_color = color;
+        m.color = Color::linear_rgb(color.x, color.y, color.z);
     }
 
     // The ground shadow lies on the first closed cell under the feet.

@@ -1,6 +1,6 @@
 // Crystal ore appears in stone (see features.ron) and breaks into a crystal block, which
-// glows: it keeps most of its brightness in shade.
+// glows: it keeps most of its brightness in shade and lights its surroundings.
 [
     (id: "crystal_ore", name: "Crystal Ore", color: (132, 134, 142), accent: Some((190, 140, 255)), pattern: Ore, hp: 2.0, drops: Some("crystal")),
-    (id: "crystal",     name: "Crystal",     color: (170, 126, 236), top: Some((208, 182, 255)), pattern: Bricks, accent: Some((232, 214, 255)), glow: 0.85, hp: 0.8),
+    (id: "crystal",     name: "Crystal",     color: (170, 126, 236), top: Some((208, 182, 255)), pattern: Bricks, accent: Some((232, 214, 255)), glow: 0.85, light: 9, hp: 0.8),
 ]

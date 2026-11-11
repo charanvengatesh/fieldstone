@@ -1,5 +1,6 @@
-// Block faces. The texture is the tile atlas; the vertex colour carries light in rgb and,
-// in alpha, the face's outline mask and water flag (see pack_flags in src/world/mesh.rs).
+// Block faces. The texture is the tile atlas; the vertex colour carries light as channels
+// (r sun, g block light, b ambient) that are mixed by the time of day here, and in alpha
+// the face's outline mask, water flag and top flag (see pack_flags in src/world/mesh.rs).
 //
 // Three things happen here that make the result read as pixel art rather than as lit
 // polygons: light is evaluated at the centre of each texel instead of each screen pixel,
@@ -14,6 +15,14 @@ struct BlockParams {
     player: vec4<f32>,
     // x: screen pixels per texel
     screen: vec4<f32>,
+    // x: daylight 0..1, y: time of day 0..1, z: cloud drift in blocks
+    day: vec4<f32>,
+    // sunlight colour now
+    sun_color: vec4<f32>,
+    // light left in shade and at night
+    ambient_color: vec4<f32>,
+    // inverse of the view projection: screen texels and depth back to world blocks
+    inverse: mat4x4<f32>,
 };
 
 @group(2) @binding(0) var<uniform> block: BlockParams;
@@ -30,10 +39,57 @@ struct VertexOutput {
 };
 
 const TILE: f32 = 16.0;
+const SHADE_TINT: vec3<f32> = vec3<f32>(0.80, 0.88, 1.08);
+const SUN_TINT: vec3<f32> = vec3<f32>(1.06, 1.0, 0.90);
+const TORCH: vec3<f32> = vec3<f32>(1.0, 0.80, 0.55);
 
 fn hash(p: vec2<f32>) -> f32 {
     let h = dot(p, vec2<f32>(127.1, 311.7));
     return fract(sin(h) * 43758.5453123);
+}
+
+fn hash2(p: vec2<f32>) -> f32 {
+    let h = dot(p, vec2<f32>(127.1, 311.7));
+    return fract(fract(sin(h) * 43758.547) + 1.0);
+}
+
+fn value_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = hash2(i);
+    let b = hash2(i + vec2<f32>(1.0, 0.0));
+    let c = hash2(i + vec2<f32>(0.0, 1.0));
+    let d = hash2(i + vec2<f32>(1.0, 1.0));
+    let x1 = a + (b - a) * u.x;
+    let x2 = c + (d - c) * u.x;
+    return x1 + (x2 - x1) * u.y;
+}
+
+// Cloud shadow over a world point: 0.88 under a cloud, 1 elsewhere, none at night.
+fn cloud_cover(world: vec2<f32>, drift: f32, daylight: f32) -> f32 {
+    if (daylight < 0.5) {
+        return 1.0;
+    }
+    let p = world / 40.0 + vec2<f32>(drift, drift * 0.4) / 40.0;
+    let n = value_noise(p) * 0.65 + value_noise(p * 2.1 + vec2<f32>(7.3)) * 0.35;
+    return select(1.0, 0.88, n > 0.56);
+}
+
+// Sunlight is warm where it is strong and cool in shade.
+fn tint(light: f32) -> vec3<f32> {
+    var t = clamp((light - 0.45) / 0.55, 0.0, 1.0);
+    t = t * t * (3.0 - 2.0 * t);
+    return mix(SHADE_TINT, SUN_TINT, t) * light;
+}
+
+// Mixes the light channels (sun, block light, ambient) by the time of day.
+fn compose(channels: vec3<f32>, cloud: f32) -> vec3<f32> {
+    let level = block.day.x;
+    let sun = tint(channels.x) * block.sun_color.rgb * level * cloud;
+    let ambient = block.ambient_color.rgb * channels.z * (0.22 * (1.0 - level));
+    let torch = TORCH * channels.y * 1.15;
+    return sun + ambient + torch;
 }
 
 // 4 x 4 ordered dither threshold in 0..1 for a texel at integer coordinates.
@@ -81,9 +137,9 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let cell = floor(texel / TILE) * TILE;
     let local = texel - cell;
 
-    // Light at the texel's centre: step from this pixel to the centre in screen space
-    // using the inverse of the uv derivative matrix.
-    var light = in.color.rgb;
+    // Light channels at the texel's centre: step from this pixel to the centre in screen
+    // space using the inverse of the uv derivative matrix.
+    var channels = in.color.rgb;
     let to_centre = (texel + vec2<f32>(0.5) - px) / size;
     let det = uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x;
     if (abs(det) > 1e-14) {
@@ -91,9 +147,22 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
             (to_centre.x * uv_dy.y - to_centre.y * uv_dy.x) / det,
             (uv_dx.x * to_centre.y - uv_dx.y * to_centre.x) / det,
         );
-        light = light + light_dx * d.x + light_dy * d.y;
+        channels = channels + light_dx * d.x + light_dy * d.y;
     }
-    light = max(light, vec3<f32>(0.0));
+    channels = max(channels, vec3<f32>(0.0));
+
+    let flags = i32(round(in.color.a * 64.0));
+    let mask = flags % 16;
+    let water = (flags / 16) % 2 == 1;
+    let top = flags >= 32;
+
+    // Clouds pass over the tops of things, by world position.
+    let world = (block.inverse * vec4<f32>(in.world_position.xyz, 0.0)).xyz;
+    var cloud = 1.0;
+    if (top) {
+        cloud = cloud_cover(world.xy, block.day.z, block.day.x);
+    }
+    var light = compose(channels, cloud);
 
     // Bands: quantise brightness, keep the tint.
     let brightness = max(light.r, max(light.g, light.b));
@@ -101,10 +170,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         let banded = max(round(brightness * levels), 1.0) / levels;
         light = light * (banded / brightness);
     }
-
-    let flags = i32(round(in.color.a * 32.0));
-    let mask = flags % 16;
-    let water = flags >= 16;
 
     // Water: each row of the tile slides back and forth a texel, and the odd texel glints.
     var sample_at = local;

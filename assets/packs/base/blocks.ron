@@ -1,7 +1,8 @@
 // Every cube in the base world. Each block's two 16 x 16 tiles (top and sides) are drawn
 // from `color`, `top` and `accent` by `pattern`; a pack can replace them with
 // textures/<id>_top.png and textures/<id>_side.png. `hp` is seconds to break by hand.
-// A block gets an item that places it unless `item: false`.
+// A block gets an item that places it unless `item: false`. `light` 1 to 15 makes it a
+// light source; `glow` keeps its own texels bright in shade.
 [
     (id: "bedrock",  name: "Bedrock",  color: (58, 56, 68), pattern: Stone, breakable: false, item: false),
     (id: "stone",    name: "Stone",    color: (132, 134, 142), pattern: Stone, hp: 1.6),
@@ -14,4 +15,7 @@
     (id: "leaves",   name: "Leaves",   color: (62, 132, 60), pattern: Leaves, hp: 0.2),
     (id: "coal_ore", name: "Coal Ore", color: (132, 134, 142), accent: Some((44, 44, 54)), pattern: Ore, hp: 1.8),
     (id: "iron_ore", name: "Iron Ore", color: (132, 134, 142), accent: Some((214, 150, 112)), pattern: Ore, hp: 2.2),
+    // Light sources: `light` spreads 15 levels at most, one less per block.
+    (id: "torch",    name: "Torch",    color: (238, 186, 86), top: Some((255, 226, 150)), pattern: Smooth, glow: 1.0, light: 14, hp: 0.2),
+    (id: "lava",     name: "Lava",     color: (222, 92, 28), top: Some((250, 158, 44)), pattern: Water, glow: 0.9, light: 12, walkable: false, hp: 0.8),
 ]

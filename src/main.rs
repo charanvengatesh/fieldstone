@@ -11,6 +11,7 @@ mod inventory;
 mod look;
 mod player;
 mod script;
+mod sky;
 mod smoke;
 mod ui;
 mod world;
@@ -36,6 +37,8 @@ pub struct Options {
     pub test: bool,
     /// `--tilt NAME`: start at a tilt preset.
     pub tilt: Option<String>,
+    /// `--time F`: start the day clock at this fraction (0.5 is noon, 0 midnight).
+    pub time: Option<f32>,
 }
 
 fn main() {
@@ -65,6 +68,7 @@ fn main() {
             .any(|a| a == "--headless-smoke" || a == "--snapshot" || a == "--test"),
         test: args.iter().any(|a| a == "--test"),
         tilt: value("--tilt").cloned(),
+        time: value("--time").and_then(|v| v.parse().ok()),
         snapshot: value("--snapshot").cloned(),
         scale: value("--scale").and_then(|v| v.parse().ok()).unwrap_or(2.0),
         rot: value("--rot").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -112,7 +116,8 @@ fn main() {
     let settings = core::settings::load();
     app.insert_resource(core::settings::Keys::from_names(&settings.keys))
         .insert_resource(settings)
-        .insert_resource(ClearColor(Color::srgb_u8(24, 28, 40)))
+        // The night sky; the sky quad covers it whenever the window is open.
+        .insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.16)))
         .add_plugins((
             core::CorePlugin,
             world::WorldPlugin,
@@ -154,6 +159,7 @@ fn main() {
         app.add_plugins((
             bevy::sprite_render::Material2dPlugin::<world::mesh::BlockArt>::default(),
             camera::CameraPlugin,
+            sky::SkyPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
         ))
@@ -223,6 +229,8 @@ fn setup_world(app: &mut App, options: &Options) {
         view.tilt = tilt;
         view.target_tilt = tilt;
     }
+    // Inserted here so a save or `--time` wins over the plugin's default.
+    let mut clock = core::time::GameTime::default();
     let (start, pending) = match loaded {
         Some(l) => {
             info!("world seed {seed}, loaded {} edited chunks", l.chunks.len());
@@ -231,6 +239,9 @@ fn setup_world(app: &mut App, options: &Options) {
             if let Some(tilt) = world::iso::Tilt::named(&l.tilt) {
                 view.tilt = tilt;
                 view.target_tilt = tilt;
+            }
+            if l.time > 0.0 {
+                clock.secs = l.time;
             }
             (
                 l.player,
@@ -246,6 +257,10 @@ fn setup_world(app: &mut App, options: &Options) {
             (spawn, core::save::Pending::default())
         }
     };
+    if let Some(frac) = options.time {
+        clock.set_frac(frac);
+    }
+    world.insert_resource(clock);
     world.insert_resource(wg);
     world.insert_resource(map);
     world.insert_resource(view);

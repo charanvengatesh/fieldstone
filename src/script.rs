@@ -24,6 +24,7 @@ use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, StdLib, Table};
 
 use crate::core::packs::LoadedPacks;
 use crate::core::settings::{Settings, parse_key};
+use crate::core::time::GameTime;
 use crate::core::{BlockDef, Hud, ItemDef, PointerCaptured, Registry, Toast};
 use crate::harness::{Fake, Injected};
 use crate::interact::{BlockBroken, BlockPlaced};
@@ -33,9 +34,11 @@ use crate::look::Look;
 use crate::player::Player;
 use crate::world::Map;
 use crate::world::iso::{Tilt, View};
+use crate::world::light;
 use crate::world::mesh::{Grid, Quality, SeeThrough};
 use crate::world::physics::Body;
 use crate::world::stream::{Perf, Streaming};
+use crate::world::tiles::Tiles;
 
 /// Things that happened since the scripts last ran.
 #[derive(Resource, Default)]
@@ -282,6 +285,36 @@ pub fn run(world: &mut World) {
                     return Ok(false);
                 };
                 Ok(w.resource_mut::<Map>().set(cell(x, y, z), block))
+            })?,
+        )?;
+        g.set(
+            "light_at",
+            scope.create_function(|_, (x, y, z): (f64, f64, f64)| {
+                let w = shared.borrow();
+                let Some(tiles) = w.get_resource::<Tiles>() else {
+                    return Ok(0);
+                };
+                let level = light::level_at(
+                    w.resource::<Map>(),
+                    &tiles.light,
+                    |b| tiles.passes.get(b as usize).copied().unwrap_or(false),
+                    cell(x, y, z),
+                );
+                Ok(level)
+            })?,
+        )?;
+        g.set(
+            "time_of_day",
+            scope.create_function(|_, ()| Ok(shared.borrow().resource::<GameTime>().frac()))?,
+        )?;
+        g.set(
+            "set_time_of_day",
+            scope.create_function(|_, frac: f32| {
+                shared
+                    .borrow_mut()
+                    .resource_mut::<GameTime>()
+                    .set_frac(frac);
+                Ok(())
             })?,
         )?;
         g.set(

@@ -31,6 +31,10 @@ pub struct Tiles {
     pub water: Vec<bool>,
     /// Per block: minimum brightness.
     pub glow: Vec<f32>,
+    /// Per block: light given off, 0 to 15.
+    pub light: Vec<u8>,
+    /// Per block: whether light and sight pass through it (air does; so would glass).
+    pub passes: Vec<bool>,
     /// Per block: blocks with the same base and top colour share a number, and no outline
     /// is drawn between them (ore set in stone).
     pub family: Vec<u16>,
@@ -351,6 +355,8 @@ pub fn atlas(blocks: &Registry<BlockDef>, packs: Option<&LoadedPacks>) -> (Image
             .map(|(_, b)| b.pattern == Pattern::Water)
             .collect(),
         glow: blocks.iter().map(|(_, b)| b.glow.clamp(0.0, 1.0)).collect(),
+        light: blocks.iter().map(|(_, b)| b.light.min(15)).collect(),
+        passes: blocks.iter().map(|(_, b)| !b.solid).collect(),
         family: blocks
             .iter()
             .map(|(i, b)| {

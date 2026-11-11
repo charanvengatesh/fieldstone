@@ -23,7 +23,7 @@ line about what you expected.
 
 For a run nobody is watching, `FIELDSTONE_DEBUG_AUTO=5 cargo run` (or a file `debug/auto`
 holding the seconds) captures from launch without any script. Without a window at all,
-`cargo run -- --snapshot NAME [--seed N] [--scale N] [--rot N] [--grid]` runs the scripted
+`cargo run -- --snapshot NAME [--seed N] [--scale N] [--rot N] [--time F] [--grid]` runs the scripted
 self-test and writes `debug/NAME.png`.
 
 ## Tests

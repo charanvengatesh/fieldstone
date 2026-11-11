@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.9.1
+
+Light: block light, a day that passes, a sky, cloud shadows.
+
+### New
+- Light sources: `light: 1..15` on a block makes it shine; light floods through open cells
+  a level less per block and across chunk borders. Base adds `torch` (14) and `lava` (12);
+  the example crystal lights at 9. Lua `light_at(x, y, z)`.
+- Day and night: a 12 minute day, saved with the game and frozen while paused. Sunlight
+  dims and warms toward dusk, night is blue moonlight plus whatever torches are about,
+  while cast shadows fade with the sun. Lua `time_of_day()`, `set_time_of_day(f)`;
+  `--time F` for snapshots.
+- Sky: a gradient behind the world in dithered bands, with a sun by day, a crescent moon
+  and stars by night.
+- Cloud shadows drift over the tops of things by day, by world position, so they stay put
+  when the view turns.
+- Harness scenarios for the torch flood, the clock and a torch-at-night snapshot; unit
+  tests for the flood, the daylight curve and the sky colours.
+
+### Changed
+- Vertex colour is now light channels (sun, block light, ambient) mixed in the shader by
+  the time of day; `debug.rs` mirrors the same mix, so snapshots match the window.
+- The player figure takes the daylight and nearby torches too.
+- Harness tests that depended on the view rotation or on landing over water now measure
+  which way they walk and move to dry ground.
+
 ## 0.9.0
 
 Camera: see through what hides you, tilt the view, look around, zoom to the pointer.

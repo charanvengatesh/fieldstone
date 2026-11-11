@@ -52,8 +52,9 @@ To draw your own instead, put PNGs in the pack: `textures/<id>_top.png` and
 `textures/<id>_side.png`, or one `textures/<id>.png` for both. Each is 16 x 16, drawn the
 usual way up.
 
-Other fields: `glow` (0..1, the least brightness the block ever has, so it stays lit in
-shadow), `solid`, `walkable` (false for water: nothing stands on or over it until something
+Other fields: `light` (1 to 15: the block is a light source and lights the air around it,
+one level less per block, through anything that is not solid), `glow` (0..1, the least
+brightness the block's own texels ever have, so a lamp looks lit in shadow), `solid`, `walkable` (false for water: nothing stands on or over it until something
 is built there), `hp` (seconds to break), `breakable`, `drops` (an item id; the block itself
 when absent), `item` (false to make no item). Blocks with the same `color` and `top` are one
 family and get no outline between them, which is how ore sits cleanly in stone.
@@ -122,6 +123,8 @@ Functions you can call. They act immediately: a `set_block` is visible to the ne
 | `snap_view(step)` | head for the nearest multiple of `step` degrees (default 90) |
 | `zoom()`, `set_zoom(n)`, `zoom_at(n, x, y)` | screen pixels per texel, 1 to 6; `zoom_at` keeps the point `x, y` texels from the middle still |
 | `tilt()`, `set_tilt(name)` | the tilt preset: `low`, `classic`, `high`, `top` |
+| `time_of_day()`, `set_time_of_day(f)` | the day clock as a fraction: 0 midnight, 0.25 dawn, 0.5 noon, 0.75 dusk; a day is 12 minutes |
+| `light_at(x, y, z)` | block light at a cell, 0 to 15 |
 | `pan_view(dx, dy)`, `camera_pan()`, `camera_center()` | hold a pan (call every frame), read the pan, read where the camera looks, in texels |
 | `get_setting(name)`, `set_setting(name, value)` | `shadows`, `occlusion`, `grid`, `see_through`, `peek`, `dead_zone` (booleans), `mesh_budget_ms`, `view_margin` (numbers) |
 | `perf()` | a table: `fps`, `frame_ms`, `chunks`, `faces`, `mesh_ms`, `meshed` |

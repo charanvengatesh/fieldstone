@@ -16,6 +16,7 @@ use bevy::sprite_render::{AlphaMode2d, Material2d};
 use super::tiles::{TILE, Tiles, atlas};
 use super::{AIR, CHUNK, HEIGHT};
 use crate::core::packs::LoadedPacks;
+use crate::core::time::{Daylight, GameTime, daylight};
 use crate::core::{BlockDef, Registry, hash01};
 
 /// Brightness of a face that looks straight up.
@@ -86,6 +87,14 @@ pub struct BlockParams {
     pub player: Vec4,
     /// x: screen pixels per texel, y, z, w: unused.
     pub screen: Vec4,
+    /// x: daylight 0..1, y: time of day 0..1, z: cloud drift in blocks, w: unused.
+    pub day: Vec4,
+    /// Colour of sunlight now.
+    pub sun_color: Vec4,
+    /// Colour of the light left in shade and at night.
+    pub ambient_color: Vec4,
+    /// Inverse of the view's projection, so the shader can recover world positions.
+    pub inverse: Mat4,
 }
 
 /// The block material: the tile atlas lit by vertex colour, with outlines, banded light,
@@ -140,6 +149,10 @@ pub fn setup(
             params,
             player: Vec4::ZERO,
             screen: Vec4::new(3.0, 0.0, 0.0, 0.0),
+            day: Vec4::new(1.0, 0.5, 0.0, 0.0),
+            sun_color: Vec4::ONE,
+            ambient_color: Vec4::ONE,
+            inverse: Mat4::IDENTITY,
         },
         atlas: images.add(image),
     })));
@@ -149,6 +162,7 @@ pub fn setup(
 /// Feeds the shader the clock, the player's place on screen and the zoom, each frame.
 pub fn tick(
     time: Res<Time>,
+    clock: Res<GameTime>,
     view: Res<super::iso::View>,
     see_through: Res<SeeThrough>,
     settings: Res<crate::core::settings::Settings>,
@@ -162,6 +176,16 @@ pub fn tick(
     if let Some(mut m) = materials.get_mut(&handle.0) {
         m.block.params.x = time.elapsed_secs();
         m.block.screen.x = settings.pixel_scale.clamp(1, 6) as f32;
+        let day = daylight(clock.frac());
+        m.block.day = Vec4::new(
+            day.level,
+            clock.frac(),
+            cloud_drift(time.elapsed_secs()),
+            0.0,
+        );
+        m.block.sun_color = day.sun.extend(1.0);
+        m.block.ambient_color = day.ambient.extend(1.0);
+        m.block.inverse = Mat4::from_mat3(view.matrix().inverse());
         m.block.player = match player {
             Some(p) => see_through_target(&view, p.body.pos.with_z(p.shown_z), see_through.0),
             None => Vec4::ZERO,
@@ -181,15 +205,63 @@ pub fn see_through_target(view: &super::iso::View, feet: Vec3, on: bool) -> Vec4
     )
 }
 
-/// Packs a face's outline mask and its water flag into the vertex alpha.
-pub fn pack_flags(mask: u32, water: bool) -> f32 {
-    (mask + 16 * water as u32) as f32 / 32.0
+/// How far the clouds have drifted, in blocks, after `secs`.
+pub fn cloud_drift(secs: f32) -> f32 {
+    secs * 0.6
 }
 
-/// The inverse of [`pack_flags`]: `(outline mask, water)`.
-pub fn unpack_flags(alpha: f32) -> (u32, bool) {
-    let v = (alpha * 32.0).round() as u32;
-    (v % 16, v >= 16)
+/// Packs a face's outline mask, its water flag and whether it faces up into the vertex
+/// alpha.
+pub fn pack_flags(mask: u32, water: bool, top: bool) -> f32 {
+    (mask + 16 * water as u32 + 32 * top as u32) as f32 / 64.0
+}
+
+/// The inverse of [`pack_flags`]: `(outline mask, water, top)`.
+pub fn unpack_flags(alpha: f32) -> (u32, bool, bool) {
+    let v = (alpha * 64.0).round() as u32;
+    (v % 16, (v / 16) % 2 == 1, v >= 32)
+}
+
+/// Colour of a block's light.
+pub const TORCH: Vec3 = Vec3::new(1.0, 0.80, 0.55);
+
+/// Composes the light at a texel from the vertex channels and the time of day, as the
+/// shader does: `channels` is (sun, block light, ambient). Returns linear rgb before
+/// banding.
+pub fn compose(channels: Vec3, day: &Daylight, cloud: f32) -> Vec3 {
+    let sun = Vec3::from(tint(channels.x)) * day.sun * day.level * cloud;
+    let ambient = day.ambient * channels.z * (0.22 * (1.0 - day.level));
+    let torch = TORCH * channels.y * 1.15;
+    sun + ambient + torch
+}
+
+/// Cloud cover at a world position: 1 in the clear, 0.88 under a cloud. Value noise, the
+/// same formula as the shader's.
+pub fn cloud_cover(world: Vec2, drift: f32, daylight: f32) -> f32 {
+    if daylight < 0.5 {
+        return 1.0;
+    }
+    let p = world / 40.0 + Vec2::new(drift, drift * 0.4) / 40.0;
+    let n = value_noise(p) * 0.65 + value_noise(p * 2.1 + Vec2::splat(7.3)) * 0.35;
+    if n > 0.56 { 0.88 } else { 1.0 }
+}
+
+fn hash2(p: Vec2) -> f32 {
+    let h = p.dot(Vec2::new(127.1, 311.7));
+    ((h.sin() * 43758.547).fract() + 1.0).fract()
+}
+
+fn value_noise(p: Vec2) -> f32 {
+    let i = p.floor();
+    let f = p - i;
+    let u = f * f * (Vec2::splat(3.0) - 2.0 * f);
+    let a = hash2(i);
+    let b = hash2(i + Vec2::X);
+    let c = hash2(i + Vec2::Y);
+    let d = hash2(i + Vec2::ONE);
+    let x1 = a + (b - a) * u.x;
+    let x2 = c + (d - c) * u.x;
+    x1 + (x2 - x1) * u.y
 }
 
 /// Re-expresses an outline mask given per geometric edge as a mask per tile edge, for a
@@ -234,7 +306,7 @@ pub struct Faces {
     pub positions: Vec<[f32; 3]>,
     /// Atlas coordinates 0..1.
     pub uvs: Vec<[f32; 2]>,
-    /// Light in rgb, [`pack_flags`] in alpha.
+    /// Light channels: sun, block light, ambient; [`pack_flags`] in alpha. See [`compose`].
     pub colors: Vec<[f32; 4]>,
     /// Per quad: split along corners 1-3 instead of 0-2, so light interpolates evenly.
     pub flips: Vec<bool>,
@@ -300,6 +372,7 @@ pub fn chunk_faces(
     grid: bool,
     quality: Quality,
     tiles: &Tiles,
+    light: &super::light::Grid,
     block: impl Fn(IVec3) -> u16,
 ) -> Faces {
     let mut out = Faces::default();
@@ -361,7 +434,8 @@ pub fn chunk_faces(
                     } else {
                         (0, pick < 0.5)
                     };
-                    let flags = pack_flags(tile_mask(mask, rot, flip), water(id));
+                    let flags =
+                        pack_flags(tile_mask(mask, rot, flip), water(id), normal == IVec3::Z);
                     let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
                     let shade = face_shade(normal);
                     let lit = quality.shadows && normal.as_vec3().dot(SUN) > 0.0;
@@ -372,45 +446,52 @@ pub fn chunk_faces(
                     let tile_origin = tiles.origin(id, tile);
                     let mut lights = [0.0f32; 4];
                     for (i, corner) in corners.iter().enumerate() {
+                        // The two neighbours beside this corner and the one diagonal to
+                        // it, all in the layer the face looks into.
+                        let toward = (*corner - block_centre).signum().as_ivec3();
+                        let mut sides = [IVec3::ZERO; 2];
+                        let mut n = 0;
+                        for a in 0..3 {
+                            if normal[a] == 0 {
+                                sides[n][a] = toward[a];
+                                n += 1;
+                            }
+                        }
+                        let cells = [
+                            p + normal,
+                            p + normal + sides[0],
+                            p + normal + sides[1],
+                            p + normal + sides[0] + sides[1],
+                        ];
                         let mut open = 3;
                         if quality.occlusion {
-                            // The two neighbours beside this corner and the one diagonal
-                            // to it, all in the layer the face looks into.
-                            let toward = (*corner - block_centre).signum().as_ivec3();
-                            let mut sides = [IVec3::ZERO; 2];
-                            let mut n = 0;
-                            for a in 0..3 {
-                                if normal[a] == 0 {
-                                    sides[n][a] = toward[a];
-                                    n += 1;
-                                }
-                            }
-                            let s1 = casts(p + normal + sides[0]);
-                            let s2 = casts(p + normal + sides[1]);
-                            let diagonal = casts(p + normal + sides[0] + sides[1]);
+                            let s1 = casts(cells[1]);
+                            let s2 = casts(cells[2]);
+                            let diagonal = casts(cells[3]);
                             open = if s1 && s2 {
                                 0
                             } else {
                                 3 - (s1 as usize + s2 as usize + diagonal as usize)
                             };
                         }
+                        // Block light: the brightest open cell beside the corner.
+                        let lamp = cells.iter().map(|c| light.at(*c)).max().unwrap_or(0) as f32
+                            / super::light::REACH as f32;
                         // Shadow is sampled a quarter of the way in from the corner.
                         let sample =
                             origin.as_vec3() + corner.lerp(centre, 0.5) + normal.as_vec3() * 0.02;
                         let shade_cast = lit && shadowed(sample, SUN, &casts);
-                        let light = shade
-                            * OCCLUSION[open]
-                            * lift
-                            * if shade_cast { 1.0 - SHADOW } else { 1.0 };
-                        lights[i] = light.max(glow);
-                        let c = tint(lights[i]);
+                        let ambient = shade * OCCLUSION[open] * lift;
+                        let sun = ambient * if shade_cast { 1.0 - SHADOW } else { 1.0 };
+                        lights[i] = sun.max(glow);
                         let uv = (tile_origin
                             + Vec2::splat(INSET)
                             + tile_corner(i, rot, flip) * (TILE as f32 - 2.0 * INSET))
                             / tiles.size.as_vec2();
                         out.positions.push(corner.to_array());
                         out.uvs.push(uv.to_array());
-                        out.colors.push([c[0], c[1], c[2], flags]);
+                        out.colors
+                            .push([sun.max(glow), lamp.max(glow), ambient, flags]);
                     }
                     // Split along the brighter diagonal so a dark corner stays a corner.
                     out.flips
@@ -456,7 +537,14 @@ mod tests {
     }
 
     fn mesh(world: impl Fn(IVec3) -> u16) -> Faces {
-        chunk_faces(IVec2::ZERO, false, Quality::default(), &tiles(), world)
+        chunk_faces(
+            IVec2::ZERO,
+            false,
+            Quality::default(),
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            world,
+        )
     }
 
     fn masks(f: &Faces) -> Vec<u32> {
@@ -466,19 +554,21 @@ mod tests {
             .collect()
     }
 
-    /// Brightness of each corner of quad `q`, with the tint taken back out.
+    /// Sunlight channel of each corner of quad `q`.
     fn lights(f: &Faces, q: usize) -> Vec<f32> {
-        f.colors[q * 4..q * 4 + 4]
-            .iter()
-            .map(|c| c[0].max(c[1]).max(c[2]))
-            .collect()
+        f.colors[q * 4..q * 4 + 4].iter().map(|c| c[0]).collect()
     }
 
     #[test]
     fn flags_round_trip_and_follow_the_tile() {
         for mask in 0..16 {
             for water in [false, true] {
-                assert_eq!(unpack_flags(pack_flags(mask, water)), (mask, water));
+                for top in [false, true] {
+                    assert_eq!(
+                        unpack_flags(pack_flags(mask, water, top)),
+                        (mask, water, top)
+                    );
+                }
             }
         }
         // A quarter turn moves each edge one place on; a mirror swaps left and right.
@@ -517,7 +607,14 @@ mod tests {
         assert!(f.uvs.iter().all(|uv| {
             uv[0] > o.x && uv[0] < o.x + span.x && uv[1] > o.y && uv[1] < o.y + span.y
         }));
-        let g = chunk_faces(IVec2::ZERO, true, Quality::default(), &t, floor);
+        let g = chunk_faces(
+            IVec2::ZERO,
+            true,
+            Quality::default(),
+            &t,
+            &super::super::light::Grid::empty(),
+            floor,
+        );
         assert!(masks(&g).iter().all(|m| *m == 15));
     }
 
@@ -585,7 +682,14 @@ mod tests {
             occlusion: false,
             ..default()
         };
-        let g = chunk_faces(IVec2::ZERO, false, plain, &tiles(), world);
+        let g = chunk_faces(
+            IVec2::ZERO,
+            false,
+            plain,
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            world,
+        );
         let flat = lights(&g, floor_quad(&g, 4, 5));
         assert!(flat.iter().all(|v| (*v - far[0]).abs() < 1e-6), "{flat:?}");
     }
@@ -608,7 +712,14 @@ mod tests {
             shadows: false,
             ..default()
         };
-        let g = chunk_faces(IVec2::ZERO, false, plain, &tiles(), world);
+        let g = chunk_faces(
+            IVec2::ZERO,
+            false,
+            plain,
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            world,
+        );
         let unshaded = lights(&g, floor_quad(&g, 10, 7));
         assert!(
             unshaded.iter().all(|v| (*v - open).abs() < 1e-6),
@@ -659,9 +770,14 @@ mod tests {
             for cy in -2..2 {
                 for cx in -2..2 {
                     let pos = IVec2::new(cx, cy);
-                    faces += chunk_faces(pos, false, quality, &tiles, |p| {
-                        map.get(p).unwrap_or_else(|| wg.block(p))
-                    })
+                    faces += chunk_faces(
+                        pos,
+                        false,
+                        quality,
+                        &tiles,
+                        &super::super::light::Grid::empty(),
+                        |p| map.get(p).unwrap_or_else(|| wg.block(p)),
+                    )
                     .len();
                 }
             }
@@ -678,5 +794,57 @@ mod tests {
         let f = mesh(|p| if p == IVec3::new(3, 3, 3) { 3 } else { 0 });
         // Even the face turned away from the sun is at least as bright as the glow.
         assert!((0..5).all(|q| lights(&f, q).iter().all(|v| *v >= 0.95)));
+    }
+
+    #[test]
+    fn block_light_reaches_the_vertices_beside_a_lamp() {
+        use crate::world::{Chunk, Map, empty_blocks, light};
+        // A floor with a torch standing on it; block 3 (the lamp kind) emits 14.
+        let mut map = Map::default();
+        map.chunks
+            .insert(IVec2::ZERO, Chunk::new(empty_blocks(), false));
+        for y in 0..CHUNK {
+            for x in 0..CHUNK {
+                map.set(IVec3::new(x, y, 0), 1);
+            }
+        }
+        map.set(IVec3::new(6, 6, 1), 3);
+        let emits = [0u8, 0, 0, 14];
+        let grid = light::flood(IVec2::ZERO, &map, &emits, |b| b == 0, |q| map.block(q));
+        let f = chunk_faces(
+            IVec2::ZERO,
+            false,
+            Quality::default(),
+            &tiles(),
+            &grid,
+            |q| map.block(q),
+        );
+        let lamp = |q: usize| {
+            f.colors[q * 4..q * 4 + 4]
+                .iter()
+                .map(|c| c[1])
+                .fold(0.0, f32::max)
+        };
+        let near = lamp(floor_quad(&f, 7, 6));
+        let far = lamp(floor_quad(&f, 14, 1));
+        assert!(near > 0.8, "beside the torch: {near}");
+        assert!(far < 0.3, "far from it: {far}");
+    }
+
+    #[test]
+    fn light_composes_by_time_of_day() {
+        let noon = daylight(0.5);
+        let night = daylight(0.0);
+        let open = Vec3::new(1.0, 0.0, 1.0);
+        let lit_day = compose(open, &noon, 1.0);
+        let lit_night = compose(open, &night, 1.0);
+        assert!(lit_day.max_element() > 0.9);
+        assert!(lit_night.max_element() < 0.35);
+        // A torch matters at night and is drowned at noon.
+        let torch = Vec3::new(1.0, 0.9, 1.0);
+        assert!(compose(torch, &night, 1.0).x > lit_night.x + 0.5);
+        // Clouds dim the sun only.
+        assert!(compose(open, &noon, 0.88).x < lit_day.x);
+        assert_eq!(cloud_cover(Vec2::ZERO, 0.0, 0.2), 1.0);
     }
 }

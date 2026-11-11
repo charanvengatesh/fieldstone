@@ -4,6 +4,7 @@ pub mod paths;
 pub mod registry;
 pub mod save;
 pub mod settings;
+pub mod time;
 
 use bevy::prelude::*;
 
@@ -74,7 +75,8 @@ impl Plugin for CorePlugin {
             .init_resource::<SaveRequest>()
             .init_resource::<Hud>()
             .init_resource::<PointerCaptured>()
-            .add_systems(Update, toast_tick);
+            .init_resource::<time::GameTime>()
+            .add_systems(Update, (toast_tick, time::tick.run_if(not_paused)));
     }
 }
 

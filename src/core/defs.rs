@@ -96,6 +96,10 @@ pub struct BlockDef {
     /// Minimum brightness 0..1 whatever the shade: crystals and lamps stay lit in shadow.
     #[serde(default)]
     pub glow: f32,
+    /// Light this block gives off, 0 to 15; it spreads to its surroundings a level less
+    /// per block.
+    #[serde(default)]
+    pub light: u8,
     /// Blocks movement and can be stood on.
     #[serde(default = "yes")]
     pub solid: bool,
@@ -134,6 +138,7 @@ impl BlockDef {
             accent: None,
             pattern: Pattern::Smooth,
             glow: 0.0,
+            light: 0,
             solid: false,
             walkable: true,
             hp: 0.0,

@@ -140,13 +140,18 @@ end)
 test("zooming toward the pointer keeps the block under it", function()
     local z = zoom()
     set_setting("peek", false)
-    aim_screen(90, 0)
-    wait(2)
-    local before = target()
-    zoom_at(6, 90, 0)
+    -- A screen point with a block under it; water and empty air give no target.
+    local sx, sy, before = 90, 0, nil
+    for _, p in ipairs({ { 90, 0 }, { -90, 0 }, { 0, 50 }, { 0, -50 }, { 60, 30 }, { -60, -30 } }) do
+        aim_screen(p[1], p[2])
+        wait(2)
+        before = target()
+        if before then sx, sy = p[1], p[2]; break end
+    end
+    zoom_at(6, sx, sy)
     wait(40)
-    -- The same screen pixel is now half as many texels from the middle.
-    aim_screen(90 * z / 6, 0)
+    -- The same screen pixel is now that many fewer texels from the middle.
+    aim_screen(sx * z / 6, sy * z / 6)
     wait(2)
     local after = target()
     expect(before ~= nil and after ~= nil, "something is under the pointer both times")

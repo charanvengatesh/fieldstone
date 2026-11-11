@@ -2,6 +2,7 @@
 //! of `HEIGHT` blocks. A block is a `u16` index into the block registry; 0 is air.
 
 pub mod iso;
+pub mod light;
 pub mod mesh;
 pub mod noise;
 pub mod physics;

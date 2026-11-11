@@ -11,7 +11,7 @@ use super::iso::View;
 use super::mesh::{BlockMaterial, Grid, Quality, chunk_faces};
 use super::tiles::Tiles;
 use super::worldgen::WorldGen;
-use super::{CHUNK, Chunk, Focus, HEIGHT, Map, chunk_of};
+use super::{CHUNK, Chunk, Focus, HEIGHT, Map, chunk_of, light};
 
 /// What the camera shows: half its width and height in texels.
 #[derive(Resource, Clone, Copy)]
@@ -235,7 +235,14 @@ pub fn remesh(
         }
         // Cells outside the loaded area are answered by the generator, so a chunk's border
         // faces are right the first time and loading a neighbour never forces a rebuild.
-        let faces = chunk_faces(pos, grid.0, *quality, &tiles, |p| {
+        let lamps = light::flood(
+            pos,
+            &map,
+            &tiles.light,
+            |b| tiles.passes[b as usize],
+            |p| map.get(p).unwrap_or_else(|| wg.block(p)),
+        );
+        let faces = chunk_faces(pos, grid.0, *quality, &tiles, &lamps, |p| {
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let quads = faces.len();

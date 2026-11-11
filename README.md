@@ -47,7 +47,7 @@ cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
 cargo run -- --test              # no window: run every tests/*.lua in the packs; non-zero on failure
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
-                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --grid
+                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --time 0..1  --grid
 cargo build --release
 ```
 

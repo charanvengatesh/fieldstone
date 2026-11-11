@@ -13,14 +13,23 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 
+use crate::core::time::{Daylight, GameTime, daylight};
 use crate::core::{BlockDef, ItemDef, Registry};
 use crate::interact::Target;
 use crate::inventory::Inventory;
 use crate::player::{Player, figure_faces, figure_texture};
 use crate::world::iso::View;
+use crate::world::light;
 use crate::world::mesh::{
-    Faces, Grid, LEVELS, Quality, SeeThrough, chunk_faces, see_through_target, unpack_flags,
+    Faces, Grid, LEVELS, Quality, SeeThrough, chunk_faces, cloud_cover, cloud_drift, compose,
+    see_through_target, unpack_flags,
 };
+
+/// Time-of-day inputs the block drawing needs.
+pub struct Lighting {
+    pub day: Daylight,
+    pub drift: f32,
+}
 use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CHUNK, Focus, Map};
@@ -70,11 +79,11 @@ pub fn screenshot(world: &mut World, name: &str) {
 /// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
 /// Works without a window and whatever the window's state.
 pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, String> {
-    let (pos, shown_z, facing, frame) = world
+    let (pos, shown_z, facing, frame, lit) = world
         .query::<&Player>()
         .iter(world)
         .next()
-        .map(|p| (p.body.pos, p.shown_z, p.facing, p.frame))
+        .map(|p| (p.body.pos, p.shown_z, p.facing, p.frame, p.lit))
         .ok_or("no player")?;
     let map = world.resource::<Map>();
     let view = *world.resource::<View>();
@@ -85,21 +94,39 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     let see_through = world.resource::<SeeThrough>().0;
     let player_target = see_through_target(&view, pos.with_z(shown_z), see_through);
     let center = view.project(world.resource::<Focus>().0).truncate();
-    let mut canvas = Canvas::new(1280, 800, scale, center, Color::srgb_u8(24, 28, 40));
+    let clock = world.resource::<GameTime>();
+    let mut canvas = Canvas::new(1280, 800, scale, center, Color::NONE);
+    canvas.paint_sky(clock.frac());
     let quality = *world.resource::<Quality>();
+    let lighting = Lighting {
+        day: daylight(clock.frac()),
+        drift: cloud_drift(time),
+    };
     for chunk in map.chunks.keys() {
-        let faces = chunk_faces(*chunk, grid, quality, tiles, |p| {
+        let lamps = light::flood(
+            *chunk,
+            map,
+            &tiles.light,
+            |b| tiles.passes[b as usize],
+            |p| map.get(p).unwrap_or_else(|| wg.block(p)),
+        );
+        let faces = chunk_faces(*chunk, grid, quality, tiles, &lamps, |p| {
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let origin = (*chunk * CHUNK).extend(0).as_vec3();
-        canvas.draw_blocks(origin, view, &faces, tiles, time, player_target);
+        canvas.draw_blocks(origin, view, &faces, tiles, time, player_target, &lighting);
     }
     let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
-    canvas.draw(
-        at,
-        &figure_faces(facing, frame, view.tilt),
-        &figure_texture(),
+    let mut figure = figure_faces(facing, frame, view.tilt);
+    let lamp = light::level_at(
+        map,
+        &tiles.light,
+        |b| tiles.passes.get(b as usize).copied().unwrap_or(false),
+        (pos + Vec3::Z * 0.9).floor().as_ivec3(),
     );
+    let c = crate::player::figure_light(lit, lamp, &lighting.day);
+    figure.colors = vec![[c.x, c.y, c.z, 1.0]; 4];
+    canvas.draw(at, &figure, &figure_texture());
     canvas.save(name)
 }
 
@@ -133,7 +160,9 @@ pub fn report(world: &mut World) -> String {
     let _ = writeln!(out, "fieldstone {} debug dump", env!("CARGO_PKG_VERSION"));
     let _ = writeln!(
         out,
-        "seed {seed:?}  view rot {} ({:.0} degrees)  grid {}  chunks {} loaded, {} meshed, {} faces, {} parked, {} edited  packs {packs} ({} blocks, {} items)",
+        "seed {seed:?}  day {} at {:.2}  view rot {} ({:.0} degrees)  grid {}  chunks {} loaded, {} meshed, {} faces, {} parked, {} edited  packs {packs} ({} blocks, {} items)",
+        world.resource::<GameTime>().day(),
+        world.resource::<GameTime>().frac(),
         view.rot(),
         view.angle.to_degrees(),
         world.resource::<Grid>().0,
@@ -318,6 +347,22 @@ impl Canvas {
         }
     }
 
+    /// The sky gradient behind everything, in the same dithered bands as `sky.wgsl`.
+    pub fn paint_sky(&mut self, frac: f32) {
+        let (zenith, horizon) = crate::sky::sky_colors(frac);
+        let bands = 8.0;
+        for y in 0..self.height {
+            for x in 0..self.width {
+                let texel = (Vec2::new(x as f32, y as f32) / self.scale.max(1.0)).floor();
+                let up = 1.0 - (y as f32 + 0.5) / self.height as f32;
+                let t = (up + (bayer(texel.as_ivec2()) - 0.5) / bands).clamp(0.0, 1.0);
+                let level = (t * bands).floor() / bands;
+                let c = horizon.lerp(zenith, level);
+                self.color[(y * self.width + x) as usize] = c.to_array();
+            }
+        }
+    }
+
     /// Draws plain textured quads (texture times vertex colour) whose positions are
     /// relative to `offset`: texels in x and y, depth in z. Texels with alpha below one
     /// half are skipped.
@@ -360,6 +405,7 @@ impl Canvas {
         tiles: &Tiles,
         time: f32,
         player: Vec4,
+        lighting: &Lighting,
     ) {
         let Some(tex) = tiles.image.data.as_ref() else {
             return;
@@ -411,18 +457,29 @@ impl Canvas {
             } else {
                 w
             };
-            let mut light = Vec3::ZERO;
+            let mut channels = Vec3::ZERO;
             for k in 0..3 {
                 let c = faces.colors[i[k]];
-                light += Vec3::new(c[0], c[1], c[2]) * wc[k];
+                channels += Vec3::new(c[0], c[1], c[2]) * wc[k];
             }
-            light = light.max(Vec3::ZERO);
+            channels = channels.max(Vec3::ZERO);
+            let (mask, water, top) = unpack_flags(faces.colors[i[0]][3]);
+            // Clouds pass over the tops of things, by world position.
+            let cloud = if top {
+                let world = (0..3)
+                    .map(|k| Vec3::from(faces.positions[i[k]]) * w[k])
+                    .sum::<Vec3>()
+                    + origin;
+                cloud_cover(world.truncate(), lighting.drift, lighting.day.level)
+            } else {
+                1.0
+            };
+            let mut light = compose(channels, &lighting.day, cloud);
             let brightness = light.max_element();
             if brightness > 1e-4 {
                 let banded = (brightness * LEVELS).round().max(1.0) / LEVELS;
                 light *= banded / brightness;
             }
-            let (mask, water) = unpack_flags(faces.colors[i[0]][3]);
             let mut sample = local;
             if water {
                 let slide = ((time * 1.3 + local.y * 0.9).sin() * 1.5 + 0.5).floor();
@@ -553,11 +610,28 @@ fn bayer(t: IVec2) -> f32 {
 /// A block drawn alone as a 32 x 32 cut-out, for item icons: the same faces, tiles and
 /// shading as in the world.
 pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
-    let faces = chunk_faces(IVec2::ZERO, false, Quality::default(), tiles, |p| {
-        if p == IVec3::ZERO { block } else { 0 }
-    });
+    let faces = chunk_faces(
+        IVec2::ZERO,
+        false,
+        Quality::default(),
+        tiles,
+        &light::Grid::empty(),
+        |p| if p == IVec3::ZERO { block } else { 0 },
+    );
     let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
-    canvas.draw_blocks(Vec3::ZERO, View::default(), &faces, tiles, 0.0, Vec4::ZERO);
+    let noon = Lighting {
+        day: daylight(0.5),
+        drift: 0.0,
+    };
+    canvas.draw_blocks(
+        Vec3::ZERO,
+        View::default(),
+        &faces,
+        tiles,
+        0.0,
+        Vec4::ZERO,
+        &noon,
+    );
     canvas.into_image(true)
 }
 
