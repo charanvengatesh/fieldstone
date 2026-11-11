@@ -20,15 +20,12 @@ use crate::inventory::Inventory;
 use crate::world::iso::View;
 use crate::world::light::{REACH, level_at};
 use crate::world::mesh::{compose, sunlit};
-use crate::world::physics::{Body, step};
+use crate::world::physics::{Body, jump, step};
 use crate::world::tiles::Tiles;
 use crate::world::{AIR, Focus, HEIGHT, Map};
 
 /// Blocks per second.
 const SPEED: f32 = 4.5;
-/// Texels across and up one frame of the figure.
-/// Frames of the stride: standing, then mid-step.
-pub const FRAMES: usize = 2;
 /// Depth nudge toward the viewer, so the figure wins against the face it stands on.
 const DEPTH_BIAS: f32 = 0.05;
 
@@ -39,10 +36,10 @@ pub struct Player {
     pub shown_z: f32,
     /// Which way the figure faces on the ground, in world terms (one of eight).
     pub facing: Vec2,
-    /// Distance walked, which drives the two-frame stride.
+    /// Distance walked since standing still, which drives the walk cycle.
     pub stride: f32,
-    /// Which frame of the figure is showing: 0 standing, 1 mid-step.
-    pub frame: usize,
+    /// Where the limbs are in the walk cycle, -1 to 1; 0 standing.
+    pub swing: f32,
     /// Brightness the figure is drawn at; eases between sun and shade.
     pub lit: f32,
     /// Seconds spent standing still, for the idle breath.
@@ -51,6 +48,8 @@ pub struct Player {
     pub fall_from: f32,
     /// Seconds of landing squash left.
     pub squash: f32,
+    /// Depth the silhouette sits in front of the feet, set by `place` each frame.
+    pub lift: f32,
 }
 
 /// The player landed after a fall of `drop` blocks.
@@ -67,11 +66,12 @@ impl Player {
             shown_z: pos.z,
             facing: Vec2::new(1.0, -1.0).normalize(),
             stride: 0.0,
-            frame: 0,
+            swing: 0.0,
             lit: 1.0,
             idle: 0.0,
             fall_from: pos.z,
             squash: 0.0,
+            lift: 3.0,
         }
     }
 
@@ -123,9 +123,19 @@ impl Default for Silhouette {
 
 /// The silhouette's colour (rgb) and opacity.
 pub const SILHOUETTE: Vec4 = Vec4::new(0.55, 0.65, 0.95, 0.55);
-/// How far in front of the figure its silhouette sits, in depth units: past the model's
-/// own near faces, so only blocks nearer than the whole figure bring it out.
-pub const SILHOUETTE_LIFT: f32 = 0.8;
+/// How far in front of the figure its silhouette sits, in depth units: just past the
+/// whole model as seen through `view`, so only blocks nearer than all of it bring it out
+/// and the figure never silhouettes itself. Measured from the model itself, since the
+/// span depends on the tilt (depth grows with height by `tile_h / block_h`), the turn and
+/// the facing.
+pub fn silhouette_lift(view: &View, model: &crate::world::mesh::Faces) -> f32 {
+    let depths = model
+        .positions
+        .iter()
+        .map(|p| view.project(Vec3::from(*p)).z);
+    let (lo, hi) = depths.fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)));
+    (hi - lo).max(0.0) + 0.05
+}
 
 /// Marks the entity that draws the silhouette.
 #[derive(Component)]
@@ -166,8 +176,6 @@ impl Material2d for SilhouetteArt {
 const SHADOW_RADIUS: f32 = 0.34;
 /// Brightness of the figure in cast shadow.
 const SHADED: f32 = 0.66;
-/// Blocks walked per frame of the stride.
-const STEP: f32 = 0.42;
 
 /// Whether a walker may not occupy `c`: a solid block, or air above something nothing may
 /// stand on (water), however high.
@@ -185,7 +193,6 @@ pub fn closed(map: &Map, blocks: &Registry<BlockDef>, c: IVec3) -> bool {
     false
 }
 
-/// Texture coordinates of the figure quad for one frame of the strip.
 pub fn spawn(
     focus: Res<Focus>,
     pending: Option<Res<crate::core::save::Pending>>,
@@ -204,7 +211,7 @@ pub fn spawn(
     }
     let player = Player::at(focus.0);
     let placement = player.placement();
-    let mesh = meshes.add(figure::model(player.facing, player.frame).into_mesh());
+    let mesh = meshes.add(figure::model(player.facing, player.swing).into_mesh());
     commands.spawn((
         player,
         inventory,
@@ -212,6 +219,9 @@ pub fn spawn(
         Mesh2d(mesh.clone()),
         MeshMaterial2d(materials.add(ColorMaterial {
             color: Color::WHITE,
+            // Opaque writes depth, so the model's near faces cover its far ones; the
+            // default (Blend) does not, and the face showed through the back of the head.
+            alpha_mode: AlphaMode2d::Opaque,
             ..default()
         })),
         Transform::default(),
@@ -275,6 +285,9 @@ pub fn movement(
     let wish = view.ground_dir(screen) * SPEED;
     let before = player.body.pos;
     let was_grounded = player.body.grounded;
+    if keys.just(&input, &keys.jump) {
+        jump(&mut player.body);
+    }
     step(&mut player.body, wish, time.delta_secs(), &|c| {
         closed(&map, &blocks, c)
     });
@@ -296,13 +309,19 @@ pub fn movement(
         player.fall_from = player.body.pos.z;
     }
     player.squash = (player.squash - time.delta_secs()).max(0.0);
+    // The walk cycle follows the distance walked; standing still, the limbs ease back
+    // together.
     let walked = (player.body.pos - before).truncate().length();
     if walked > 1e-4 && player.body.grounded {
         player.stride += walked;
-        player.frame = (player.stride / STEP) as usize % FRAMES;
+        player.swing = figure::swing_at(player.stride);
         player.idle = 0.0;
     } else {
-        player.frame = 0;
+        player.swing += (0.0 - player.swing) * (time.delta_secs() * 14.0).min(1.0);
+        if player.swing.abs() < 0.02 {
+            player.swing = 0.0;
+            player.stride = 0.0;
+        }
         player.idle += time.delta_secs();
     }
     let target = player.body.pos.z;
@@ -332,7 +351,8 @@ pub fn place(
     mut last_color: Local<Vec3>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut shown: Local<(Option<View>, Option<(Vec2, usize)>)>,
+    mut shown: Local<(Option<View>, Option<(Vec2, i32)>)>,
+    mut model: Local<Option<crate::world::mesh::Faces>>,
     mut player: Single<(
         &mut Player,
         &mut Projected,
@@ -348,13 +368,19 @@ pub fn place(
         **projected = placement;
     }
 
-    // The model is rebuilt when the facing or the stride frame changes.
-    let pose = (player.facing, player.frame);
-    if shown.1 != Some(pose) {
+    // The model is rebuilt when the facing or the walk cycle moves, in steps of a
+    // thirty-second of the swing so a still figure costs nothing.
+    let pose = (player.facing, (player.swing * 32.0).round() as i32);
+    if shown.1 != Some(pose) || model.is_none() {
         shown.1 = Some(pose);
+        let faces = figure::model(player.facing, pose.1 as f32 / 32.0);
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            *m = figure::model(player.facing, player.frame).into_mesh();
+            *m = faces.clone().into_mesh();
         }
+        *model = Some(faces);
+    }
+    if let Some(faces) = model.as_ref() {
+        player.lift = silhouette_lift(&view, faces);
     }
 
     // Light: sampled at chest height, eased so walking under a tree fades.
@@ -411,12 +437,13 @@ pub fn place(
 /// Puts the silhouette exactly where the figure is, and shows it only when wanted.
 pub fn place_silhouette(
     on: Res<Silhouette>,
-    player: Single<&Projected, With<Player>>,
+    player: Single<(&Player, &Projected)>,
     mut quad: Single<(&mut Projected, &mut Visibility), (With<SilhouetteQuad>, Without<Player>)>,
 ) {
     let (at, vis) = &mut *quad;
-    let mut wanted_at = **player;
-    wanted_at.bias += SILHOUETTE_LIFT;
+    let (player, placed) = *player;
+    let mut wanted_at = *placed;
+    wanted_at.bias += player.lift;
     if **at != wanted_at {
         **at = wanted_at;
     }
@@ -481,7 +508,29 @@ impl Plugin for PlayerPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::iso::Tilt;
     use crate::world::{Chunk, empty_blocks};
+
+    #[test]
+    fn the_silhouette_lift_clears_the_model_and_stays_small() {
+        // The lift measures the model's own depth span, so it is always just past it, and
+        // it stays under what a block two cells in front adds.
+        for (_, tilt) in Tilt::PRESETS {
+            let mut view = View::quarter(1);
+            view.tilt = tilt;
+            let f = figure::model(Vec2::new(1.0, 1.0).normalize(), 1.0);
+            let lift = silhouette_lift(&view, &f);
+            let depths: Vec<f32> = f
+                .positions
+                .iter()
+                .map(|p| view.project(Vec3::from(*p)).z)
+                .collect();
+            let span = depths.iter().cloned().fold(f32::MIN, f32::max)
+                - depths.iter().cloned().fold(f32::MAX, f32::min);
+            assert!(lift > span && lift < span + 0.1);
+            assert!(lift < 2.0 + 2.0 * tilt.rise(), "{tilt:?}: {lift}");
+        }
+    }
 
     #[test]
     fn water_closes_the_whole_column_above_it() {

@@ -86,7 +86,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
                 p.body.pos,
                 p.shown_z,
                 p.facing,
-                p.frame,
+                p.swing,
                 p.lit,
                 p.placement(),
             )
@@ -144,7 +144,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     // Where blocks hide the figure, its silhouette shows through them.
     if silhouette {
         let mut lifted = placement;
-        lifted.bias += crate::player::SILHOUETTE_LIFT;
+        lifted.bias += crate::player::silhouette_lift(&view, &figure);
         canvas.draw_model(
             &lifted,
             view,

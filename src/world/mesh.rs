@@ -282,7 +282,7 @@ pub fn tint(light: f32) -> [f32; 3] {
 }
 
 /// Vertex data for one chunk.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Faces {
     /// Block units relative to the chunk origin.
     pub positions: Vec<[f32; 3]>,

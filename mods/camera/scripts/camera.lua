@@ -3,7 +3,7 @@
 --   Hold Alt (or the middle mouse button) and drag sideways   orbit freely
 --   Trackpad rotate gesture (two fingers, twist)               orbit freely
 --   Let go                                                     settle on the nearest quarter view
---   Hold Space and move the pointer                             pan away from the player; let go to drift back
+--   Hold Shift and move the pointer                             pan away from the player; let go to drift back
 --   T                                                          next tilt preset (engine key)
 --   R                                                          back to the view the game started with
 --   Ctrl or Cmd + scroll                                       zoom
@@ -13,13 +13,13 @@
 -- changes, so nothing is rebuilt.
 
 local DRAG_DEGREES_PER_PIXEL = 0.35   -- how fast a drag turns the view
-local PAN_TEXELS_PER_PIXEL = 0.5      -- how far a Space-drag pans
+local PAN_TEXELS_PER_PIXEL = 0.5      -- how far a Shift-drag pans
 local SNAP_DEGREES = 90               -- views the camera settles on; try 45 for eight views
 local GESTURE_REST = 0.25             -- seconds without a twist before the view settles
 local ZOOM_STEP = 1.0                 -- scroll lines per zoom level
 
 local orbiting = false       -- a drag is in progress
-local panning = false        -- a Space-drag is in progress
+local panning = false        -- a Shift-drag is in progress
 local twisting = false       -- a trackpad twist is in progress
 local since_twist = 0
 local zoom_scroll = 0
@@ -57,8 +57,8 @@ function on_tick(dt)
         snap_view(SNAP_DEGREES)
     end
 
-    -- Space-drag to pan. The pan is held while Space is down and drifts home after.
-    if key_pressed("Space") then
+    -- Shift-drag to pan. The pan is held while Shift is down and drifts home after.
+    if key_pressed("ShiftLeft") or key_pressed("ShiftRight") then
         if not panning then
             panning = true
             capture_pointer(true)

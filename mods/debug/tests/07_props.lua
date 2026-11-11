@@ -23,18 +23,30 @@ test("a prop never blocks the way and breaks at a touch", function()
     -- A flat run of three cells with a flower, a tuft and a torch standing in it.
     local props = { "flower", "tuft", "torch" }
     local cells = {}
-    for i = 1, 3 do
+    local changed = {}
+    local function put(x, y, z, b)
+        local was = get_block(x, y, z)
+        if was ~= b then
+            changed[#changed + 1] = { x, y, z, was }
+            set_block(x, y, z, b)
+        end
+    end
+    -- A level lane three cells wide along the walk: floor under it, nothing at body
+    -- height beside it, so the only things in the way are the props. (Without the old
+    -- automatic step-up any lip of terrain would stop the walk for its own reasons.)
+    for i = 0, 3 do
         local x, y = cx + i * sx, cy + i * sy
-        set_block(x, y, pz, props[i])
-        set_block(x, y, pz + 1, "air")
-        -- The body is wider than a point: the cells either side of the path are cleared
-        -- too, or a diagonal walk catches on their corners.
-        for _, side in ipairs({ { -sy, sx }, { sy, -sx } }) do
-            for dz = 0, 1 do
-                local b = get_block(x + side[1], y + side[2], pz + dz)
-                if b ~= "air" and b ~= "water" then set_block(x + side[1], y + side[2], pz + dz, "air") end
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                put(x + dx, y + dy, pz - 1, "stone")
+                put(x + dx, y + dy, pz, "air")
+                put(x + dx, y + dy, pz + 1, "air")
             end
         end
+    end
+    for i = 1, 3 do
+        local x, y = cx + i * sx, cy + i * sy
+        put(x, y, pz, props[i])
         cells[i] = { x, y }
     end
     expect(get_block(cells[3][1], cells[3][2], pz) == "torch", "the torch stands in the air cell")
@@ -45,8 +57,11 @@ test("a prop never blocks the way and breaks at a touch", function()
     local qx, qy = player_pos()
     local gone = math.sqrt((qx - px) ^ 2 + (qy - py) ^ 2)
     expect(gone > 2.5, string.format("walked right through them (%.2f cells)", gone))
-    for _, c in ipairs(cells) do set_block(c[1], c[2], pz, "air") end
     teleport(px, py, pz)
+    for i = #changed, 1, -1 do
+        local c = changed[i]
+        set_block(c[1], c[2], c[3], c[4])
+    end
 end)
 
 test("water is see-through for the mesher and solid for the walker", function()

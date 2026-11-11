@@ -11,14 +11,15 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 
 | Input | Action |
 |-------|--------|
-| WASD / arrow keys | Walk along the screen axes. One-block steps are climbed automatically |
+| WASD / arrow keys | Walk along the screen axes |
+| Space | Jump: clears one block, not two |
 | Hold click | Break the block under the pointer (within five blocks) |
 | Right click (two-finger click) | Place the held block against the face under the pointer |
 | 1-0, two-finger scroll | Choose a hotbar slot |
 | Tab or I | Bag. Click a slot to swap it with the held slot, shift-click splits half, right-click one |
 | Q / E | Turn the view a quarter, smoothly |
 | T | Next tilt preset: low, classic, high, top |
-| Space + move the pointer | Pan away from the player; let go to drift back (`mods/camera`) |
+| Shift + move the pointer | Pan away from the player; let go to drift back (`mods/camera`) |
 | Alt + drag, middle-drag, or trackpad twist | Orbit freely; letting go settles on the nearest quarter (`mods/camera`) |
 | R | Back to the starting view (`mods/camera`) |
 | Ctrl or Cmd + scroll | Zoom (`mods/camera`) |
@@ -69,7 +70,7 @@ cargo build --release
 - **Light.** The sun is fixed in the world. Face angle to it, ambient occlusion in corners
   and cast shadows are computed per vertex; `assets/shaders/block.wgsl` evaluates them per texel and bands them
   so shading stays pixel art. Shade is cool, sun is warm.
-- **Physics.** A box that moves one axis at a time, falls, lands and climbs single steps.
+- **Physics.** A box that moves one axis at a time, falls, lands and jumps one block high.
 - **Scripts.** Lua 5.4 through `mlua`, sandboxed to `table`, `string`, `math`, `utf8`. The
   engine's functions act on the world directly, so a script reads a block and sees the answer
   on the next line.

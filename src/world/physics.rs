@@ -70,12 +70,7 @@ pub fn step(body: &mut Body, wish: Vec2, dt: f32, blocked: &impl Fn(IVec3) -> bo
             body.pos = next;
             continue;
         }
-        // One block up with room overhead: climb it.
-        if body.grounded && fits(body.pos + Vec3::Z, blocked) && fits(next + Vec3::Z, blocked) {
-            body.pos = next + Vec3::Z;
-            continue;
-        }
-        // Otherwise stop flush against the boundary that was hit.
+        // Stop flush against the boundary that was hit; a step up takes a jump.
         let dir = d.signum();
         let edge = body.pos[axis] + dir * RADIUS;
         let wall = if dir > 0.0 {
@@ -95,12 +90,30 @@ pub fn step(body: &mut Body, wish: Vec2, dt: f32, blocked: &impl Fn(IVec3) -> bo
     if fits(next, blocked) {
         body.pos = next;
         body.grounded = false;
+    } else if body.fall < 0.0 {
+        // Rising into a ceiling: stop under it and start falling.
+        body.pos.z = (next.z + TALL).floor() - TALL - 2.0 * EPS;
+        body.fall = 0.0;
+        body.grounded = false;
     } else {
         // Land on top of the layer that stopped the fall.
         body.pos.z = next.z.floor() + 1.0;
         body.fall = 0.0;
         body.grounded = true;
     }
+}
+
+/// Upward speed a jump starts with: enough to clear a block with a little to spare.
+pub const JUMP: f32 = 9.5;
+
+/// Starts a jump if the body stands on something.
+pub fn jump(body: &mut Body) -> bool {
+    if !body.grounded {
+        return false;
+    }
+    body.fall = -JUMP;
+    body.grounded = false;
+    true
 }
 
 #[cfg(test)]
@@ -152,22 +165,48 @@ mod tests {
     }
 
     #[test]
-    fn a_single_block_is_stepped_onto() {
+    fn a_single_block_stops_the_walker_until_they_jump() {
         let world = |c: IVec3| c.z < 1 || (c.x >= 3 && c.z < 2);
         let mut b = standing(0.5, 0.5, 1.0, &world);
         run(&mut b, Vec2::new(4.0, 0.0), 1.5, &world);
-        assert!(b.pos.x > 4.0, "{}", b.pos);
+        assert!(b.pos.x < 3.0, "{}", b.pos);
+        assert_eq!(b.pos.z, 1.0);
+        // A jump while walking clears it; a jump in the air does nothing.
+        assert!(jump(&mut b));
+        assert!(!jump(&mut b));
+        run(&mut b, Vec2::new(4.0, 0.0), 1.0, &world);
+        assert!(b.pos.x > 3.5, "{}", b.pos);
         assert_eq!(b.pos.z, 2.0);
+        assert!(b.grounded);
     }
 
     #[test]
-    fn no_step_without_headroom() {
-        // A step with a ceiling two blocks above the floor: no room to stand on it.
-        let world = |c: IVec3| c.z < 1 || (c.x >= 3 && (c.z < 2 || c.z == 3));
+    fn a_jump_clears_one_block_and_not_two() {
+        let world = |c: IVec3| c.z < 1;
         let mut b = standing(0.5, 0.5, 1.0, &world);
-        run(&mut b, Vec2::new(4.0, 0.0), 1.5, &world);
-        assert!(b.pos.x < 3.0);
-        assert_eq!(b.pos.z, 1.0);
+        jump(&mut b);
+        let mut peak: f32 = 0.0;
+        for _ in 0..60 {
+            step(&mut b, Vec2::ZERO, 1.0 / 60.0, &world);
+            peak = peak.max(b.pos.z);
+        }
+        assert!(peak > 2.1 && peak < 2.9, "peak {peak}");
+        assert!(b.grounded && b.pos.z == 1.0);
+    }
+
+    #[test]
+    fn a_ceiling_stops_a_jump_short() {
+        // A ceiling at z 3: the head (1.6 tall) hits it on the way up.
+        let world = |c: IVec3| c.z < 1 || c.z == 3;
+        let mut b = standing(0.5, 0.5, 1.0, &world);
+        jump(&mut b);
+        let mut peak: f32 = 0.0;
+        for _ in 0..60 {
+            step(&mut b, Vec2::ZERO, 1.0 / 60.0, &world);
+            peak = peak.max(b.pos.z);
+        }
+        assert!(peak <= 3.0 - TALL + 1e-3, "peak {peak}");
+        assert!(b.grounded && b.pos.z == 1.0);
     }
 
     #[test]

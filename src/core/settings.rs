@@ -34,6 +34,7 @@ pub struct BindingNames {
     pub rotate_right: Vec<String>,
     pub grid: Vec<String>,
     pub tilt: Vec<String>,
+    pub jump: Vec<String>,
 }
 
 impl Default for BindingNames {
@@ -55,6 +56,7 @@ impl Default for BindingNames {
             rotate_right: v(&["E"]),
             grid: v(&["G"]),
             tilt: v(&["T"]),
+            jump: v(&["Space"]),
         }
     }
 }
@@ -86,6 +88,7 @@ pub struct Keys {
     pub rotate_right: Vec<KeyCode>,
     pub grid: Vec<KeyCode>,
     pub tilt: Vec<KeyCode>,
+    pub jump: Vec<KeyCode>,
 }
 
 impl Keys {
@@ -107,6 +110,7 @@ impl Keys {
             rotate_right: p(&n.rotate_right),
             grid: p(&n.grid),
             tilt: p(&n.tilt),
+            jump: p(&n.jump),
         }
     }
     pub fn pressed(&self, input: &ButtonInput<KeyCode>, keys: &[KeyCode]) -> bool {

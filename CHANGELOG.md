@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.7
+
+### New
+- Jump: Space (rebindable as `jump`) while standing. It clears one block and not two, a
+  ceiling stops it short, and a press in the air does nothing. The automatic step-up is
+  gone: a one-block step takes a jump.
+
+### Changed
+- The walk is a continuous cycle driven by the distance walked: legs pivot at the hip,
+  arms at the shoulder, with a small bob, easing back together on stopping. The
+  two-pose stride is gone.
+- `mods/camera` pans on Shift-drag now that Space jumps.
+
+### Fixed
+- The figure's face showed through the back of its head: the figure's material defaulted
+  to blending, which writes no depth. It is opaque now.
+- The figure silhouetted itself when it turned: the silhouette's depth lift was a constant
+  smaller than the model's own depth span at some tilts and facings. The lift is now
+  measured from the model each frame, just past its farthest point.
+
 ## 0.9.6
 
 ### Changed

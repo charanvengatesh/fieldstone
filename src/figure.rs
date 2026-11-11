@@ -67,7 +67,24 @@ fn turn(p: Vec3, facing: Vec2) -> Vec3 {
 /// Pushes the five visible faces of a box (no underside) with corners `lo..hi` in model
 /// space, turned to `facing`, into `out`.
 fn push_box(out: &mut Faces, lo: Vec3, hi: Vec3, paint: Paint, facing: Vec2) {
-    let c = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+    push_limb(out, lo, hi, paint, facing, 0.0, 0.0);
+}
+
+/// A box that swings: its bottom is displaced along the facing by `foot` and its top by
+/// `shoulder`, so a leg pivots at the hip and an arm at the shoulder.
+fn push_limb(
+    out: &mut Faces,
+    lo: Vec3,
+    hi: Vec3,
+    paint: Paint,
+    facing: Vec2,
+    foot: f32,
+    shoulder: f32,
+) {
+    let c = |x: f32, y: f32, z: f32| {
+        let t = ((z - lo.z) / (hi.z - lo.z)).clamp(0.0, 1.0);
+        Vec3::new(x, y + foot + (shoulder - foot) * t, z)
+    };
     // Each face: four corners counter-clockwise seen from outside, its model normal, its
     // colour.
     let faces: [([Vec3; 4], Vec3, [f32; 3]); 5] = [
@@ -159,47 +176,58 @@ fn push_decal(
 }
 
 /// Builds the model facing `facing` (any unit direction on the ground; zero faces +y) at
-/// stride `frame` 0 (standing) or 1 (mid-step). Positions are in blocks with the feet at
-/// the origin.
-pub fn model(facing: Vec2, frame: usize) -> Faces {
+/// a point `swing` of the walk cycle: -1 to 1, the legs and arms thrown that far forward
+/// and back, 0 standing. Positions are in blocks with the feet at the origin.
+pub fn model(facing: Vec2, swing: f32) -> Faces {
     let facing = if facing.length_squared() < 1e-6 {
         Vec2::Y
     } else {
         facing.normalize()
     };
     let mut out = Faces::default();
-    let stepping = frame % 2 == 1;
-    let swing = if stepping { 0.14 } else { 0.0 };
+    let swing = swing.clamp(-1.0, 1.0);
+    // How far a foot and a hand travel at full swing, in blocks.
+    let stride = 0.22 * swing;
+    let reach = 0.16 * swing;
+    // The body rises a touch as the legs pass each other.
+    let bob = 0.03 * (1.0 - swing.abs());
 
-    // Legs with boots; one forward, one back when stepping.
-    for (x, fwd, paint) in [(-0.12, swing, LEGS), (0.12, -swing, LEGS_DARK)] {
-        push_box(
+    // Legs with boots, pivoting at the hip; one forward, one back.
+    for (x, fwd, paint) in [(-0.12, stride, LEGS), (0.12, -stride, LEGS_DARK)] {
+        let foot = Vec3::new(x - 0.1, -0.11, 0.0);
+        let hip = Vec3::new(x + 0.1, 0.11, 0.66);
+        push_limb(
             &mut out,
-            Vec3::new(x - 0.1, fwd - 0.11, 0.0),
-            Vec3::new(x + 0.1, fwd + 0.11, 0.14),
+            foot,
+            hip.with_z(0.14),
             Paint::plain(BOOT),
             facing,
+            fwd,
+            fwd * 0.8,
         );
-        push_box(
+        push_limb(
             &mut out,
-            Vec3::new(x - 0.1, fwd - 0.11, 0.14),
-            Vec3::new(x + 0.1, fwd + 0.11, 0.66),
+            foot.with_z(0.14),
+            hip,
             Paint::plain(paint),
             facing,
+            fwd * 0.8,
+            0.0,
         );
     }
+    let up = Vec3::Z * bob;
     // Body: the tunic, darker at the back, belted at the hips.
     push_box(
         &mut out,
-        Vec3::new(-0.25, -0.15, 0.66),
-        Vec3::new(0.25, 0.15, 0.74),
+        Vec3::new(-0.25, -0.15, 0.66) + up,
+        Vec3::new(0.25, 0.15, 0.74) + up,
         Paint::plain(BELT),
         facing,
     );
     push_box(
         &mut out,
-        Vec3::new(-0.25, -0.15, 0.74),
-        Vec3::new(0.25, 0.15, 1.20),
+        Vec3::new(-0.25, -0.15, 0.74) + up,
+        Vec3::new(0.25, 0.15, 1.20) + up,
         Paint {
             top: TUNIC,
             front: TUNIC,
@@ -209,28 +237,34 @@ pub fn model(facing: Vec2, frame: usize) -> Faces {
         },
         facing,
     );
-    // Arms, swinging against the legs.
-    for (x, fwd, c) in [(-0.33, -swing, TUNIC), (0.33, swing, TUNIC_DARK)] {
-        push_box(
+    // Arms hang from the shoulders and swing against the legs.
+    for (x, fwd, c) in [(-0.33, -reach, TUNIC), (0.33, reach, TUNIC_DARK)] {
+        let lo = Vec3::new(x - 0.07, -0.08, 0.0) + up;
+        let hi = Vec3::new(x + 0.07, 0.08, 0.0) + up;
+        push_limb(
             &mut out,
-            Vec3::new(x - 0.07, fwd - 0.08, 0.84),
-            Vec3::new(x + 0.07, fwd + 0.08, 1.18),
+            lo.with_z(0.84 + bob),
+            hi.with_z(1.18 + bob),
             Paint::plain(c),
             facing,
+            fwd * 0.7,
+            0.0,
         );
-        push_box(
+        push_limb(
             &mut out,
-            Vec3::new(x - 0.07, fwd - 0.08, 0.70),
-            Vec3::new(x + 0.07, fwd + 0.08, 0.84),
+            lo.with_z(0.70 + bob),
+            hi.with_z(0.84 + bob),
             Paint::plain(SKIN),
             facing,
+            fwd,
+            fwd * 0.7,
         );
     }
     // Head: skin in front, hair everywhere else, with a fringe, two eyes and a mouth.
     push_box(
         &mut out,
-        Vec3::new(-0.22, -0.22, 1.20),
-        Vec3::new(0.22, 0.22, HEIGHT),
+        Vec3::new(-0.22, -0.22, 1.20) + up,
+        Vec3::new(0.22, 0.22, HEIGHT) + up,
         Paint {
             top: HAIR,
             front: SKIN,
@@ -240,7 +274,7 @@ pub fn model(facing: Vec2, frame: usize) -> Faces {
         },
         facing,
     );
-    let front = Vec3::new(0.0, 0.22, 0.0);
+    let front = Vec3::new(0.0, 0.22, 0.0) + up;
     push_decal(
         &mut out,
         front + Vec3::Z * 1.58,
@@ -270,6 +304,15 @@ pub fn model(facing: Vec2, frame: usize) -> Faces {
     out
 }
 
+/// Where in the walk cycle a body that has walked `stride` blocks is: a swing in -1..1,
+/// one full cycle every [`STRIDE`] blocks.
+pub fn swing_at(stride: f32) -> f32 {
+    (stride / STRIDE * std::f32::consts::TAU).sin()
+}
+
+/// Blocks walked per full cycle of the legs.
+pub const STRIDE: f32 = 1.1;
+
 /// Quantises a walk direction to one of eight facings so the model does not jitter as the
 /// stick wobbles, and keeps the last facing when standing still.
 pub fn facing_of(dir: Vec2, last: Vec2) -> Vec2 {
@@ -286,13 +329,14 @@ mod tests {
 
     #[test]
     fn the_model_stands_on_its_feet_and_turns_with_the_facing() {
-        let f = model(Vec2::Y, 0);
+        let f = model(Vec2::Y, 0.0);
         assert!(f.len() > 30);
         let zs: Vec<f32> = f.positions.iter().map(|p| p[2]).collect();
         assert!(zs.iter().cloned().fold(f32::MAX, f32::min) >= 0.0);
-        assert!((zs.iter().cloned().fold(0.0, f32::max) - HEIGHT).abs() < 1e-5);
+        // Standing, the body rides its bob; the head top is HEIGHT plus that.
+        assert!((zs.iter().cloned().fold(0.0, f32::max) - HEIGHT - 0.03).abs() < 1e-5);
         // Facing +x, the eyes (the darkest texels) sit on the +x side of the head.
-        let g = model(Vec2::X, 0);
+        let g = model(Vec2::X, 0.0);
         let eye = (0..g.colors.len())
             .find(|k| {
                 let (c, p) = (g.colors[*k], g.positions[*k]);
@@ -300,11 +344,13 @@ mod tests {
             })
             .expect("an eye");
         assert!(g.positions[eye][0] > 0.2, "{:?}", g.positions[eye]);
-        // A step moves the two legs apart along the facing.
-        let h = model(Vec2::Y, 1);
+        // A swing moves the feet apart along the facing and the cycle repeats.
+        let h = model(Vec2::Y, 1.0);
         let ys: Vec<f32> = h.positions[..8].iter().map(|p| p[1]).collect();
         let yt: Vec<f32> = f.positions[..8].iter().map(|p| p[1]).collect();
         assert!(ys != yt);
+        assert!((swing_at(0.0)).abs() < 1e-6 && swing_at(STRIDE / 4.0) > 0.99);
+        assert!(swing_at(STRIDE / 2.0).abs() < 1e-5);
     }
 
     #[test]
