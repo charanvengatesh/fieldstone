@@ -1,7 +1,6 @@
 //! Block storage. The world is an unbounded plane of chunks, each `CHUNK x CHUNK` columns
 //! of `HEIGHT` blocks. A block is a `u16` index into the block registry; 0 is air.
 
-pub mod iso;
 pub mod light;
 pub mod mesh;
 pub mod noise;
@@ -51,6 +50,65 @@ impl Chunk {
             builds: 0,
         }
     }
+}
+
+/// What a ray through the world hit: the cell and the face it came in by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Hit {
+    pub block: IVec3,
+    pub normal: IVec3,
+}
+
+/// Walks a ray from `origin` along unit `dir` through the cells for up to `reach` blocks
+/// and returns the first cell for which `solid` holds, with the face it entered by.
+pub fn pick(origin: Vec3, dir: Vec3, reach: f32, solid: impl Fn(IVec3) -> bool) -> Option<Hit> {
+    let start = origin + dir * 1e-4;
+    let mut cell = start.floor().as_ivec3();
+    let mut step = IVec3::ZERO;
+    // Ray distance to the next boundary on each axis, and between boundaries. An axis the
+    // ray runs along never comes up.
+    let mut next = Vec3::splat(f32::INFINITY);
+    let mut gap = Vec3::splat(f32::INFINITY);
+    for a in 0..3 {
+        if dir[a].abs() < 1e-6 {
+            continue;
+        }
+        step[a] = dir[a].signum() as i32;
+        let frac = start[a] - cell[a] as f32;
+        let ahead = if step[a] > 0 { 1.0 - frac } else { frac };
+        next[a] = ahead / dir[a].abs();
+        gap[a] = 1.0 / dir[a].abs();
+    }
+    let mut normal = -IVec3::new(step.x, 0, 0);
+    if normal == IVec3::ZERO {
+        normal = IVec3::Z;
+    }
+    let mut travelled = 0.0;
+    while travelled <= reach {
+        if (0..HEIGHT).contains(&cell.z) && solid(cell) {
+            return Some(Hit {
+                block: cell,
+                normal,
+            });
+        }
+        // Below the world nothing is ever hit; above it the ray may still come down.
+        if cell.z < 0 && dir.z <= 0.0 {
+            return None;
+        }
+        let a = if next.x <= next.y && next.x <= next.z {
+            0
+        } else if next.y <= next.z {
+            1
+        } else {
+            2
+        };
+        travelled = next[a];
+        cell[a] += step[a];
+        next[a] += gap[a];
+        normal = IVec3::ZERO;
+        normal[a] = -step[a];
+    }
+    None
 }
 
 /// Loaded chunks, the entity drawing each, and edited chunks that are currently unloaded.
@@ -157,10 +215,10 @@ impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Map>()
             .init_resource::<Focus>()
-            .init_resource::<iso::View>()
+            .init_resource::<crate::cam::Cam>()
             .init_resource::<mesh::Grid>()
             .init_resource::<mesh::Quality>()
-            .init_resource::<stream::Viewport>()
+            .init_resource::<stream::Picture>()
             .init_resource::<stream::Streaming>()
             .init_resource::<stream::Perf>()
             .add_systems(Startup, mesh::setup)
@@ -194,12 +252,6 @@ impl Plugin for WorldPlugin {
                 )
                     .chain()
                     .in_set(WorldSet),
-            )
-            .add_systems(
-                PostUpdate,
-                stream::apply_view
-                    .after(TransformSystems::Propagate)
-                    .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
             );
     }
 }
@@ -207,6 +259,28 @@ impl Plugin for WorldPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_ray_finds_the_first_solid_cell_and_the_face_it_entered() {
+        // A floor at z 0 and a post at (3, 3, 1..3).
+        let solid = |c: IVec3| c.z == 0 || (c.x == 3 && c.y == 3 && c.z <= 3);
+        // Straight down onto the floor.
+        let hit = pick(Vec3::new(1.5, 1.5, 10.0), Vec3::NEG_Z, 20.0, solid).unwrap();
+        assert_eq!(hit.block, IVec3::new(1, 1, 0));
+        assert_eq!(hit.normal, IVec3::Z);
+        // Sideways into the post.
+        let hit = pick(Vec3::new(0.5, 3.5, 2.5), Vec3::X, 20.0, solid).unwrap();
+        assert_eq!(hit.block, IVec3::new(3, 3, 2));
+        assert_eq!(hit.normal, IVec3::NEG_X);
+        // A slanted ray from above: the post's top.
+        let dir = Vec3::new(1.0, 1.0, -1.0).normalize();
+        let hit = pick(Vec3::new(1.5, 1.5, 6.0), dir, 20.0, solid).unwrap();
+        assert_eq!(hit.block, IVec3::new(3, 3, 3));
+        assert_eq!(hit.normal, IVec3::Z);
+        // Out of reach, or upward into nothing.
+        assert!(pick(Vec3::new(0.5, 3.5, 2.5), Vec3::X, 1.0, solid).is_none());
+        assert!(pick(Vec3::new(0.5, 0.5, 2.5), Vec3::Z, 20.0, solid).is_none());
+    }
 
     fn map_with(chunks: &[IVec2]) -> Map {
         let mut map = Map::default();

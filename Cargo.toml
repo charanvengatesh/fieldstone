@@ -4,11 +4,12 @@ version = "0.9.8"
 edition = "2024"
 
 [dependencies]
-# 2D rendering, UI and input only: no 3D, glTF, animation, gizmos, scenes or audio.
+# 3D meshes through bevy_pbr (custom unlit materials only), 2D for the compositor and UI,
+# input. No glTF, animation, gizmos, scenes, audio, tonemapping LUTs or post-process.
 bevy = { version = "0.20.1", default-features = false, features = [
     "default_app", "std", "multi_threaded",
     "bevy_window", "bevy_winit", "x11", "wayland",
-    "bevy_render", "bevy_core_pipeline", "bevy_camera",
+    "bevy_render", "bevy_core_pipeline", "bevy_camera", "bevy_pbr",
     "bevy_sprite", "bevy_sprite_render",
     "bevy_mesh", "bevy_shader", "bevy_material", "bevy_color",
     "bevy_image", "png",

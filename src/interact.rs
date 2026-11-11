@@ -5,27 +5,27 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
-use bevy::sprite_render::AlphaMode2d;
-use bevy::window::PrimaryWindow;
 
-use crate::camera::MainCamera;
+use crate::cam::Cam;
 use crate::core::settings::Keys;
 use crate::core::{BlockDef, ItemDef, PointerCaptured, Registry, UiHovered};
 use crate::inventory::{HOTBAR, Inventory};
 use crate::player::Player;
-use crate::world::iso::{Hit, View};
-use crate::world::mesh::{AtlasImage, corners};
+use crate::world::mesh::{AtlasImage, FlatArt, corners};
 use crate::world::physics::{TALL, fits};
+use crate::world::stream::Picture;
 use crate::world::tiles::{CRACKS, Tiles};
-use crate::world::{AIR, HEIGHT, Map};
+use crate::world::{AIR, Hit, Map, pick};
 
 /// How far from the player's middle a block may be worked, in blocks.
 pub const REACH: f32 = 5.0;
 /// Seconds between placements while the button is held.
 const PLACE_REPEAT: f32 = 0.2;
 
-/// The pointer in world texels, if it is over the window.
+/// The pointer as texels from the middle of the picture (x right, y up), if it is over the
+/// window.
 #[derive(Resource, Default)]
 pub struct Cursor(pub Option<Vec2>);
 
@@ -55,17 +55,6 @@ pub struct BlockPlaced {
 #[derive(Component)]
 pub struct Highlight;
 
-pub fn track_cursor(
-    window: Single<&Window, With<PrimaryWindow>>,
-    cam: Single<(&Camera, &GlobalTransform), With<MainCamera>>,
-    mut cursor: ResMut<Cursor>,
-) {
-    let (camera, tf) = *cam;
-    cursor.0 = window
-        .cursor_position()
-        .and_then(|p| camera.viewport_to_world_2d(tf, p).ok());
-}
-
 pub fn within_reach(player: Vec3, block: IVec3) -> bool {
     let middle = player + Vec3::Z * (TALL / 2.0);
     (block.as_vec3() + Vec3::splat(0.5)).distance(middle) <= REACH
@@ -73,7 +62,8 @@ pub fn within_reach(player: Vec3, block: IVec3) -> bool {
 
 pub fn aim(
     cursor: Res<Cursor>,
-    view: Res<View>,
+    cam: Res<Cam>,
+    picture: Res<Picture>,
     map: Res<Map>,
     ui: Res<UiHovered>,
     captured: Res<PointerCaptured>,
@@ -83,7 +73,11 @@ pub fn aim(
     target.0 = cursor
         .0
         .filter(|_| !ui.0 && !captured.0)
-        .and_then(|at| view.pick(at, HEIGHT, |c| map.block(c) != AIR))
+        .and_then(|at| {
+            let (origin, dir) = cam.ray(picture.size, at);
+            // The ray starts far behind the eye's side of the world; walk it well past.
+            pick(origin, dir, 2400.0, |c| map.block(c) != AIR)
+        })
         .filter(|hit| within_reach(player.body.pos, hit.block));
 }
 
@@ -206,7 +200,7 @@ pub fn select_slot(
 
 pub fn spawn_highlight(
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut flats: ResMut<Assets<FlatArt>>,
     mut commands: Commands,
 ) {
     let mesh = Mesh::new(
@@ -215,15 +209,12 @@ pub fn spawn_highlight(
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4])
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; 4])
     .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     commands.spawn((
         Highlight,
-        Mesh2d(meshes.add(mesh)),
-        MeshMaterial2d(materials.add(ColorMaterial {
-            color: Color::srgba(1.0, 1.0, 1.0, 0.25),
-            alpha_mode: AlphaMode2d::Blend,
-            ..default()
-        })),
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(flats.add(FlatArt::plain(Vec4::new(1.0, 1.0, 1.0, 0.25), true))),
         Transform::default(),
         Visibility::Hidden,
     ));
@@ -244,15 +235,14 @@ pub fn crack_stage(progress: f32) -> u32 {
 pub fn show_highlight(
     target: Res<Target>,
     breaking: Res<Breaking>,
-    view: Res<View>,
     tiles: Option<Res<Tiles>>,
     atlas: Option<Res<AtlasImage>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut flats: ResMut<Assets<FlatArt>>,
     mut quad: Single<
         (
-            &Mesh2d,
-            &MeshMaterial2d<ColorMaterial>,
+            &Mesh3d,
+            &MeshMaterial3d<FlatArt>,
             &mut Transform,
             &mut Visibility,
         ),
@@ -267,9 +257,11 @@ pub fn show_highlight(
     **vis = Visibility::Visible;
     let stage = crack_stage(breaking.progress);
     if let Some(mut m) = meshes.get_mut(&mesh.0) {
+        // The face's corners, pushed a hair off it so it never fights the block.
+        let lift = hit.normal.as_vec3() * 0.01;
         let positions: Vec<[f32; 3]> = corners(IVec3::ZERO, hit.normal)
             .iter()
-            .map(|c| view.project(*c).to_array())
+            .map(|c| (*c + lift).to_array())
             .collect();
         m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         if let Some(tiles) = tiles.as_deref() {
@@ -280,18 +272,18 @@ pub fn show_highlight(
             );
         }
     }
-    // A hair nearer than the face so it never fights it.
-    tf.translation = view.project(hit.block.as_vec3()) + Vec3::Z * 0.02;
-    if let Some(mut m) = materials.get_mut(&material.0) {
+    tf.translation = hit.block.as_vec3();
+    if let Some(mut m) = flats.get_mut(&material.0) {
         if m.texture.is_none()
             && let Some(atlas) = atlas.as_deref()
         {
             m.texture = Some(atlas.0.clone());
+            m.flat.flags = Vec4::new(1.0, 1.0, 0.0, 0.0);
         }
-        m.color = if stage == 0 {
-            Color::srgba(1.0, 1.0, 1.0, 0.25)
+        m.flat.tint = if stage == 0 {
+            Vec4::new(1.0, 1.0, 1.0, 0.25)
         } else {
-            Color::WHITE
+            Vec4::ONE
         };
     }
 }

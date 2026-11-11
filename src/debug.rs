@@ -13,29 +13,31 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 
+use crate::cam::Cam;
 use crate::core::time::{Daylight, GameTime, daylight, sky_color};
 use crate::core::{BlockDef, ItemDef, Registry};
 use crate::interact::Target;
 use crate::inventory::Inventory;
-use crate::player::{Player, Projected};
-use crate::world::iso::View;
+use crate::player::Player;
 use crate::world::light;
 use crate::world::mesh::{
     Faces, Grid, HAZE_STRENGTH, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose,
     haze_at, hazed, unpack_flags,
 };
+use crate::world::stream::Picture;
 
 /// Time-of-day inputs the block drawing needs.
 pub struct Lighting {
     pub day: Daylight,
-    /// Projected depth of the camera's focus, where the haze starts.
-    pub focus_depth: f32,
+    /// The camera's focus and the direction from it to the eye, where the haze starts.
+    pub focus: Vec3,
+    pub toward_eye: Vec3,
     /// Haze colour and strength, as the shader's uniform.
     pub haze: Vec4,
 }
 use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
-use crate::world::{CHUNK, Focus, Map};
+use crate::world::{CHUNK, Map};
 
 /// `debug/` under the user directory, created on first use.
 pub fn dir() -> PathBuf {
@@ -82,7 +84,7 @@ pub fn screenshot(world: &mut World, name: &str) {
 /// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
 /// Works without a window and whatever the window's state.
 pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, String> {
-    let (pos, shown_z, facing, frame, lit, placement) = world
+    let (pos, shown_z, _facing, frame, lit, transform) = world
         .query::<&Player>()
         .iter(world)
         .next()
@@ -93,31 +95,32 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
                 p.facing,
                 p.swing,
                 p.lit,
-                p.placement(),
+                p.transform(),
             )
         })
         .ok_or("no player")?;
     let map = world.resource::<Map>();
-    let view = *world.resource::<View>();
+    let cam = *world.resource::<Cam>();
+    let size = world.resource::<Picture>().size;
     let grid = world.resource::<Grid>().0;
     let wg = world.resource::<WorldGen>();
     let tiles = world.get_resource::<Tiles>().ok_or("no tiles yet")?;
     let time = world.resource::<Time>().elapsed_secs();
     let silhouette = world.resource::<crate::player::Silhouette>().0;
-    let center = view.project(world.resource::<Focus>().0).truncate();
     let clock = world.resource::<GameTime>();
     let sky = sky_color(clock.frac());
     let mut canvas = Canvas::new(
         1280,
         800,
         scale,
-        center,
+        Vec2::ZERO,
         Color::linear_rgb(sky.x, sky.y, sky.z),
     );
     let quality = *world.resource::<Quality>();
     let lighting = Lighting {
         day: daylight(clock.frac()),
-        focus_depth: view.project(world.resource::<Focus>().0).z.round(),
+        focus: cam.focus.round(),
+        toward_eye: cam.toward_eye(),
         haze: sky.extend(HAZE_STRENGTH),
     };
     let mut waters = Vec::new();
@@ -133,13 +136,13 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let origin = (*chunk * CHUNK).extend(0).as_vec3();
-        canvas.draw_blocks(origin, view, &faces.solid, tiles, time, &lighting);
+        canvas.draw_blocks(origin, &cam, size, &faces.solid, tiles, time, &lighting);
         if faces.water.len() > 0 {
             waters.push((origin, faces.water));
         }
     }
     let _ = shown_z;
-    let figure = crate::figure::model(facing, frame);
+    let figure = crate::figure::model(Vec2::Y, frame);
     let lamp = light::level_at(
         map,
         &tiles.light,
@@ -147,14 +150,13 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
         (pos + Vec3::Z * 0.9).floor().as_ivec3(),
     );
     let c = crate::player::figure_light(lit, lamp, &lighting.day);
-    canvas.draw_model(&placement, view, &figure, c.extend(1.0), Mode::Opaque);
+    canvas.draw_model(&transform, &cam, size, &figure, c.extend(1.0), Mode::Opaque);
     // Where blocks hide the figure, its silhouette shows through them.
     if silhouette {
-        let mut lifted = placement;
-        lifted.bias += crate::player::silhouette_lift(&view, &figure);
         canvas.draw_model(
-            &lifted,
-            view,
+            &crate::player::silhouette_transform(&cam, &transform),
+            &cam,
+            size,
             &figure,
             crate::player::SILHOUETTE,
             Mode::Behind,
@@ -162,7 +164,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     }
     // Water goes over everything solid, the player included when they are under it.
     for (origin, faces) in &waters {
-        canvas.draw_water(*origin, view, faces, tiles, time, &lighting);
+        canvas.draw_water(*origin, &cam, size, faces, tiles, time, &lighting);
     }
     canvas.save(name)
 }
@@ -182,7 +184,7 @@ pub fn report(world: &mut World) -> String {
     let map = world.resource::<Map>();
     let blocks = world.resource::<Registry<BlockDef>>();
     let items = world.resource::<Registry<ItemDef>>();
-    let view = world.resource::<View>();
+    let cam = world.resource::<Cam>();
     let target = world.resource::<Target>();
     let seed = world.get_resource::<WorldGen>().map(|w| w.seed);
     let packs = world
@@ -200,8 +202,8 @@ pub fn report(world: &mut World) -> String {
         "seed {seed:?}  day {} at {:.2}  view rot {} ({:.0} degrees)  grid {}  chunks {} loaded, {} meshed, {} faces, {} parked, {} edited  packs {packs} ({} blocks, {} items)",
         world.resource::<GameTime>().day(),
         world.resource::<GameTime>().frac(),
-        view.rot(),
-        view.angle.to_degrees(),
+        cam.rot(),
+        cam.yaw.to_degrees(),
         world.resource::<Grid>().0,
         map.chunks.len(),
         map.chunks.values().filter(|c| !c.dirty).count(),
@@ -393,22 +395,19 @@ impl Canvas {
     }
 
     /// Draws a projected model (the figure) the way the renderer does: positions in blocks
-    /// about `at.origin`, scaled, through `view`, vertex colours times `tint`. In
+    /// placed by `transform`, through `cam`, vertex colours times `tint`. In
     /// `Mode::Behind` only what something nearer already covers is drawn, mixed by the
     /// tint's alpha, as `shaders/silhouette.wgsl` does with its depth test turned round.
     pub fn draw_model(
         &mut self,
-        at: &Projected,
-        view: View,
+        transform: &Transform,
+        cam: &Cam,
+        size: Vec2,
         faces: &Faces,
         tint: Vec4,
         mode: Mode,
     ) {
-        let place = |p: [f32; 3]| {
-            let mut s = view.project(at.origin + Vec3::from(p) * at.scale);
-            s.z += at.bias;
-            s
-        };
+        let place = |p: [f32; 3]| cam.project(size, transform.transform_point(Vec3::from(p)));
         self.raster_mode(place, faces, mode, |faces, i, w| {
             let mix = |k: usize| (0..3).map(|j| w[j] * faces.colors[i[j]][k]).sum::<f32>();
             let (r, g, b) = (mix(0), mix(1), mix(2));
@@ -431,13 +430,14 @@ impl Canvas {
     pub fn draw_blocks(
         &mut self,
         origin: Vec3,
-        view: View,
+        cam: &Cam,
+        size: Vec2,
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
         lighting: &Lighting,
     ) {
-        self.draw_pass(origin, view, faces, tiles, time, lighting, false);
+        self.draw_pass(origin, cam, size, faces, tiles, time, lighting, false);
     }
 
     /// Draws water surfaces the way `assets/shaders/water.wgsl` does: blended over what is
@@ -446,20 +446,22 @@ impl Canvas {
     pub fn draw_water(
         &mut self,
         origin: Vec3,
-        view: View,
+        cam: &Cam,
+        size: Vec2,
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
         lighting: &Lighting,
     ) {
-        self.draw_pass(origin, view, faces, tiles, time, lighting, true);
+        self.draw_pass(origin, cam, size, faces, tiles, time, lighting, true);
     }
 
     #[allow(clippy::too_many_arguments)]
     fn draw_pass(
         &mut self,
         origin: Vec3,
-        view: View,
+        cam: &Cam,
+        picture: Vec2,
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
@@ -471,7 +473,7 @@ impl Canvas {
         };
         let size = tiles.size.as_vec2();
         let tile = TILE as f32;
-        let place = |p: [f32; 3]| view.project(origin + Vec3::from(p));
+        let place = |p: [f32; 3]| cam.project(picture, origin + Vec3::from(p));
         let mode = if water_pass {
             Mode::Blend
         } else {
@@ -527,11 +529,12 @@ impl Canvas {
                 || (mask & 2 != 0 && local.x > tile - 1.5)
                 || (mask & 4 != 0 && local.y > tile - 1.5)
                 || (mask & 8 != 0 && local.x < 0.5);
-            // Haze by projected depth behind the focus.
-            let depth = (0..3)
-                .map(|k| place(faces.positions[i[k]]).z * w[k])
-                .sum::<f32>();
-            let haze = haze_at(depth, lighting.focus_depth);
+            // Haze by view depth behind the focus.
+            let world = (0..3)
+                .map(|k| Vec3::from(faces.positions[i[k]]) * w[k])
+                .sum::<Vec3>()
+                + origin;
+            let haze = haze_at(world, lighting.focus, lighting.toward_eye);
             if water {
                 // Foam along a shore instead of ink; the surface lets the bed show through.
                 if edge && top {
@@ -685,11 +688,16 @@ pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
     let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
     let noon = Lighting {
         day: daylight(0.5),
-        focus_depth: 0.0,
+        focus: Vec3::ZERO,
+        toward_eye: Vec3::Z,
         haze: Vec4::ZERO,
     };
-    canvas.draw_blocks(Vec3::ZERO, View::default(), &faces.solid, tiles, 0.0, &noon);
-    canvas.draw_water(Vec3::ZERO, View::default(), &faces.water, tiles, 0.0, &noon);
+    // Looked at from the classic quarter, the block's middle in the middle of the icon.
+    let mut cam = Cam::quarter(0);
+    cam.focus = Vec3::splat(0.5);
+    let size = Vec2::splat(32.0);
+    canvas.draw_blocks(Vec3::ZERO, &cam, size, &faces.solid, tiles, 0.0, &noon);
+    canvas.draw_water(Vec3::ZERO, &cam, size, &faces.water, tiles, 0.0, &noon);
     canvas.into_image(true)
 }
 
@@ -707,37 +715,36 @@ mod tests {
 
     #[test]
     fn canvas_keeps_the_nearer_of_two_quads() {
-        // An upright quad straddling the origin, drawn through the default view; `bias`
-        // sets its depth.
+        // An upright quad half a block wide, drawn through the classic camera; the
+        // transform moves it toward or away from the eye.
         let quad = |color: [f32; 4]| Faces {
             positions: vec![
-                [-0.25, 0.0, -0.25],
-                [0.25, 0.0, -0.25],
-                [0.25, 0.0, 0.25],
-                [-0.25, 0.0, 0.25],
+                [-0.25, 0.25, -0.25],
+                [0.25, -0.25, -0.25],
+                [0.25, -0.25, 0.25],
+                [-0.25, 0.25, 0.25],
             ],
             uvs: vec![[0.0; 2]; 4],
             colors: vec![color; 4],
             flips: vec![false],
         };
-        let at = |bias: f32| Projected {
-            origin: Vec3::ZERO,
-            scale: Vec3::ONE,
-            bias,
-        };
-        let view = View::default();
+        let cam = Cam::quarter(0);
+        let at = |toward: f32| Transform::from_translation(cam.toward_eye() * toward);
+        let size = Vec2::splat(16.0);
         let white = Vec4::ONE;
         let mut canvas = Canvas::new(16, 16, 1.0, Vec2::ZERO, Color::BLACK);
         canvas.draw_model(
             &at(5.0),
-            view,
+            &cam,
+            size,
             &quad([1.0, 0.0, 0.0, 1.0]),
             white,
             Mode::Opaque,
         );
         canvas.draw_model(
             &at(2.0),
-            view,
+            &cam,
+            size,
             &quad([0.0, 1.0, 0.0, 1.0]),
             white,
             Mode::Opaque,
@@ -747,7 +754,8 @@ mod tests {
         assert_eq!(canvas.color[0], [0.0, 0.0, 0.0]);
         canvas.draw_model(
             &at(9.0),
-            view,
+            &cam,
+            size,
             &quad([0.0, 0.0, 1.0, 1.0]),
             white,
             Mode::Opaque,
@@ -756,14 +764,14 @@ mod tests {
         // A silhouette draws only where something nearer already is: behind the blue
         // quad it tints; out in the open, over the empty background, it does not.
         let tint = Vec4::new(1.0, 1.0, 1.0, 0.5);
-        canvas.draw_model(&at(1.0), view, &quad([1.0; 4]), tint, Mode::Behind);
+        canvas.draw_model(&at(1.0), &cam, size, &quad([1.0; 4]), tint, Mode::Behind);
         let behind = canvas.color[8 * 16 + 8];
         assert!(
             behind[0] > 0.3 && behind[2] > 0.5,
             "tinted over blue: {behind:?}"
         );
         let mut open = Canvas::new(16, 16, 1.0, Vec2::ZERO, Color::BLACK);
-        open.draw_model(&at(1.0), view, &quad([1.0; 4]), tint, Mode::Behind);
+        open.draw_model(&at(1.0), &cam, size, &quad([1.0; 4]), tint, Mode::Behind);
         assert_eq!(open.color[8 * 16 + 8], [0.0, 0.0, 0.0]);
     }
 
@@ -779,10 +787,11 @@ mod tests {
         // Corners are clear; the top face, left face and right face are drawn, each darker.
         assert_eq!(px(0, 0)[3], 0);
         assert_eq!(px(31, 31)[3], 0);
-        let (top, left, right) = (px(16, 8), px(8, 22), px(24, 22));
+        let (top, left, right) = (px(16, 9), px(9, 20), px(23, 20));
         assert!(top[3] == 255 && left[3] == 255 && right[3] == 255);
+        // The side turned from the sun is the darkest of the three.
         assert!(
-            top[0] > left[0] && left[0] > right[0],
+            left[0] < top[0] && left[0] < right[0],
             "{top:?} {left:?} {right:?}"
         );
     }

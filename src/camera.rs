@@ -1,58 +1,85 @@
-//! The camera looks at [`Focus`] through the current [`View`]. Zoom is a whole number of
-//! screen pixels per texel so block edges stay crisp.
+//! The Bevy camera is a copy of [`Cam`]: each frame it takes the pose and projection `Cam`
+//! computes for the current picture size. Zoom steps the magnification setting; the pinch
+//! and `-` / `=` land here.
 
+use bevy::camera::visibility::NoFrustumCulling;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::gestures::PinchGesture;
 use bevy::prelude::*;
+use bevy::window::PrimaryWindow;
 
+use crate::cam::Cam;
 use crate::core::settings::{Keys, Settings};
-use crate::look::Look;
-use crate::world::stream::Viewport;
+use crate::interact::Cursor;
+use crate::world::stream::Picture;
 
 /// The world camera.
 #[derive(Component)]
 pub struct MainCamera;
 
-pub fn setup(settings: Res<Settings>, mut commands: Commands) {
-    let projection = || {
-        Projection::Orthographic(OrthographicProjection {
-            scale: 1.0 / settings.pixel_scale.clamp(1, 6) as f32,
-            ..OrthographicProjection::default_2d()
-        })
-    };
-    // No multisampling: it softens texel edges and lets edge pixels sample the tile next
-    // door in the atlas.
-    commands.spawn((Camera2d, MainCamera, projection(), Msaa::Off));
+pub fn setup(mut commands: Commands) {
+    // No multisampling (it softens texel edges) and no tonemapping (the LUT kinds need
+    // textures this build leaves out; the shaders write final colour).
+    commands.spawn((
+        Camera3d::default(),
+        MainCamera,
+        Projection::Orthographic(OrthographicProjection::default_3d()),
+        Msaa::Off,
+        Tonemapping::None,
+        NoFrustumCulling,
+    ));
 }
 
-/// Puts the camera where [`Look`] says, at the focus depth so the visible depth range
-/// (camera z plus or minus 1000) always surrounds what is on screen, snapped to whole
-/// screen pixels so texels never straddle them and shimmer.
-pub fn follow(
-    look: Res<Look>,
-    mut viewport: ResMut<Viewport>,
-    mut cams: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
+/// Keeps the picture size current: until the pixel target exists the window itself is
+/// the picture, at `magnify` window pixels per texel.
+pub fn measure(
+    cam: Res<Cam>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut picture: ResMut<Picture>,
 ) {
-    for (mut tf, mut proj) in &mut cams {
-        if let Projection::Orthographic(o) = &mut *proj {
-            if (o.scale - look.scale).abs() > 1e-6 {
-                o.scale = look.scale;
-            }
-            let step = o.scale.max(1e-4);
-            let half = o.area.half_size();
-            if half.x > 1.0 && viewport.half != half {
-                viewport.half = half;
-            }
-            tf.translation = Vec3::new(
-                (look.center.x / step).round() * step,
-                (look.center.y / step).round() * step,
-                look.depth,
-            );
-        }
+    let size = Vec2::new(window.width(), window.height()) / cam.magnify.max(1e-3);
+    if size.x > 1.0 && (size - picture.size).abs().max_element() > 0.5 {
+        picture.size = size;
     }
 }
 
-/// Pinch on a trackpad or `-` / `=`: whole pixel scales only, a pinch accumulates until it
-/// is worth a step. The camera eases to the new scale through [`Look`].
+/// Puts the camera where [`Cam`] says. The eye is snapped so the focus lands on a whole
+/// texel, which keeps texels from straddling pixels and shimmering as the camera eases.
+pub fn follow(
+    cam: Res<Cam>,
+    picture: Res<Picture>,
+    mut cams: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
+) {
+    let (right, up) = cam.axes();
+    let p = cam.project(picture.size, cam.focus);
+    let snap = Vec2::new(p.x - p.x.round(), p.y - p.y.round());
+    let nudge = (right * snap.x + up * snap.y) / cam.zoom();
+    let mut snapped = *cam;
+    snapped.focus -= nudge;
+    let (transform, projection) = snapped.pose(picture.size);
+    for (mut tf, mut proj) in &mut cams {
+        if *tf != transform {
+            *tf = transform;
+        }
+        *proj = projection.clone();
+    }
+}
+
+/// The pointer as texels from the middle of the picture, x right, y up.
+pub fn track_cursor(
+    cam: Res<Cam>,
+    window: Single<&Window, With<PrimaryWindow>>,
+    mut cursor: ResMut<Cursor>,
+) {
+    cursor.0 = window.cursor_position().map(|p| {
+        let centre = Vec2::new(window.width(), window.height()) / 2.0;
+        let d = p - centre;
+        Vec2::new(d.x, -d.y) / cam.magnify.max(1e-3)
+    });
+}
+
+/// Pinch on a trackpad or `-` / `=`: whole magnifications only, a pinch accumulates until
+/// it is worth a step. The camera eases to the new magnification through [`Cam`].
 pub fn zoom(
     mut pinches: MessageReader<PinchGesture>,
     input: Res<ButtonInput<KeyCode>>,
@@ -98,8 +125,9 @@ impl Plugin for CameraPlugin {
         .add_systems(
             Update,
             (
-                zoom.before(crate::look::update),
-                follow.after(crate::look::update),
+                (track_cursor, measure).before(crate::interact::InteractSet),
+                zoom.before(crate::cam::follow),
+                follow.after(crate::cam::follow),
             )
                 .before(crate::world::WorldSet),
         );

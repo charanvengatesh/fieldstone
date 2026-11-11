@@ -2,6 +2,7 @@
 // Bevy systems take many parameters and nested tuples by design.
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod cam;
 mod camera;
 mod core;
 mod debug;
@@ -10,7 +11,6 @@ mod fx;
 mod harness;
 mod interact;
 mod inventory;
-mod look;
 mod player;
 mod script;
 mod smoke;
@@ -40,6 +40,8 @@ pub struct Options {
     pub tilt: Option<String>,
     /// `--time F`: start the day clock at this fraction (0.5 is noon, 0 midnight).
     pub time: Option<f32>,
+    /// `--perspective`: a mild perspective instead of the parallel projection.
+    pub perspective: bool,
 }
 
 fn main() {
@@ -70,6 +72,7 @@ fn main() {
         test: args.iter().any(|a| a == "--test"),
         tilt: value("--tilt").cloned(),
         time: value("--time").and_then(|v| v.parse().ok()),
+        perspective: args.iter().any(|a| a == "--perspective"),
         snapshot: value("--snapshot").cloned(),
         scale: value("--scale").and_then(|v| v.parse().ok()).unwrap_or(2.0),
         rot: value("--rot").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -88,11 +91,11 @@ fn main() {
             TransformPlugin,
         ))
         .init_asset::<Mesh>()
-        .init_asset::<ColorMaterial>()
         .init_asset::<Image>()
         .init_asset::<world::mesh::BlockArt>()
         .init_asset::<world::mesh::WaterArt>()
-        .init_asset::<player::SilhouetteArt>();
+        .init_asset::<world::mesh::FlatArt>()
+        .init_asset::<world::mesh::SilhouetteArt>();
     } else {
         app.add_plugins(
             DefaultPlugins
@@ -131,12 +134,11 @@ fn main() {
             script::ScriptPlugin,
         ))
         .insert_resource(world::mesh::Grid(options.grid))
-        .init_resource::<look::Look>()
         .add_systems(
             Update,
             (
                 core::save::save.after(interact::InteractSet),
-                look::update
+                cam::follow
                     .after(player::PlayerSet)
                     .after(interact::InteractSet)
                     .after(world::ViewSet)
@@ -146,8 +148,8 @@ fn main() {
         );
     if options.snapshot.is_some() {
         // Load what the 1280 x 800 picture will show, not what a window would.
-        app.insert_resource(world::stream::Viewport {
-            half: Vec2::new(640.0, 400.0) / options.scale.max(0.25),
+        app.insert_resource(world::stream::Picture {
+            size: Vec2::new(1280.0, 800.0) / options.scale.max(0.25),
         });
     }
     if options.test {
@@ -163,21 +165,16 @@ fn main() {
             );
     } else {
         app.add_plugins((
-            bevy::sprite_render::Material2dPlugin::<world::mesh::BlockArt>::default(),
-            bevy::sprite_render::Material2dPlugin::<world::mesh::WaterArt>::default(),
-            bevy::sprite_render::Material2dPlugin::<player::SilhouetteArt>::default(),
+            bevy::pbr::MaterialPlugin::<world::mesh::BlockArt>::default(),
+            bevy::pbr::MaterialPlugin::<world::mesh::WaterArt>::default(),
+            bevy::pbr::MaterialPlugin::<world::mesh::FlatArt>::default(),
+            bevy::pbr::MaterialPlugin::<world::mesh::SilhouetteArt>::default(),
             camera::CameraPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
         ))
         .add_systems(Startup, interact::spawn_highlight)
-        .add_systems(
-            Update,
-            (
-                interact::track_cursor.before(interact::InteractSet),
-                interact::show_highlight.in_set(world::PlaceSet),
-            ),
-        );
+        .add_systems(Update, interact::show_highlight.in_set(world::PlaceSet));
     }
     // A failed self-test or test run is an error exit, so scripts and CI can see it.
     if app.run().is_error() {
@@ -227,14 +224,18 @@ fn setup_world(app: &mut App, options: &Options) {
         world.resource::<core::Registry<core::StampDef>>(),
     );
     let mut map = world::Map::default();
-    let mut view = world::iso::View::quarter(options.rot);
+    let mut cam = cam::Cam::quarter(options.rot);
     if let Some(degrees) = options.angle {
-        view.angle = degrees.to_radians();
-        view.target = view.angle;
+        // `--angle` counts from the classic quarter, as the 2D engine's did.
+        cam.yaw = degrees.to_radians() + std::f32::consts::FRAC_PI_4;
+        cam.target_yaw = cam.yaw;
     }
-    if let Some(tilt) = options.tilt.as_deref().and_then(world::iso::Tilt::named) {
-        view.tilt = tilt;
-        view.target_tilt = tilt;
+    if let Some(pitch) = options.tilt.as_deref().and_then(cam::Cam::pitch_named) {
+        cam.pitch = pitch;
+        cam.target_pitch = pitch;
+    }
+    if options.perspective {
+        cam.perspective = true;
     }
     // Inserted here so a save or `--time` wins over the plugin's default.
     let mut clock = core::time::GameTime::default();
@@ -242,11 +243,16 @@ fn setup_world(app: &mut App, options: &Options) {
         Some(l) => {
             info!("world seed {seed}, loaded {} edited chunks", l.chunks.len());
             map.parked = l.chunks;
-            view = world::iso::View::quarter(l.rot);
-            if let Some(tilt) = world::iso::Tilt::named(&l.tilt) {
-                view.tilt = tilt;
-                view.target_tilt = tilt;
+            cam = cam::Cam::quarter(l.rot);
+            if let Some(yaw) = l.yaw {
+                cam.yaw = yaw;
+                cam.target_yaw = yaw;
             }
+            if let Some(pitch) = l.pitch.or_else(|| cam::Cam::pitch_named(&l.tilt)) {
+                cam.pitch = pitch;
+                cam.target_pitch = pitch;
+            }
+            cam.perspective = l.perspective;
             if l.time > 0.0 {
                 clock.secs = l.time;
             }
@@ -270,7 +276,7 @@ fn setup_world(app: &mut App, options: &Options) {
     world.insert_resource(clock);
     world.insert_resource(wg);
     world.insert_resource(map);
-    world.insert_resource(view);
+    world.insert_resource(cam);
     world.insert_resource(world::Focus(start));
     world.insert_resource(pending);
     world.insert_resource(core::save::SavePath(path));

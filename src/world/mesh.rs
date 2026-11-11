@@ -8,10 +8,14 @@
 //! vertex and the sun, tinted cool in shade and warm in sun.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
-use bevy::render::render_resource::{AsBindGroup, ShaderType};
-use bevy::sprite_render::{AlphaMode2d, Material2d};
+use bevy::render::render_resource::{
+    AsBindGroup, CompareFunction, RenderPipelineDescriptor, ShaderType,
+    SpecializedMeshPipelineError,
+};
 
 use super::tiles::{TILE, Tiles, atlas};
 use super::{AIR, CHUNK, HEIGHT};
@@ -84,8 +88,12 @@ pub struct Grid(pub bool);
 pub struct BlockParams {
     /// x: unused, y and z: atlas size in texels, w: light bands.
     pub params: Vec4,
-    /// x: daylight 0..1, y: time of day 0..1, z: the camera's focus depth, w: unused.
+    /// x: daylight 0..1, y: time of day 0..1, z, w: unused.
     pub day: Vec4,
+    /// The camera's focus (xyz) and, in `toward_eye`, the unit vector from it to the eye:
+    /// a point's view depth past the focus is `dot(focus - p, toward_eye)`.
+    pub focus: Vec4,
+    pub toward_eye: Vec4,
     /// Colour of sunlight now.
     pub sun_color: Vec4,
     /// Colour of the light left in shade and at night.
@@ -100,10 +108,10 @@ pub const HAZE_REACH: f32 = 28.0;
 /// Share of the sky colour mixed in at full haze.
 pub const HAZE_STRENGTH: f32 = 0.22;
 
-/// How much of the haze a point at projected depth `depth` gets when the focus is at
-/// `focus_depth`: nothing at or in front of the focus, full `HAZE_REACH` behind it.
-pub fn haze_at(depth: f32, focus_depth: f32) -> f32 {
-    ((focus_depth - depth) / HAZE_REACH).clamp(0.0, 1.0)
+/// How much of the haze a world point gets: nothing at or in front of the focus plane,
+/// full `HAZE_REACH` blocks behind it along the view axis.
+pub fn haze_at(p: Vec3, focus: Vec3, toward_eye: Vec3) -> f32 {
+    ((focus - p).dot(toward_eye) / HAZE_REACH).clamp(0.0, 1.0)
 }
 
 /// Mixes `color` toward the haze colour by `amount` of its strength.
@@ -111,8 +119,14 @@ pub fn hazed(color: Vec3, haze: Vec4, amount: f32) -> Vec3 {
     color.lerp(haze.truncate(), amount * haze.w)
 }
 
+/// Every material here is unlit and two-sided: no shadow maps, no prepass, no backface
+/// culling (the mesher emits what is visible, and the figure's quads may wind either way).
+fn unlit(descriptor: &mut RenderPipelineDescriptor) {
+    descriptor.primitive.cull_mode = None;
+}
+
 /// The block material: the tile atlas lit by vertex colour, with outlines, banded light,
-/// moving water and the see-through dither around the player, in `shaders/block.wgsl`.
+/// in `shaders/block.wgsl`. Mask, so cutout texels are dropped and depth still written.
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub struct BlockArt {
     #[uniform(0)]
@@ -122,13 +136,27 @@ pub struct BlockArt {
     pub atlas: Handle<Image>,
 }
 
-impl Material2d for BlockArt {
+impl Material for BlockArt {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/block.wgsl".into()
     }
-    fn alpha_mode(&self) -> AlphaMode2d {
-        // Mask lets the shader discard the see-through dither; depth is still written.
-        AlphaMode2d::Mask(0.5)
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Mask(0.5)
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        unlit(descriptor);
+        Ok(())
     }
 }
 
@@ -143,12 +171,125 @@ pub struct WaterArt {
     pub atlas: Handle<Image>,
 }
 
-impl Material2d for WaterArt {
+impl Material for WaterArt {
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/water.wgsl".into()
     }
-    fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Blend
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        unlit(descriptor);
+        Ok(())
+    }
+}
+
+/// Flat-coloured things: vertex colour times `tint`, optionally through a texture (the
+/// crack overlay), in `shaders/flat.wgsl`. Used by the figure, particles, the highlight and
+/// the ground shadow.
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+pub struct FlatArt {
+    #[uniform(0)]
+    pub flat: FlatParams,
+    #[texture(1)]
+    #[sampler(2)]
+    pub texture: Option<Handle<Image>>,
+    pub blend: bool,
+}
+
+#[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
+pub struct FlatParams {
+    pub tint: Vec4,
+    /// x: 1 when the texture is to be sampled, y: 1 to discard texels under half alpha.
+    pub flags: Vec4,
+}
+
+impl FlatArt {
+    pub fn plain(tint: Vec4, blend: bool) -> Self {
+        Self {
+            flat: FlatParams {
+                tint,
+                flags: Vec4::ZERO,
+            },
+            texture: None,
+            blend,
+        }
+    }
+}
+
+impl Material for FlatArt {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/flat.wgsl".into()
+    }
+    fn alpha_mode(&self) -> AlphaMode {
+        if self.blend {
+            AlphaMode::Blend
+        } else {
+            AlphaMode::Mask(0.5)
+        }
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        unlit(descriptor);
+        Ok(())
+    }
+}
+
+/// The silhouette material: the figure's own vertex colours as a flat tint, drawn only
+/// where the depth buffer holds something nearer (`shaders/silhouette.wgsl`, depth test
+/// turned round; 3D depth is reversed, nearer is greater, so `Less` keeps only covered
+/// texels).
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+pub struct SilhouetteArt {
+    #[uniform(0)]
+    pub tint: Vec4,
+}
+
+impl Material for SilhouetteArt {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/silhouette.wgsl".into()
+    }
+    fn alpha_mode(&self) -> AlphaMode {
+        AlphaMode::Blend
+    }
+    fn enable_shadows() -> bool {
+        false
+    }
+    fn enable_prepass() -> bool {
+        false
+    }
+    fn specialize(
+        _pipeline: &MaterialPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: MaterialPipelineKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        unlit(descriptor);
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_compare = Some(CompareFunction::Less);
+        }
+        Ok(())
     }
 }
 
@@ -177,6 +318,8 @@ pub fn setup(
     let block = BlockParams {
         params,
         day: Vec4::new(1.0, 0.5, 0.0, 0.0),
+        focus: Vec4::ZERO,
+        toward_eye: Vec4::new(0.0, 0.0, 1.0, 0.0),
         sun_color: Vec4::ONE,
         ambient_color: Vec4::ONE,
         haze: Vec4::new(0.36, 0.60, 0.92, HAZE_STRENGTH),
@@ -199,7 +342,7 @@ pub fn setup(
 /// the long stretches where nothing changes.
 pub fn tick(
     clock: Res<GameTime>,
-    look: Res<crate::look::Look>,
+    cam: Res<crate::cam::Cam>,
     handle: Option<Res<BlockMaterial>>,
     water: Option<Res<WaterMaterial>>,
     mut materials: ResMut<Assets<BlockArt>>,
@@ -213,17 +356,24 @@ pub fn tick(
     };
     let day = daylight(clock.frac());
     let sky = crate::core::time::sky_color(clock.frac());
-    // The focus depth moves in whole blocks, so walking writes the material a few times
-    // a second and standing still never does.
+    // The focus moves in whole blocks and the view direction in hundredths, so walking or
+    // turning writes the material a few times a second and standing still never does.
     let wanted = BlockParams {
         params: current.params,
-        day: Vec4::new(quantize(day.level), clock.frac(), look.depth.round(), 0.0),
+        day: Vec4::new(quantize(day.level), clock.frac(), 0.0, 0.0),
+        focus: cam.focus.round().extend(0.0),
+        toward_eye: cam
+            .toward_eye()
+            .map(|v| (v * 100.0).round() / 100.0)
+            .extend(0.0),
         sun_color: day.sun.map(quantize).extend(1.0),
         ambient_color: day.ambient.map(quantize).extend(1.0),
         haze: sky.map(quantize).extend(HAZE_STRENGTH),
     };
     let same = |a: Vec4, b: Vec4| (a - b).abs().max_element() < 1e-6;
     if same(wanted.day.with_y(0.0), current.day.with_y(0.0))
+        && same(wanted.focus, current.focus)
+        && same(wanted.toward_eye, current.toward_eye)
         && same(wanted.sun_color, current.sun_color)
         && same(wanted.ambient_color, current.ambient_color)
         && same(wanted.haze, current.haze)
@@ -645,7 +795,7 @@ pub fn corners(p: IVec3, normal: IVec3) -> [Vec3; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::iso::View;
+    use crate::cam::Cam;
 
     fn tiles() -> Tiles {
         let mut blocks = Registry::<BlockDef>::default();
@@ -800,12 +950,16 @@ mod tests {
                 [1.0, 2.0, 1.0]
             ]
         );
-        // Through the default view it spans depth 3 (far corner) to 5 (near corner).
+        // Through the classic camera the corner nearest the eye (2, 2) is nearest, the
+        // far one (1, 1) farthest, the other two level with each other.
+        let cam = Cam::quarter(0);
+        let size = Vec2::new(1280.0, 800.0);
         let depth: Vec<f32> = f.positions[..4]
             .iter()
-            .map(|p| (View::default().matrix() * Vec3::from(*p)).z)
+            .map(|p| cam.project(size, Vec3::from(*p)).z)
             .collect();
-        assert_eq!(depth, vec![3.0, 4.0, 5.0, 4.0]);
+        assert!(depth[2] > depth[1] && depth[1] > depth[0], "{depth:?}");
+        assert!((depth[1] - depth[3]).abs() < 1e-4, "{depth:?}");
     }
 
     /// The top face of the floor block at `(x, y)` in a mesh of a floor at z 0.

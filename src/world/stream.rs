@@ -1,31 +1,29 @@
 //! Keeps the chunks the camera can see loaded and their meshes current, within a time
-//! budget per frame, and hands each mesh the view's projection as its transform.
+//! budget per frame.
 
 use std::time::Instant;
 
-use bevy::camera::visibility::NoFrustumCulling;
-use bevy::math::Affine3A;
+use bevy::pbr::{Material, MeshMaterial3d};
 use bevy::prelude::*;
-use bevy::sprite_render::{Material2d, MeshMaterial2d};
 
-use super::iso::View;
 use super::mesh::{BlockMaterial, Faces, Grid, Quality, WaterMaterial, chunk_faces};
 use super::tiles::Tiles;
 use super::worldgen::WorldGen;
 use super::{CHUNK, Chunk, Focus, HEIGHT, Map, chunk_of, light};
-use crate::player::Projected;
+use crate::cam::Cam;
 
-/// What the camera shows: half its width and height in texels.
+/// The picture's size in texels: the render target the camera draws into.
 #[derive(Resource, Clone, Copy)]
-pub struct Viewport {
-    pub half: Vec2,
+pub struct Picture {
+    pub size: Vec2,
 }
 
-impl Default for Viewport {
+impl Default for Picture {
     fn default() -> Self {
-        // A 1280 x 720 window at three pixels per texel.
+        // A 1280 x 720 window at three pixels per texel; the window and snapshots set
+        // their own.
         Self {
-            half: Vec2::new(214.0, 120.0),
+            size: Vec2::new(427.0, 240.0),
         }
     }
 }
@@ -69,34 +67,40 @@ pub struct Perf {
     pub meshed: u64,
 }
 
-/// Chunks whose blocks could appear within `reach` texels of the middle of the screen,
-/// nearest the focus first.
-pub fn visible_chunks(view: View, focus: Vec3, reach: Vec2) -> Vec<IVec2> {
-    let centre = view.project(focus).truncate();
-    let (lo, hi) = (centre - reach, centre + reach);
+/// Chunks whose blocks could appear within `reach` texels of the middle of a
+/// `target`-sized picture through `cam`, nearest `home` first.
+pub fn visible_chunks(cam: &Cam, target: Vec2, reach: Vec2, home: Vec3) -> Vec<IVec2> {
+    let (lo, hi) = (-reach, reach);
     // Every world column that can show on screen lies between where the screen's corners
     // land on the bottom and the top of the world.
     let mut min = IVec2::MAX;
     let mut max = IVec2::MIN;
     for corner in [lo, hi, Vec2::new(lo.x, hi.y), Vec2::new(hi.x, lo.y)] {
         for z in [0.0, HEIGHT as f32] {
-            let c = chunk_of(view.unproject(corner, z).floor().as_ivec3());
+            let c = chunk_of(cam.unproject(target, corner, z).floor().as_ivec3());
             min = min.min(c);
             max = max.max(c);
         }
     }
-    let home = chunk_of(focus.floor().as_ivec3());
+    // A perspective camera's near ground can lie outside those corners; the focus chunk
+    // and its ring are always kept.
+    let home_chunk = chunk_of(home.floor().as_ivec3());
+    min = min.min(home_chunk - IVec2::ONE);
+    max = max.max(home_chunk + IVec2::ONE);
     let mut out: Vec<IVec2> = (min.y..=max.y)
         .flat_map(|y| (min.x..=max.x).map(move |x| IVec2::new(x, y)))
         .filter(|c| {
+            if (*c - home_chunk).abs().max_element() <= 1 {
+                return true;
+            }
             // The chunk's box on screen against the screen rectangle.
             let base = (*c * CHUNK).extend(0).as_vec3();
             let (mut a, mut b) = (Vec2::MAX, Vec2::MIN);
             for dx in [0, CHUNK] {
                 for dy in [0, CHUNK] {
                     for dz in [0, HEIGHT] {
-                        let p = view
-                            .project(base + IVec3::new(dx, dy, dz).as_vec3())
+                        let p = cam
+                            .project(target, base + IVec3::new(dx, dy, dz).as_vec3())
                             .truncate();
                         a = a.min(p);
                         b = b.max(p);
@@ -107,22 +111,22 @@ pub fn visible_chunks(view: View, focus: Vec3, reach: Vec2) -> Vec<IVec2> {
         })
         .collect();
     // The ground under the player first, the horizon last.
-    out.sort_by_key(|c| (*c - home).length_squared());
+    out.sort_by_key(|c| (*c - home_chunk).length_squared());
     out
 }
 
 pub fn stream(
     focus: Res<Focus>,
-    view: Res<View>,
-    viewport: Res<Viewport>,
+    cam: Res<Cam>,
+    picture: Res<Picture>,
     streaming: Res<Streaming>,
     wg: Res<WorldGen>,
     mut map: ResMut<Map>,
     mut commands: Commands,
 ) {
     let started = Instant::now();
-    let reach = viewport.half + Vec2::splat(streaming.margin);
-    let keep = visible_chunks(*view, focus.0, reach + Vec2::splat(KEEP_EXTRA));
+    let reach = picture.size / 2.0 + Vec2::splat(streaming.margin);
+    let keep = visible_chunks(&cam, picture.size, reach + Vec2::splat(KEEP_EXTRA), focus.0);
     let far: Vec<IVec2> = map
         .chunks
         .keys()
@@ -143,7 +147,7 @@ pub fn stream(
     }
     // Generation gets the smaller share of the frame's budget; meshing gets the rest.
     let budget = streaming.budget_ms * 0.4;
-    for (n, pos) in visible_chunks(*view, focus.0, reach)
+    for (n, pos) in visible_chunks(&cam, picture.size, reach, focus.0)
         .into_iter()
         .filter(|p| !map.chunks.contains_key(p))
         .collect::<Vec<_>>()
@@ -165,29 +169,29 @@ pub fn stream(
 pub fn view_keys(
     input: Res<ButtonInput<KeyCode>>,
     keys: Res<crate::core::settings::Keys>,
-    mut view: ResMut<View>,
+    mut cam: ResMut<Cam>,
     mut grid: ResMut<Grid>,
 ) {
     if keys.just(&input, &keys.rotate_left) {
-        view.turn_by(std::f32::consts::FRAC_PI_2);
+        cam.turn_by(std::f32::consts::FRAC_PI_2);
     }
     if keys.just(&input, &keys.rotate_right) {
-        view.turn_by(-std::f32::consts::FRAC_PI_2);
+        cam.turn_by(-std::f32::consts::FRAC_PI_2);
     }
     if keys.just(&input, &keys.grid) {
         grid.0 = !grid.0;
     }
     if keys.just(&input, &keys.tilt) {
-        let next = view.target_tilt.next();
-        view.set_tilt(next);
+        let next = cam.next_pitch();
+        cam.set_pitch(next);
     }
 }
 
-/// Moves the view toward the angle it was asked for.
-pub fn ease_view(time: Res<Time<Real>>, mut view: ResMut<View>) {
-    if view.turning() {
+/// Moves the camera toward the angles it was asked for.
+pub fn ease_view(time: Res<Time<Real>>, mut cam: ResMut<Cam>) {
+    if cam.turning() {
         let dt = time.delta_secs();
-        view.ease(dt);
+        cam.ease(dt);
     }
 }
 
@@ -275,7 +279,7 @@ pub fn remesh(
 
 /// Puts `faces` on `old` or a new entity with `material`, or despawns `old` when there is
 /// nothing to draw. Returns the entity that now draws the chunk, if any.
-fn place<M: Material2d>(
+fn place<M: Material>(
     faces: Faces,
     old: Option<Entity>,
     material: &Handle<M>,
@@ -289,7 +293,7 @@ fn place<M: Material2d>(
         }
         return None;
     }
-    let mesh = Mesh2d(meshes.add(faces.into_mesh()));
+    let mesh = Mesh3d(meshes.add(faces.into_mesh()));
     Some(match old {
         Some(e) => {
             commands.entity(e).insert(mesh);
@@ -297,35 +301,12 @@ fn place<M: Material2d>(
         }
         None => commands
             .spawn((
-                Projected::at((pos * CHUNK).extend(0).as_vec3()),
                 mesh,
-                MeshMaterial2d(material.clone()),
-                Transform::default(),
-                // Loaded chunks are on screen by construction, so culling would only
-                // cost time, and its bounds are not meant for sheared transforms.
-                NoFrustumCulling,
+                MeshMaterial3d(material.clone()),
+                Transform::from_translation((pos * CHUNK).extend(0).as_vec3()),
             ))
             .id(),
     })
-}
-
-/// Gives every projected mesh (chunks, the figure, its silhouette) the view's projection
-/// as its transform. The meshes are in world space, so this is all a turn of the view
-/// costs. It runs after transform propagation, which would otherwise overwrite a matrix
-/// that is not a plain move, turn and scale.
-pub fn apply_view(view: Res<View>, mut drawn: Query<(&Projected, &mut GlobalTransform)>) {
-    let matrix = view.matrix();
-    for (p, mut transform) in &mut drawn {
-        let mut at = view.project(p.origin);
-        at.z += p.bias;
-        let wanted = GlobalTransform::from(Affine3A::from_mat3_translation(
-            matrix * Mat3::from_diagonal(p.scale),
-            at,
-        ));
-        if *transform != wanted {
-            *transform = wanted;
-        }
-    }
 }
 
 /// Keeps the smoothed frame time and the world totals current.
@@ -352,25 +333,24 @@ pub fn measure(
 mod tests {
     use super::*;
 
+    const T: Vec2 = Vec2::new(1280.0, 800.0);
+
     #[test]
     fn only_chunks_that_can_reach_the_screen_are_wanted() {
         let focus = Vec3::new(8.0, 8.0, 12.0);
-        let reach = Viewport::default().half + Vec2::splat(Streaming::default().margin);
+        let reach = T / 2.0 + Vec2::splat(Streaming::default().margin);
         for rot in 0..4 {
-            let view = View::quarter(rot);
-            let near = visible_chunks(view, focus, reach);
-            // The chunk under the focus comes first, and far fewer than the old fixed
-            // nine by nine square are needed.
+            let mut cam = Cam::quarter(rot);
+            cam.focus = focus;
+            let near = visible_chunks(&cam, T, reach, focus);
             assert_eq!(near[0], IVec2::ZERO, "rot {rot}");
-            assert!(near.len() >= 6 && near.len() < 40, "{} chunks", near.len());
-            // A bigger screen needs a superset.
-            let wide = visible_chunks(view, focus, reach * 3.0);
+            // A 1280 x 800 picture at sixteen texels a block is eighty blocks wide.
+            assert!(near.len() >= 6 && near.len() < 160, "{} chunks", near.len());
+            let wide = visible_chunks(&cam, T * 3.0, reach * 3.0, focus);
             assert!(wide.len() > near.len());
             assert!(near.iter().all(|c| wide.contains(c)));
-            // Whatever is on screen at ground level is covered.
-            let centre = view.project(focus).truncate();
             for corner in [reach, -reach, Vec2::new(reach.x, -reach.y)] {
-                let ground = view.unproject(centre + corner * 0.99, 12.0);
+                let ground = cam.unproject(T, corner * 0.99, 12.0);
                 assert!(near.contains(&chunk_of(ground.floor().as_ivec3())));
             }
         }
@@ -379,41 +359,30 @@ mod tests {
     #[test]
     fn every_point_on_screen_at_any_height_is_in_a_wanted_chunk() {
         let focus = Vec3::new(-6.5, -10.5, 12.0);
-        let reach = Viewport::default().half + Vec2::splat(Streaming::default().margin);
-        for degrees in [0.0f32, 30.0, 45.0, 90.0, 137.0, 200.0, 315.0] {
-            let angle = degrees.to_radians();
-            let view = View {
-                angle,
-                target: angle,
-                ..default()
-            };
-            let wanted = visible_chunks(view, focus, reach);
-            let centre = view.project(focus).truncate();
-            for sx in -10..=10 {
-                for sy in -10..=10 {
-                    let screen = centre + reach * Vec2::new(sx as f32, sy as f32) / 10.0 * 0.999;
-                    for z in 0..HEIGHT {
-                        let p = view.unproject(screen, z as f32 + 0.5);
-                        assert!(
-                            wanted.contains(&chunk_of(p.floor().as_ivec3())),
-                            "{degrees} degrees: {p} is on screen but its chunk is not wanted"
-                        );
+        let reach = T / 2.0 + Vec2::splat(Streaming::default().margin);
+        for degrees in [45.0f32, 75.0, 90.0, 137.0, 200.0, 315.0] {
+            for (perspective, pitch) in [(false, 30.0f32), (true, 30.0), (false, 60.0)] {
+                let mut cam = Cam::quarter(0);
+                cam.yaw = degrees.to_radians();
+                cam.target_yaw = cam.yaw;
+                cam.pitch = pitch.to_radians();
+                cam.target_pitch = cam.pitch;
+                cam.perspective = perspective;
+                cam.focus = focus;
+                let wanted = visible_chunks(&cam, T, reach, focus);
+                for sx in -10..=10 {
+                    for sy in -10..=10 {
+                        let screen = reach * Vec2::new(sx as f32, sy as f32) / 10.0 * 0.999;
+                        for z in 0..HEIGHT {
+                            let p = cam.unproject(T, screen, z as f32 + 0.5);
+                            assert!(
+                                wanted.contains(&chunk_of(p.floor().as_ivec3())),
+                                "{degrees} degrees, perspective {perspective}, pitch {pitch}: {p} is on screen but its chunk is not wanted"
+                            );
+                        }
                     }
                 }
             }
-            println!("{degrees} degrees: {} chunks wanted", wanted.len());
         }
-    }
-
-    #[test]
-    fn a_turning_view_wants_chunks_too() {
-        let view = View {
-            angle: 0.7,
-            target: 1.0,
-            ..default()
-        };
-        let near = visible_chunks(view, Vec3::new(-40.0, 100.0, 10.0), Vec2::new(300.0, 200.0));
-        assert_eq!(near[0], IVec2::new(-3, 6));
-        assert!(near.len() > 4);
     }
 }

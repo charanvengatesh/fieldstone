@@ -48,7 +48,7 @@ test("teleporting far away streams the ground in and the player lands on it", fu
     end
     expect(pz <= highest + 1.01 and pz > 0.99,
         string.format("the player stands on the ground (feet %.2f, highest top %d)", pz, highest))
-    expect(perf().chunks >= 6 and perf().chunks <= 40,
+    expect(perf().chunks >= 6 and perf().chunks <= 60,
         string.format("%d chunks around the new spot (was %d)", perf().chunks, before))
     -- Home again, so later tests start where they expect: the chunk back under the
     -- player, then the fall (a stale "grounded" from before the teleport does not count).

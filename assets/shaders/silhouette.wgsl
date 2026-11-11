@@ -6,14 +6,14 @@ struct SilhouetteParams {
     tint: vec4<f32>,
 };
 
-@group(2) @binding(0) var<uniform> silhouette: SilhouetteParams;
+@group(3) @binding(0) var<uniform> silhouette: SilhouetteParams;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    @location(4) color: vec4<f32>,
+    @location(5) color: vec4<f32>,
 };
 
 @fragment

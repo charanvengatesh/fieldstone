@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use super::settings::Keys;
 use super::time::GameTime;
 use super::{BlockDef, ItemDef, Registry, SaveRequest, Toast};
+use crate::cam::Cam;
 use crate::inventory::{Inventory, Stack};
 use crate::player::Player;
-use crate::world::iso::View;
 use crate::world::worldgen::WorldGen;
 use crate::world::{AIR, Blocks, Map, VOLUME, empty_blocks};
 
@@ -30,9 +30,16 @@ pub struct SaveFile {
     pub seed: u32,
     pub player: (f32, f32, f32),
     pub rot: u8,
-    /// Tilt preset name; older files have none and get the classic tilt.
+    /// Tilt preset name from before 1.0; read as a pitch preset when `pitch` is absent.
     #[serde(default)]
     pub tilt: String,
+    /// Camera yaw and pitch in radians, and the projection; older files have none.
+    #[serde(default)]
+    pub yaw: Option<f32>,
+    #[serde(default)]
+    pub pitch: Option<f32>,
+    #[serde(default)]
+    pub perspective: bool,
     /// Game clock in seconds; older files have none and start at the default morning.
     #[serde(default)]
     pub time: f64,
@@ -51,6 +58,9 @@ pub struct Loaded {
     pub player: Vec3,
     pub rot: u8,
     pub tilt: String,
+    pub yaw: Option<f32>,
+    pub pitch: Option<f32>,
+    pub perspective: bool,
     pub time: f64,
     pub selected: usize,
     pub inventory: Vec<Option<Stack>>,
@@ -96,8 +106,7 @@ pub fn decode(runs: &[(u16, u32)], mut map: impl FnMut(u16) -> u16) -> Option<Bl
 pub fn pack<'a>(
     seed: u32,
     player: Vec3,
-    rot: u8,
-    tilt: &str,
+    cam: &Cam,
     time: f64,
     inv: &Inventory,
     chunks: impl Iterator<Item = (IVec2, &'a Blocks)>,
@@ -122,8 +131,11 @@ pub fn pack<'a>(
         version: VERSION,
         seed,
         player: (player.x, player.y, player.z),
-        rot,
-        tilt: tilt.to_owned(),
+        rot: cam.rot(),
+        tilt: cam.pitch_name().to_owned(),
+        yaw: Some(cam.target_yaw),
+        pitch: Some(cam.target_pitch),
+        perspective: cam.perspective,
         time,
         selected: inv.selected,
         inventory: inv
@@ -167,6 +179,9 @@ pub fn unpack(
         player: Vec3::new(file.player.0, file.player.1, file.player.2),
         rot: file.rot % 4,
         tilt: file.tilt.clone(),
+        yaw: file.yaw,
+        pitch: file.pitch,
+        perspective: file.perspective,
         time: file.time,
         selected: file.selected,
         inventory: file
@@ -211,7 +226,7 @@ pub fn save(
     keys: Res<Keys>,
     path: Res<SavePath>,
     wg: Res<WorldGen>,
-    view: Res<View>,
+    cam: Res<Cam>,
     clock: Res<GameTime>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
@@ -235,8 +250,7 @@ pub fn save(
     let file = pack(
         wg.seed,
         player.body.pos,
-        view.rot(),
-        view.target_tilt.name(),
+        &cam,
         clock.secs,
         inv,
         edited,
@@ -306,8 +320,12 @@ mod tests {
         let file = pack(
             77,
             Vec3::new(1.5, -2.5, 9.0),
-            2,
-            "high",
+            &{
+                let mut c = Cam::quarter(2);
+                c.set_pitch(Cam::pitch_named("high").unwrap());
+                c.perspective = true;
+                c
+            },
             1234.5,
             &inv,
             [(IVec2::new(-1, 4), &chunk)].into_iter(),
@@ -322,6 +340,7 @@ mod tests {
         let loaded = unpack(&file, &blocks2, &items2).unwrap();
         assert_eq!((loaded.seed, loaded.rot, loaded.selected), (77, 2, 3));
         assert_eq!(loaded.tilt, "high");
+        assert!(loaded.perspective && loaded.pitch.is_some() && loaded.yaw.is_some());
         assert_eq!(loaded.time, 1234.5);
         assert_eq!(loaded.player, Vec3::new(1.5, -2.5, 9.0));
         let got = &loaded.chunks[&IVec2::new(-1, 4)];
@@ -347,8 +366,7 @@ mod tests {
         let file = pack(
             1,
             Vec3::ZERO,
-            0,
-            "classic",
+            &Cam::quarter(0),
             0.0,
             &inv,
             [(IVec2::ZERO, &chunk)].into_iter(),

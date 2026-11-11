@@ -1,23 +1,95 @@
 //! Small things that make the world feel touched: chips fly when a block breaks, dust
-//! rises when the player lands. Particles are 2 x 2 texel sprites coloured from the
-//! block's own tile, moved in world space under gravity and projected each frame; the
-//! sprite pipeline depth-tests them against the blocks without writing depth.
+//! rises when the player lands. Particles are tiny cubes coloured from the block's own
+//! tile, moved in world space under gravity like everything else in the scene.
 
+use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
 
 use crate::core::{BlockDef, Registry, hash01};
 use crate::interact::BlockBroken;
 use crate::player::{Landed, closed};
 use crate::world::Map;
-use crate::world::iso::View;
+use crate::world::mesh::{Faces, FlatArt};
 use crate::world::tiles::{TILE, Tiles};
 
 /// Live particles at most; past this, bursts are skipped rather than queued.
 pub const CAP: usize = 200;
 const LIFE: f32 = 0.6;
 const GRAVITY: f32 = 22.0;
-/// Depth nudge so a chip resting on a face is not hidden by it.
-const DEPTH_BIAS: f32 = 0.04;
+/// Side of a chip, in blocks.
+const CHIP: f32 = 0.12;
+
+/// The one cube mesh every particle shares.
+#[derive(Resource)]
+pub struct ChipMesh(pub Handle<Mesh>);
+
+/// A small cube about the origin with the attributes the flat material wants, lit a
+/// little from above like the blocks.
+pub fn chip_mesh() -> Mesh {
+    let mut f = Faces::default();
+    let h = CHIP / 2.0;
+    let c = |x: f32, y: f32, z: f32| [x * h, y * h, z * h];
+    let faces: [([[f32; 3]; 4], f32); 5] = [
+        (
+            [
+                c(-1., -1., 1.),
+                c(1., -1., 1.),
+                c(1., 1., 1.),
+                c(-1., 1., 1.),
+            ],
+            1.0,
+        ),
+        (
+            [
+                c(1., 1., -1.),
+                c(-1., 1., -1.),
+                c(-1., 1., 1.),
+                c(1., 1., 1.),
+            ],
+            0.8,
+        ),
+        (
+            [
+                c(-1., -1., -1.),
+                c(1., -1., -1.),
+                c(1., -1., 1.),
+                c(-1., -1., 1.),
+            ],
+            0.7,
+        ),
+        (
+            [
+                c(-1., 1., -1.),
+                c(-1., -1., -1.),
+                c(-1., -1., 1.),
+                c(-1., 1., 1.),
+            ],
+            0.75,
+        ),
+        (
+            [
+                c(1., -1., -1.),
+                c(1., 1., -1.),
+                c(1., 1., 1.),
+                c(1., -1., 1.),
+            ],
+            0.65,
+        ),
+    ];
+    for (corners, shade) in faces {
+        for p in corners {
+            f.positions.push(p);
+            f.uvs.push([0.0, 0.0]);
+            f.colors.push([shade, shade, shade, 1.0]);
+        }
+        f.flips.push(false);
+    }
+    f.into_mesh()
+}
+
+pub fn setup(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
+    commands.insert_resource(ChipMesh(meshes.add(chip_mesh())));
+}
 
 #[derive(Component)]
 pub struct Particle {
@@ -61,6 +133,8 @@ pub fn burst(seed: i32, n: usize, up: f32) -> Vec<Vec3> {
 
 fn spawn_burst(
     commands: &mut Commands,
+    mesh: &Handle<Mesh>,
+    flats: &mut Assets<FlatArt>,
     origin: Vec3,
     colors: &[Color],
     vels: &[Vec3],
@@ -71,14 +145,19 @@ fn spawn_burst(
             return;
         }
         *room -= 1;
+        let c = color.to_linear();
         commands.spawn((
             Particle {
                 pos: origin,
                 vel: *vel,
                 life: LIFE,
             },
-            Sprite::from_color(*color, Vec2::splat(2.0)),
-            Transform::from_translation(Vec3::new(0.0, 0.0, -1e5)),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(flats.add(FlatArt::plain(
+                Vec4::new(c.red, c.green, c.blue, 1.0),
+                false,
+            ))),
+            Transform::from_translation(origin),
         ));
     }
 }
@@ -89,9 +168,14 @@ pub fn emit(
     mut landed: MessageReader<Landed>,
     tiles: Option<Res<Tiles>>,
     map: Res<Map>,
+    chip: Option<Res<ChipMesh>>,
     live: Query<(), With<Particle>>,
+    mut flats: ResMut<Assets<FlatArt>>,
     mut commands: Commands,
 ) {
+    let Some(chip) = chip else {
+        return;
+    };
     let mut room = CAP.saturating_sub(live.iter().count());
     for b in broken.read() {
         let colors = match tiles.as_deref() {
@@ -106,6 +190,8 @@ pub fn emit(
         let vels = burst(seed, 8, 3.0);
         spawn_burst(
             &mut commands,
+            &chip.0,
+            &mut flats,
             b.at.as_vec3() + Vec3::splat(0.5),
             &colors,
             &vels,
@@ -127,6 +213,8 @@ pub fn emit(
         let vels = burst(under.x ^ under.y, n, 0.6);
         spawn_burst(
             &mut commands,
+            &chip.0,
+            &mut flats,
             l.pos + Vec3::Z * 0.1,
             &colors[..n],
             &vels,
@@ -135,19 +223,25 @@ pub fn emit(
     }
 }
 
-/// Moves every particle, lands it on the ground, and projects it to the screen.
+/// Moves every particle and lands it on the ground.
 pub fn tick(
     time: Res<Time>,
-    view: Res<View>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
-    mut particles: Query<(Entity, &mut Particle, &mut Transform)>,
+    mut particles: Query<(
+        Entity,
+        &mut Particle,
+        &mut Transform,
+        &MeshMaterial3d<FlatArt>,
+    )>,
+    mut flats: ResMut<Assets<FlatArt>>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs().min(0.05);
-    for (e, mut p, mut tf) in &mut particles {
+    for (e, mut p, mut tf, material) in &mut particles {
         p.life -= dt;
         if p.life <= 0.0 {
+            flats.remove(&material.0);
             commands.entity(e).despawn();
             continue;
         }
@@ -163,8 +257,7 @@ pub fn tick(
         } else {
             p.pos = next;
         }
-        let at = view.project(p.pos);
-        tf.translation = at + Vec3::Z * DEPTH_BIAS;
+        tf.translation = p.pos + Vec3::Z * (CHIP / 2.0);
     }
 }
 
@@ -172,7 +265,7 @@ pub struct FxPlugin;
 
 impl Plugin for FxPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_systems(Startup, setup).add_systems(
             Update,
             (emit, tick)
                 .chain()

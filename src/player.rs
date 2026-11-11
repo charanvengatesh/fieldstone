@@ -1,33 +1,25 @@
-//! The player: a body moved by the keyboard along the screen axes, drawn as a small block
-//! model (`crate::figure`) projected through the view like the terrain, so it turns and is
-//! covered exactly as the blocks around it are.
+//! The player: a body moved by the keyboard along the picture's axes, drawn as a small
+//! block model (`crate::figure`) in the world like any other mesh.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::NoFrustumCulling;
-use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::pbr::MeshMaterial3d;
 use bevy::prelude::*;
-use bevy::render::render_resource::{
-    AsBindGroup, CompareFunction, RenderPipelineDescriptor, SpecializedMeshPipelineError,
-};
-use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPipeline};
 
+use crate::cam::Cam;
 use crate::core::settings::Keys;
 use crate::core::time::{Daylight, GameTime, daylight};
 use crate::core::{BlockDef, Registry};
 use crate::figure;
 use crate::inventory::Inventory;
-use crate::world::iso::View;
 use crate::world::light::{REACH, level_at};
-use crate::world::mesh::{compose, sunlit};
+use crate::world::mesh::{FlatArt, SilhouetteArt, compose, sunlit};
 use crate::world::physics::{Body, jump, step};
 use crate::world::tiles::Tiles;
 use crate::world::{AIR, Focus, HEIGHT, Map};
 
 /// Blocks per second.
 const SPEED: f32 = 4.5;
-/// Depth nudge toward the viewer, so the figure wins against the face it stands on.
-const DEPTH_BIAS: f32 = 0.05;
 
 #[derive(Component)]
 pub struct Player {
@@ -48,8 +40,6 @@ pub struct Player {
     pub fall_from: f32,
     /// Seconds of landing squash left.
     pub squash: f32,
-    /// Depth the silhouette sits in front of the feet, set by `place` each frame.
-    pub lift: f32,
 }
 
 /// The player landed after a fall of `drop` blocks.
@@ -71,38 +61,17 @@ impl Player {
             idle: 0.0,
             fall_from: pos.z,
             squash: 0.0,
-            lift: 3.0,
         }
     }
 
-    /// Where the figure stands for drawing, and how it is scaled about its feet.
-    pub fn placement(&self) -> Projected {
-        Projected {
-            origin: self.body.pos.with_z(self.shown_z),
+    /// Where the figure stands, which way it faces, and how it is scaled about its feet.
+    pub fn transform(&self) -> Transform {
+        // The model is built facing +y; turn it to the facing.
+        let angle = self.facing.y.atan2(self.facing.x) - std::f32::consts::FRAC_PI_2;
+        Transform {
+            translation: self.body.pos.with_z(self.shown_z),
+            rotation: Quat::from_rotation_z(angle),
             scale: figure_scale(self.idle, self.squash),
-            bias: DEPTH_BIAS,
-        }
-    }
-}
-
-/// Something drawn in world units through the view's projection, as chunks are: its
-/// mesh positions are blocks relative to `origin`. `stream::apply_view` gives it the view
-/// matrix as its transform every frame, so a turn of the view costs nothing.
-#[derive(Component, Clone, Copy, PartialEq, Debug)]
-pub struct Projected {
-    pub origin: Vec3,
-    /// Scale about the origin, in world axes.
-    pub scale: Vec3,
-    /// Depth added after projection, toward the viewer when positive.
-    pub bias: f32,
-}
-
-impl Projected {
-    pub fn at(origin: Vec3) -> Self {
-        Self {
-            origin,
-            scale: Vec3::ONE,
-            bias: 0.0,
         }
     }
 }
@@ -123,53 +92,25 @@ impl Default for Silhouette {
 
 /// The silhouette's colour (rgb) and opacity.
 pub const SILHOUETTE: Vec4 = Vec4::new(0.55, 0.65, 0.95, 0.55);
-/// How far in front of the figure its silhouette sits, in depth units: just past the
-/// whole model as seen through `view`, so only blocks nearer than all of it bring it out
-/// and the figure never silhouettes itself. Measured from the model itself, since the
-/// span depends on the tilt (depth grows with height by `tile_h / block_h`), the turn and
-/// the facing.
-pub fn silhouette_lift(view: &View, model: &crate::world::mesh::Faces) -> f32 {
-    let depths = model
-        .positions
-        .iter()
-        .map(|p| view.project(Vec3::from(*p)).z);
-    let (lo, hi) = depths.fold((f32::MAX, f32::MIN), |(lo, hi), d| (lo.min(d), hi.max(d)));
-    (hi - lo).max(0.0) + 0.05
-}
 
 /// Marks the entity that draws the silhouette.
 #[derive(Component)]
 pub struct SilhouetteQuad;
 
-/// The silhouette material: the figure's own vertex colours as a flat tint, drawn only
-/// where the depth buffer holds something nearer (`shaders/silhouette.wgsl`, depth test
-/// turned round).
-#[derive(Asset, TypePath, AsBindGroup, Clone)]
-pub struct SilhouetteArt {
-    #[uniform(0)]
-    pub tint: Vec4,
+/// How far toward the eye the silhouette sits: past the model's own depth span at this
+/// pitch, so its far faces never show through its near ones, while a block two cells in
+/// front still covers it. Moving along the view axis changes nothing on an orthographic
+/// picture but the depth.
+pub fn silhouette_lift(cam: &Cam) -> f32 {
+    let (sp, cp) = cam.pitch.sin_cos();
+    0.9 * cp + (figure::HEIGHT + 0.05) * sp + 0.1
 }
 
-impl Material2d for SilhouetteArt {
-    fn fragment_shader() -> bevy::shader::ShaderRef {
-        "shaders/silhouette.wgsl".into()
-    }
-    fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Blend
-    }
-    fn specialize(
-        _pipeline: &Material2dPipeline,
-        descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
-        _key: Material2dKey<Self>,
-    ) -> Result<(), SpecializedMeshPipelineError> {
-        // 2D depth is reversed (nearer is greater), so `Less` keeps only the texels that
-        // something else covers.
-        if let Some(depth) = descriptor.depth_stencil.as_mut() {
-            depth.depth_compare = Some(CompareFunction::Less);
-        }
-        Ok(())
-    }
+/// The silhouette's transform for a figure at `figure`.
+pub fn silhouette_transform(cam: &Cam, figure: &Transform) -> Transform {
+    let mut t = *figure;
+    t.translation += cam.toward_eye() * silhouette_lift(cam);
+    t
 }
 
 /// How wide the ground shadow is, in blocks.
@@ -197,7 +138,7 @@ pub fn spawn(
     focus: Res<Focus>,
     pending: Option<Res<crate::core::save::Pending>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
+    mut flats: ResMut<Assets<FlatArt>>,
     mut silhouettes: ResMut<Assets<SilhouetteArt>>,
     mut commands: Commands,
 ) {
@@ -210,50 +151,51 @@ pub fn spawn(
         inventory.selected = p.selected.min(crate::inventory::HOTBAR - 1);
     }
     let player = Player::at(focus.0);
-    let placement = player.placement();
-    let mesh = meshes.add(figure::model(player.facing, player.swing).into_mesh());
+    let transform = player.transform();
+    let mesh = meshes.add(figure::model(Vec2::Y, player.swing).into_mesh());
     commands.spawn((
         player,
         inventory,
-        placement,
-        Mesh2d(mesh.clone()),
-        MeshMaterial2d(materials.add(ColorMaterial {
-            color: Color::WHITE,
-            // Opaque writes depth, so the model's near faces cover its far ones; the
-            // default (Blend) does not, and the face showed through the back of the head.
-            alpha_mode: AlphaMode2d::Opaque,
-            ..default()
-        })),
-        Transform::default(),
-        NoFrustumCulling,
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(flats.add(FlatArt::plain(Vec4::ONE, false))),
+        transform,
     ));
     // The same model again, drawn only where blocks cover it.
     commands.spawn((
         SilhouetteQuad,
-        placement,
-        Mesh2d(mesh),
-        MeshMaterial2d(silhouettes.add(SilhouetteArt { tint: SILHOUETTE })),
-        Transform::default(),
-        NoFrustumCulling,
+        Mesh3d(mesh),
+        MeshMaterial3d(silhouettes.add(SilhouetteArt { tint: SILHOUETTE })),
+        transform,
     ));
-    // An eight-sided patch lying on the ground; its corners are set by `place`.
+    // A soft dark disc lying on the ground under the feet.
+    commands.spawn((
+        GroundShadow,
+        Mesh3d(meshes.add(disc(SHADOW_RADIUS))),
+        MeshMaterial3d(flats.add(FlatArt::plain(Vec4::new(0.02, 0.02, 0.06, 0.34), true))),
+        Transform::default(),
+    ));
+}
+
+/// An eight-sided disc of `radius` lying flat at z 0, with the attributes the flat
+/// material wants.
+fn disc(radius: f32) -> Mesh {
+    let mut positions = vec![[0.0f32, 0.0, 0.0]];
+    let mut uvs = vec![[0.5f32, 0.5]];
+    for i in 0..8 {
+        let a = i as f32 * std::f32::consts::TAU / 8.0;
+        positions.push([a.cos() * radius, a.sin() * radius, 0.0]);
+        uvs.push([0.5 + a.cos() * 0.5, 0.5 + a.sin() * 0.5]);
+    }
     let ring: Vec<u32> = (1..=8).flat_map(|i| [0, i, i % 8 + 1]).collect();
-    let patch = Mesh::new(
+    Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 9])
-    .with_inserted_indices(Indices::U32(ring));
-    commands.spawn((
-        GroundShadow,
-        Mesh2d(meshes.add(patch)),
-        MeshMaterial2d(materials.add(ColorMaterial {
-            color: Color::srgba(0.02, 0.02, 0.06, 0.34),
-            alpha_mode: AlphaMode2d::Blend,
-            ..default()
-        })),
-        Transform::default(),
-    ));
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0f32; 4]; 9])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 0.0, 1.0]; 9])
+    .with_inserted_indices(Indices::U32(ring))
 }
 
 /// WASD or the arrows walk along the screen axes, whichever way the view is turned.
@@ -261,7 +203,7 @@ pub fn movement(
     input: Res<ButtonInput<KeyCode>>,
     keys: Res<Keys>,
     time: Res<Time>,
-    view: Res<View>,
+    cam: Res<Cam>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
     mut focus: ResMut<Focus>,
@@ -272,7 +214,7 @@ pub fn movement(
         keys.pressed(&input, pos) as i8 as f32 - keys.pressed(&input, neg) as i8 as f32
     };
     let screen = Vec2::new(axis(&keys.left, &keys.right), axis(&keys.down, &keys.up));
-    player.facing = figure::facing_of(view.ground_dir(screen), player.facing);
+    player.facing = figure::facing_of(cam.ground_dir(screen), player.facing);
     // Nothing moves until the ground under the player has streamed in; the focus still
     // follows them there, or it never would.
     if map
@@ -282,7 +224,7 @@ pub fn movement(
         focus.0 = player.body.pos.with_z(player.shown_z);
         return;
     }
-    let wish = view.ground_dir(screen) * SPEED;
+    let wish = cam.ground_dir(screen) * SPEED;
     let before = player.body.pos;
     let was_grounded = player.body.grounded;
     if keys.just(&input, &keys.jump) {
@@ -344,43 +286,36 @@ pub fn figure_light(lit: f32, lamp: u8, day: &Daylight) -> Vec3 {
 pub fn place(
     time: Res<Time>,
     clock: Res<GameTime>,
-    view: Res<View>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
     tiles: Option<Res<Tiles>>,
     mut last_color: Local<Vec3>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<ColorMaterial>>,
-    mut shown: Local<(Option<View>, Option<(Vec2, i32)>)>,
-    mut model: Local<Option<crate::world::mesh::Faces>>,
+    mut flats: ResMut<Assets<FlatArt>>,
+    mut shown: Local<Option<i32>>,
     mut player: Single<(
         &mut Player,
-        &mut Projected,
-        &Mesh2d,
-        &MeshMaterial2d<ColorMaterial>,
+        &mut Transform,
+        &Mesh3d,
+        &MeshMaterial3d<FlatArt>,
     )>,
-    mut shadow: Single<(&mut Transform, &Mesh2d), (With<GroundShadow>, Without<Player>)>,
+    mut shadow: Single<&mut Transform, (With<GroundShadow>, Without<Player>)>,
 ) {
-    let (player, projected, mesh, material) = &mut *player;
+    let (player, tf, mesh, material) = &mut *player;
     let pos = player.body.pos.with_z(player.shown_z);
-    let placement = player.placement();
-    if **projected != placement {
-        **projected = placement;
+    let wanted = player.transform();
+    if **tf != wanted {
+        **tf = wanted;
     }
 
-    // The model is rebuilt when the facing or the walk cycle moves, in steps of a
-    // thirty-second of the swing so a still figure costs nothing.
-    let pose = (player.facing, (player.swing * 32.0).round() as i32);
-    if shown.1 != Some(pose) || model.is_none() {
-        shown.1 = Some(pose);
-        let faces = figure::model(player.facing, pose.1 as f32 / 32.0);
+    // The model is rebuilt when the walk cycle moves, in steps of a thirty-second of the
+    // swing, so a still figure costs nothing. Facing is the transform's turn.
+    let step = (player.swing * 32.0).round() as i32;
+    if *shown != Some(step) {
+        *shown = Some(step);
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            *m = faces.clone().into_mesh();
+            *m = figure::model(Vec2::Y, step as f32 / 32.0).into_mesh();
         }
-        *model = Some(faces);
-    }
-    if let Some(faces) = model.as_ref() {
-        player.lift = silhouette_lift(&view, faces);
     }
 
     // Light: sampled at chest height, eased so walking under a tree fades.
@@ -406,10 +341,10 @@ pub fn place(
         .unwrap_or(0);
     let color = figure_light(player.lit, lamp, &daylight(clock.frac()));
     if (color - *last_color).abs().max_element() > 1e-3
-        && let Some(mut m) = materials.get_mut(&material.0)
+        && let Some(mut m) = flats.get_mut(&material.0)
     {
         *last_color = color;
-        m.color = Color::linear_rgb(color.x, color.y, color.z);
+        m.flat.tint = color.extend(1.0);
     }
 
     // The ground shadow lies on the first closed cell under the feet.
@@ -418,34 +353,20 @@ pub fn place(
         .map(|d| feet.z - d)
         .find(|z| closed(&map, &blocks, IVec3::new(feet.x, feet.y, z - 1)))
         .unwrap_or(feet.z) as f32;
-    let (shadow_tf, shadow_mesh) = &mut *shadow;
-    shadow_tf.translation = view.project(pos.with_z(ground)) + Vec3::Z * 0.03;
-    if shown.0 != Some(*view) {
-        shown.0 = Some(*view);
-        if let Some(mut m) = meshes.get_mut(&shadow_mesh.0) {
-            let mut ring = vec![[0.0f32; 3]];
-            for i in 0..8 {
-                let a = i as f32 * std::f32::consts::TAU / 8.0;
-                let offset = Vec3::new(a.cos(), a.sin(), 0.0) * SHADOW_RADIUS;
-                ring.push(view.project(offset).to_array());
-            }
-            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, ring);
-        }
-    }
+    shadow.translation = player.body.pos.with_z(ground + 0.02);
 }
 
 /// Puts the silhouette exactly where the figure is, and shows it only when wanted.
 pub fn place_silhouette(
     on: Res<Silhouette>,
-    player: Single<(&Player, &Projected)>,
-    mut quad: Single<(&mut Projected, &mut Visibility), (With<SilhouetteQuad>, Without<Player>)>,
+    cam: Res<Cam>,
+    player: Single<&Transform, With<Player>>,
+    mut quad: Single<(&mut Transform, &mut Visibility), (With<SilhouetteQuad>, Without<Player>)>,
 ) {
-    let (at, vis) = &mut *quad;
-    let (player, placed) = *player;
-    let mut wanted_at = *placed;
-    wanted_at.bias += player.lift;
-    if **at != wanted_at {
-        **at = wanted_at;
+    let (tf, vis) = &mut *quad;
+    let wanted_tf = silhouette_transform(&cam, &player);
+    if **tf != wanted_tf {
+        **tf = wanted_tf;
     }
     let wanted = if on.0 {
         Visibility::Inherited
@@ -508,29 +429,7 @@ impl Plugin for PlayerPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::iso::Tilt;
     use crate::world::{Chunk, empty_blocks};
-
-    #[test]
-    fn the_silhouette_lift_clears_the_model_and_stays_small() {
-        // The lift measures the model's own depth span, so it is always just past it, and
-        // it stays under what a block two cells in front adds.
-        for (_, tilt) in Tilt::PRESETS {
-            let mut view = View::quarter(1);
-            view.tilt = tilt;
-            let f = figure::model(Vec2::new(1.0, 1.0).normalize(), 1.0);
-            let lift = silhouette_lift(&view, &f);
-            let depths: Vec<f32> = f
-                .positions
-                .iter()
-                .map(|p| view.project(Vec3::from(*p)).z)
-                .collect();
-            let span = depths.iter().cloned().fold(f32::MIN, f32::max)
-                - depths.iter().cloned().fold(f32::MAX, f32::min);
-            assert!(lift > span && lift < span + 0.1);
-            assert!(lift < 2.0 + 2.0 * tilt.rise(), "{tilt:?}: {lift}");
-        }
-    }
 
     #[test]
     fn water_closes_the_whole_column_above_it() {

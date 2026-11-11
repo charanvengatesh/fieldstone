@@ -8,8 +8,8 @@
 // it is quantised into a few bands, and outlines darken whole texels of the tile.
 // src/debug.rs mirrors this file on the CPU for snapshots; keep the two in step.
 
-// Bevy's per-view globals (group 0 binding 1 in every 2D mesh pipeline). Plain WGSL
-// cannot import Bevy's definition, so the fields are declared here; they must match
+// Bevy's per-view globals (group 0 binding 11 in the 3D mesh pipeline). Plain WGSL cannot
+// import Bevy's definition, so the fields are declared here; they must match
 // bevy_render::globals::GlobalsUniform.
 struct Globals {
     // seconds since start, wrapping after an hour
@@ -18,13 +18,16 @@ struct Globals {
     frame_count: u32,
 };
 
-@group(0) @binding(1) var<uniform> globals: Globals;
+@group(0) @binding(11) var<uniform> globals: Globals;
 
 struct BlockParams {
     // y and z: atlas size in texels, w: light bands
     params: vec4<f32>,
-    // x: daylight 0..1, y: time of day 0..1, z: the camera's focus depth
+    // x: daylight 0..1, y: time of day 0..1
     day: vec4<f32>,
+    // the camera's focus (xyz) and the unit vector from it toward the eye
+    focus: vec4<f32>,
+    toward_eye: vec4<f32>,
     // sunlight colour now
     sun_color: vec4<f32>,
     // light left in shade and at night
@@ -37,22 +40,23 @@ struct BlockParams {
 // HAZE_REACH in src/world/mesh.rs.
 const HAZE_REACH: f32 = 28.0;
 
-// How much haze a fragment at projected depth `depth` gets.
-fn haze_at(depth: f32) -> f32 {
-    return clamp((block.day.z - depth) / HAZE_REACH, 0.0, 1.0);
+// How much haze a world point gets: its view depth past the focus plane over HAZE_REACH.
+fn haze_at(world: vec3<f32>) -> f32 {
+    return clamp(dot(block.focus.xyz - world, block.toward_eye.xyz) / HAZE_REACH, 0.0, 1.0);
 }
 
-@group(2) @binding(0) var<uniform> block: BlockParams;
-@group(2) @binding(1) var atlas: texture_2d<f32>;
-@group(2) @binding(2) var atlas_sampler: sampler;
+@group(3) @binding(0) var<uniform> block: BlockParams;
+@group(3) @binding(1) var atlas: texture_2d<f32>;
+@group(3) @binding(2) var atlas_sampler: sampler;
 
+// The 3D mesh pipeline's vertex output (bevy_pbr forward_io), the fields this shader
+// reads: world position is the true world position, colour is the mesh's COLOR attribute.
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
     @location(1) world_normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
-    @location(4) color: vec4<f32>,
-    @location(5) @interpolate(flat) instance_index: u32,
+    @location(5) color: vec4<f32>,
 };
 
 const TILE: f32 = 16.0;
@@ -165,6 +169,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         color = color * vec3<f32>(0.50, 0.50, 0.58);
     }
     // Distance fades toward the sky.
-    color = mix(color, block.haze.rgb, haze_at(in.world_position.z) * block.haze.w);
+    color = mix(color, block.haze.rgb, haze_at(in.world_position.xyz) * block.haze.w);
     return vec4<f32>(color, 1.0);
 }

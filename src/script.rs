@@ -22,6 +22,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, StdLib, Table};
 
+use crate::cam::Cam;
 use crate::core::packs::LoadedPacks;
 use crate::core::settings::{Settings, parse_key};
 use crate::core::time::GameTime;
@@ -30,13 +31,12 @@ use crate::harness::{Fake, Injected};
 use crate::interact::{BlockBroken, BlockPlaced};
 use crate::interact::{Cursor, Target};
 use crate::inventory::{HOTBAR, Inventory, sort_slots};
-use crate::look::Look;
 use crate::player::{Player, Silhouette};
 use crate::world::Map;
-use crate::world::iso::{Tilt, View};
 use crate::world::light;
 use crate::world::mesh::{Grid, Quality};
 use crate::world::physics::Body;
+use crate::world::stream::Picture;
 use crate::world::stream::{Perf, Streaming};
 use crate::world::tiles::Tiles;
 
@@ -217,6 +217,17 @@ fn cell(x: f64, y: f64, z: f64) -> IVec3 {
 }
 
 /// Exposes the engine to Lua, loads any waiting scripts, and fires this frame's hooks.
+/// Scripts count the view angle from the classic quarter, as the 2D engine did; the
+/// camera's yaw counts from +x.
+fn lua_degrees(yaw: f32) -> f32 {
+    let d = (yaw - std::f32::consts::FRAC_PI_4).to_degrees().rem_euclid(360.0);
+    if d > 359.999 { 0.0 } else { d }
+}
+
+fn lua_radians(degrees: f32) -> f32 {
+    degrees.to_radians() + std::f32::consts::FRAC_PI_4
+}
+
 pub fn run(world: &mut World) {
     let Some(vm) = world.remove_non_send::<Vm>() else {
         return;
@@ -465,14 +476,13 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "view_angle",
-            scope.create_function(|_, ()| {
-                Ok(shared.borrow().resource::<View>().angle.to_degrees())
-            })?,
+            scope
+                .create_function(|_, ()| Ok(lua_degrees(shared.borrow().resource::<Cam>().yaw)))?,
         )?;
         g.set(
             "view_target",
             scope.create_function(|_, ()| {
-                Ok(shared.borrow().resource::<View>().target.to_degrees())
+                Ok(lua_degrees(shared.borrow().resource::<Cam>().target_yaw))
             })?,
         )?;
         g.set(
@@ -480,7 +490,7 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, degrees: f32| {
                 shared
                     .borrow_mut()
-                    .resource_mut::<View>()
+                    .resource_mut::<Cam>()
                     .turn_by(degrees.to_radians());
                 Ok(())
             })?,
@@ -489,9 +499,9 @@ pub fn run(world: &mut World) {
             "set_view_angle",
             scope.create_function(|_, degrees: f32| {
                 let mut w = shared.borrow_mut();
-                let mut view = w.resource_mut::<View>();
-                view.angle = degrees.to_radians();
-                view.target = view.angle;
+                let mut cam = w.resource_mut::<Cam>();
+                cam.yaw = lua_radians(degrees);
+                cam.target_yaw = cam.yaw;
                 Ok(())
             })?,
         )?;
@@ -500,7 +510,7 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, step: Option<f32>| {
                 shared
                     .borrow_mut()
-                    .resource_mut::<View>()
+                    .resource_mut::<Cam>()
                     .snap(step.unwrap_or(90.0).max(1.0).to_radians());
                 Ok(())
             })?,
@@ -515,7 +525,7 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, (level, sx, sy): (f32, f32, f32)| {
                 let mut w = shared.borrow_mut();
                 let wanted = level.round().clamp(1.0, 6.0) as u32;
-                w.resource_mut::<Look>().zoom_about(Vec2::new(sx, sy));
+                w.resource_mut::<Cam>().zoom_about(Vec2::new(sx, sy));
                 if w.resource::<Settings>().pixel_scale != wanted {
                     w.resource_mut::<Settings>().pixel_scale = wanted;
                 }
@@ -524,19 +534,33 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "tilt",
-            scope.create_function(|_, ()| {
-                Ok(shared.borrow().resource::<View>().target_tilt.name())
-            })?,
+            scope.create_function(|_, ()| Ok(shared.borrow().resource::<Cam>().pitch_name()))?,
         )?;
         g.set(
             "set_tilt",
             scope.create_function(|_, name: String| {
-                let Some(tilt) = Tilt::named(&name) else {
+                let Some(pitch) = Cam::pitch_named(&name) else {
                     warn!("script: no tilt preset '{name}'");
                     return Ok(false);
                 };
-                shared.borrow_mut().resource_mut::<View>().set_tilt(tilt);
+                shared.borrow_mut().resource_mut::<Cam>().set_pitch(pitch);
                 Ok(true)
+            })?,
+        )?;
+        g.set(
+            "pitch",
+            scope.create_function(|_, ()| {
+                Ok(shared.borrow().resource::<Cam>().target_pitch.to_degrees())
+            })?,
+        )?;
+        g.set(
+            "set_pitch",
+            scope.create_function(|_, degrees: f32| {
+                shared
+                    .borrow_mut()
+                    .resource_mut::<Cam>()
+                    .set_pitch(degrees.to_radians());
+                Ok(())
             })?,
         )?;
         g.set(
@@ -544,7 +568,7 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, (dx, dy): (f32, f32)| {
                 shared
                     .borrow_mut()
-                    .resource_mut::<Look>()
+                    .resource_mut::<Cam>()
                     .pan_by(Vec2::new(dx, dy));
                 Ok(())
             })?,
@@ -552,23 +576,24 @@ pub fn run(world: &mut World) {
         g.set(
             "camera_pan",
             scope.create_function(|_, ()| {
-                let p = shared.borrow().resource::<Look>().pan;
+                let p = shared.borrow().resource::<Cam>().pan;
                 Ok((p.x, p.y))
             })?,
         )?;
         g.set(
             "camera_center",
             scope.create_function(|_, ()| {
-                let c = shared.borrow().resource::<Look>().center;
-                Ok((c.x, c.y))
+                let c = shared.borrow().resource::<Cam>().focus;
+                Ok((c.x, c.y, c.z))
             })?,
         )?;
         g.set(
             "screen_of",
             scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
                 let w = shared.borrow();
-                let at = w.resource::<View>().project(Vec3::new(x, y, z)).truncate();
-                let o = at - w.resource::<Look>().center;
+                let o = w
+                    .resource::<Cam>()
+                    .project(w.resource::<Picture>().size, Vec3::new(x, y, z));
                 Ok((o.x, o.y))
             })?,
         )?;
@@ -576,7 +601,7 @@ pub fn run(world: &mut World) {
             "aim_screen",
             scope.create_function(|_, (sx, sy): (f32, f32)| {
                 let mut w = shared.borrow_mut();
-                let at = w.resource::<Look>().center + Vec2::new(sx, sy);
+                let at = Vec2::new(sx, sy);
                 w.resource_mut::<Injected>().cursor = Some(at);
                 w.resource_mut::<Cursor>().0 = Some(at);
                 Ok(())
@@ -604,8 +629,9 @@ pub fn run(world: &mut World) {
                     "occlusion" => Some(mlua::Value::Boolean(quality.occlusion)),
                     "grid" => Some(mlua::Value::Boolean(w.resource::<Grid>().0)),
                     "see_through" => Some(mlua::Value::Boolean(w.resource::<Silhouette>().0)),
-                    "peek" => Some(mlua::Value::Boolean(w.resource::<Look>().peek_on)),
-                    "dead_zone" => Some(mlua::Value::Boolean(w.resource::<Look>().dead_zone_on)),
+                    "peek" => Some(mlua::Value::Boolean(w.resource::<Cam>().peek_on)),
+                    "dead_zone" => Some(mlua::Value::Boolean(w.resource::<Cam>().dead_zone_on)),
+                    "perspective" => Some(mlua::Value::Boolean(w.resource::<Cam>().perspective)),
                     "mesh_budget_ms" => Some(mlua::Value::Number(streaming.budget_ms as f64)),
                     "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
                     _ => None,
@@ -643,11 +669,15 @@ pub fn run(world: &mut World) {
                         true
                     }
                     ("peek", Some(on), _) => {
-                        w.resource_mut::<Look>().peek_on = on;
+                        w.resource_mut::<Cam>().peek_on = on;
                         true
                     }
                     ("dead_zone", Some(on), _) => {
-                        w.resource_mut::<Look>().dead_zone_on = on;
+                        w.resource_mut::<Cam>().dead_zone_on = on;
+                        true
+                    }
+                    ("perspective", Some(on), _) => {
+                        w.resource_mut::<Cam>().perspective = on;
                         true
                     }
                     ("mesh_budget_ms", _, Some(ms)) => {
@@ -772,7 +802,10 @@ pub fn run(world: &mut World) {
             "aim_at",
             scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
                 let mut w = shared.borrow_mut();
-                let at = w.resource::<View>().project(Vec3::new(x, y, z)).truncate();
+                let at = w
+                    .resource::<Cam>()
+                    .project(w.resource::<Picture>().size, Vec3::new(x, y, z))
+                    .truncate();
                 w.resource_mut::<Injected>().cursor = Some(at);
                 w.resource_mut::<Cursor>().0 = Some(at);
                 Ok(())
@@ -823,7 +856,7 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "view_turning",
-            scope.create_function(|_, ()| Ok(shared.borrow().resource::<View>().turning()))?,
+            scope.create_function(|_, ()| Ok(shared.borrow().resource::<Cam>().turning()))?,
         )?;
         g.set(
             "hud_text",
@@ -871,11 +904,11 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, ()| {
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
-                let view = *world.resource::<View>();
+                let cam = *world.resource::<Cam>();
                 Ok(world.query::<&Player>().iter(world).next().map(|p| {
                     // The facing in screen terms: along the screen's x or y axis.
-                    let right = view.ground_dir(Vec2::X).dot(p.facing);
-                    let up = view.ground_dir(Vec2::Y).dot(p.facing);
+                    let right = cam.ground_dir(Vec2::X).dot(p.facing);
+                    let up = cam.ground_dir(Vec2::Y).dot(p.facing);
                     if right.abs() >= up.abs() {
                         if right < 0.0 { "left" } else { "right" }
                     } else if up > 0.0 {
@@ -1169,7 +1202,8 @@ mod tests {
         world.init_resource::<AccumulatedMouseScroll>();
         world.init_resource::<PointerCaptured>();
         world.init_resource::<Hud>();
-        world.init_resource::<View>();
+        world.init_resource::<Cam>();
+        world.init_resource::<Picture>();
         world.init_resource::<Grid>();
         world.init_resource::<Quality>();
         world.init_resource::<Streaming>();
@@ -1180,7 +1214,6 @@ mod tests {
         world.init_resource::<Cursor>();
         world.init_resource::<Target>();
         world.init_resource::<Time<Virtual>>();
-        world.init_resource::<Look>();
         world.init_resource::<Silhouette>();
         world.spawn((Player::at(Vec3::new(1.5, 2.5, 3.0)), Inventory::default()));
         world.insert_non_send(Vm::new(
@@ -1270,9 +1303,9 @@ mod tests {
             "#,
         )]);
         run(&mut world);
-        let view = *world.resource::<View>();
-        assert_eq!(view.rot(), 1);
-        assert!((view.angle.to_degrees() - 100.0).abs() < 1e-3);
+        let cam = *world.resource::<Cam>();
+        assert_eq!(cam.rot(), 1);
+        assert!((lua_degrees(cam.yaw) - 100.0).abs() < 1e-3);
         assert!(!world.resource::<Quality>().shadows);
         assert!(world.resource::<Quality>().occlusion);
         assert_eq!(world.resource::<Streaming>().budget_ms, 1.5);

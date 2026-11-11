@@ -4,14 +4,15 @@
 
 use bevy::prelude::*;
 
+use crate::cam::Cam;
 use crate::core::{BlockDef, ItemDef, Registry};
 use crate::interact::{Cursor, within_reach};
 use crate::inventory::Inventory;
 use crate::player::{Player, closed};
-use crate::world::iso::View;
 use crate::world::physics::fits;
+use crate::world::stream::Picture;
 use crate::world::worldgen::WorldGen;
-use crate::world::{AIR, HEIGHT, Map};
+use crate::world::{AIR, Map};
 
 #[derive(Resource)]
 pub struct Smoke {
@@ -58,7 +59,8 @@ pub fn drive(
     mut cursor: ResMut<Cursor>,
     items: Res<Registry<ItemDef>>,
     map: Res<Map>,
-    mut view: ResMut<View>,
+    mut cam: ResMut<Cam>,
+    picture: Res<Picture>,
     perf: Res<crate::world::stream::Perf>,
     wg: Res<WorldGen>,
     blocks: Res<Registry<BlockDef>>,
@@ -156,13 +158,15 @@ pub fn drive(
                     Some(IVec3::new(feet.x + d.x, feet.y + d.y, top))
                 })
                 .find(|b| {
-                    let (left, right) = view.sides();
-                    let top = view
-                        .project(b.as_vec3() + Vec3::new(0.3, 0.6, 1.0))
+                    let (left, right) = cam.sides();
+                    let size = picture.size;
+                    let top = cam
+                        .project(size, b.as_vec3() + Vec3::new(0.3, 0.6, 1.0))
                         .truncate();
                     // Where the far wall of the hole will be once the block is gone.
-                    let wall = view
+                    let wall = cam
                         .project(
+                            size,
                             b.as_vec3() + Vec3::splat(0.5)
                                 - right.as_vec3() * 0.5
                                 - left.as_vec3() * 0.3
@@ -172,13 +176,13 @@ pub fn drive(
                     blocks.at(map.block(*b)).breakable
                         && within_reach(player.body.pos, *b)
                         && within_reach(player.body.pos, *b - right)
-                        && view
-                            .pick(top, HEIGHT, |c| map.block(c) != AIR)
+                        && cam
+                            .pick(size, top, |c| map.block(c) != AIR)
                             .is_some_and(|h| h.block == *b && h.normal == IVec3::Z)
                         // With the block dug out, its far wall must be in plain view so
                         // it can be clicked to put the block back.
-                        && view
-                            .pick(wall, HEIGHT, |c| c != *b && map.block(c) != AIR)
+                        && cam
+                            .pick(size, wall, |c| c != *b && map.block(c) != AIR)
                             .is_some_and(|h| h.block == *b - right && h.normal == right)
                 });
             match spot {
@@ -186,7 +190,7 @@ pub fn drive(
                     info!("smoke: breaking {} at {b}", blocks.id_of(map.block(b)));
                     smoke.dug = Some((b, map.block(b)));
                     cursor.0 = Some(
-                        view.project(b.as_vec3() + Vec3::new(0.3, 0.6, 1.0))
+                        cam.project(picture.size, b.as_vec3() + Vec3::new(0.3, 0.6, 1.0))
                             .truncate(),
                     );
                     mouse.press(MouseButton::Left);
@@ -221,11 +225,11 @@ pub fn drive(
                 }
                 // Put it back. The floor of a one-block hole is hidden behind its near
                 // walls, so aim at the far wall: the face that looks into the hole.
-                let (left, right) = view.sides();
+                let (left, right) = cam.sides();
                 let centre = b.as_vec3() + Vec3::splat(0.5);
                 let wall = centre - right.as_vec3() * 0.5 - left.as_vec3() * 0.3 + Vec3::Z * 0.1;
-                let at = view.project(wall).truncate();
-                let hit = view.pick(at, HEIGHT, |c| map.block(c) != AIR);
+                let at = cam.project(picture.size, wall).truncate();
+                let hit = cam.pick(picture.size, at, |c| map.block(c) != AIR);
                 if hit.map(|h| (h.block, h.normal)) != Some((b - right, right)) {
                     fail(
                         &mut smoke,
@@ -283,14 +287,14 @@ pub fn drive(
         556 => {
             smoke.loaded = map.chunks.iter().map(|(p, c)| (*p, c.builds)).collect();
             smoke.meshed = perf.meshed;
-            smoke.rot = view.rot();
-            view.turn_by(std::f32::consts::FRAC_PI_2);
+            smoke.rot = cam.rot();
+            cam.turn_by(std::f32::consts::FRAC_PI_2);
         }
         640 => {
-            if view.turning() || view.rot() != (smoke.rot + 1) % 4 {
+            if cam.turning() || cam.rot() != (smoke.rot + 1) % 4 {
                 fail(
                     &mut smoke,
-                    format!("the view did not finish its turn: {:?}", *view),
+                    format!("the view did not finish its turn: {:?}", *cam),
                 );
             } else {
                 // Chunks that were loaded before the turn must still be on their old mesh.
