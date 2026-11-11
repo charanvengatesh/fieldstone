@@ -80,6 +80,30 @@ pub fn daylight(frac: f32) -> Daylight {
     }
 }
 
+/// The colour behind the world at a time of day: a day-sky blue down to a deep night.
+pub fn sky_color(frac: f32) -> Vec3 {
+    let h = sun_height(frac);
+    let night = Vec3::new(0.06, 0.07, 0.16);
+    let dusk = Vec3::new(0.34, 0.26, 0.42);
+    let day = Vec3::new(0.36, 0.60, 0.92);
+    night
+        .lerp(dusk, smooth(-0.25, 0.0, h))
+        .lerp(day, smooth(0.0, 0.4, h))
+}
+
+/// Keeps the clear colour at the sky colour, written only when it moves a visible step.
+pub fn clear_color(clock: Res<GameTime>, mut clear: ResMut<ClearColor>) {
+    let c = sky_color(clock.frac());
+    let now = clear.0.to_linear();
+    let moved = (Vec3::new(now.red, now.green, now.blue) - c)
+        .abs()
+        .max_element()
+        > 1.0 / 255.0;
+    if moved {
+        clear.0 = Color::linear_rgb(c.x, c.y, c.z);
+    }
+}
+
 pub fn tick(time: Res<Time>, mut clock: ResMut<GameTime>) {
     clock.secs += time.delta_secs_f64();
 }
@@ -111,6 +135,9 @@ mod tests {
             "moonlight is blue: {}",
             midnight.sun
         );
+        let (day, dark) = (sky_color(0.5), sky_color(0.0));
+        assert!(day.z > day.x && day.max_element() > 0.8, "day sky: {day}");
+        assert!(dark.max_element() < 0.2, "night sky: {dark}");
         assert!(dusk.level > midnight.level && dusk.level < noon.level);
         assert!(dusk.sun.x > dusk.sun.z, "dusk sun is warm: {}", dusk.sun);
         assert!(midnight.ambient.z > midnight.ambient.x, "night is blue");

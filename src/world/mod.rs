@@ -149,7 +149,6 @@ impl Plugin for WorldPlugin {
             .init_resource::<iso::View>()
             .init_resource::<mesh::Grid>()
             .init_resource::<mesh::Quality>()
-            .init_resource::<mesh::SeeThrough>()
             .init_resource::<stream::Viewport>()
             .init_resource::<stream::Streaming>()
             .init_resource::<stream::Perf>()

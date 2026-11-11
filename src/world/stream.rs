@@ -42,7 +42,7 @@ pub struct Streaming {
 impl Default for Streaming {
     fn default() -> Self {
         Self {
-            budget_ms: 3.0,
+            budget_ms: 2.0,
             margin: 96.0,
         }
     }

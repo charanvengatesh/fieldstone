@@ -1,9 +1,7 @@
 //! The camera looks at [`Focus`] through the current [`View`]. Zoom is a whole number of
 //! screen pixels per texel so block edges stay crisp.
 
-use bevy::camera::Hdr;
 use bevy::input::gestures::PinchGesture;
-use bevy::post_process::bloom::{Bloom, BloomCompositeMode, BloomPrefilter};
 use bevy::prelude::*;
 
 use crate::core::settings::{Keys, Settings};
@@ -22,26 +20,8 @@ pub fn setup(settings: Res<Settings>, mut commands: Commands) {
         })
     };
     // No multisampling: it softens texel edges and lets edge pixels sample the tile next
-    // door in the atlas. The target is HDR so light above white survives to the bloom,
-    // which only takes what is brighter than white: torches, lava, crystal. Tonemapping
-    // stays linear (the 2D default), which needs no lookup textures.
-    commands.spawn((
-        Camera2d,
-        MainCamera,
-        projection(),
-        Msaa::Off,
-        Hdr,
-        Bloom {
-            intensity: 0.22,
-            low_frequency_boost: 0.5,
-            prefilter: BloomPrefilter {
-                threshold: 1.0,
-                threshold_softness: 0.3,
-            },
-            composite_mode: BloomCompositeMode::Additive,
-            ..Bloom::NATURAL
-        },
-    ));
+    // door in the atlas.
+    commands.spawn((Camera2d, MainCamera, projection(), Msaa::Off));
 }
 
 /// Puts the camera where [`Look`] says, at the focus depth so the visible depth range

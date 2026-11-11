@@ -1,6 +1,6 @@
 [package]
 name = "fieldstone"
-version = "0.9.3"
+version = "0.9.4"
 edition = "2024"
 
 [dependencies]
@@ -8,7 +8,7 @@ edition = "2024"
 bevy = { version = "0.20.1", default-features = false, features = [
     "default_app", "std", "multi_threaded",
     "bevy_window", "bevy_winit", "x11", "wayland",
-    "bevy_render", "bevy_core_pipeline", "bevy_camera", "bevy_post_process",
+    "bevy_render", "bevy_core_pipeline", "bevy_camera",
     "bevy_sprite", "bevy_sprite_render",
     "bevy_mesh", "bevy_shader", "bevy_material", "bevy_color",
     "bevy_image", "png",
@@ -23,7 +23,7 @@ serde = { version = "1", features = ["derive"] }
 
 # Bevy's recommended dev profile: light opt for our code, full opt for deps.
 [profile.dev]
-opt-level = 1
+opt-level = 2
 
 [profile.dev.package."*"]
 opt-level = 3

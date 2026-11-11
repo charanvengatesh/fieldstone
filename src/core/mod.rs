@@ -76,7 +76,10 @@ impl Plugin for CorePlugin {
             .init_resource::<Hud>()
             .init_resource::<PointerCaptured>()
             .init_resource::<time::GameTime>()
-            .add_systems(Update, (toast_tick, time::tick.run_if(not_paused)));
+            .add_systems(
+                Update,
+                (toast_tick, time::tick.run_if(not_paused), time::clear_color),
+            );
     }
 }
 

@@ -897,7 +897,6 @@ dependencies = [
  "bevy_mesh",
  "bevy_picking",
  "bevy_platform",
- "bevy_post_process",
  "bevy_ptr",
  "bevy_reflect",
  "bevy_render",
@@ -1096,33 +1095,6 @@ dependencies = [
  "wasm-bindgen-futures",
  "web-time",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "bevy_post_process"
-version = "0.20.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16a897d6318ed562de228d026b4c4f384c7430fff027c2b4d35367bdad0151ec"
-dependencies = [
- "bevy_app",
- "bevy_asset",
- "bevy_camera",
- "bevy_color",
- "bevy_core_pipeline",
- "bevy_curve",
- "bevy_derive",
- "bevy_ecs",
- "bevy_extract",
- "bevy_image",
- "bevy_math",
- "bevy_platform",
- "bevy_reflect",
- "bevy_render",
- "bevy_shader",
- "bevy_utils",
- "smallvec",
- "thiserror 2.0.21",
- "tracing",
 ]
 
 [[package]]
@@ -2177,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "fieldstone"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "bevy",
  "mlua",

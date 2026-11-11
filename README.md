@@ -33,14 +33,14 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 Keys are rebindable in `settings.ron`, written next to the executable on first run.
 
 A one-block hole hides its own floor behind its near walls. To fill it, click the far wall.
-Blocks in front of the player dissolve into a dither so the player stays in view; the camera
-leans a little toward the pointer and waits for the player to leave a small box before it
-follows.
+When blocks hide the player, a pale silhouette shows through them; the camera leans a
+little toward the pointer and waits for the player to leave a small box before it follows.
 
 ## Run
 
 ```sh
-cargo run                        # first build compiles Bevy and takes a few minutes
+cargo run                        # dev build; first build compiles Bevy and takes a few minutes
+cargo run --release              # how it is meant to be played: a few times faster
 cargo run -- --new               # ignore the save and start a fresh world
 cargo run -- --seed 42           # fix the world seed
 cargo test                       # unit tests

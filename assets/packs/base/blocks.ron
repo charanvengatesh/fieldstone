@@ -13,7 +13,7 @@
     (id: "snow",     name: "Snow",     color: (228, 234, 242), pattern: Snow, hp: 0.3),
     (id: "water",    name: "Water",    color: (52, 112, 196), pattern: Water, walkable: false, breakable: false, item: false),
     (id: "log",      name: "Log",      color: (104, 72, 44), top: Some((184, 146, 92)), pattern: Log, hp: 0.9),
-    (id: "leaves",   name: "Leaves",   color: (62, 132, 60), pattern: Leaves, cutout: true, hp: 0.2),
+    (id: "leaves",   name: "Leaves",   color: (62, 132, 60), pattern: Leaves, hp: 0.2),
     (id: "coal_ore", name: "Coal Ore", color: (132, 134, 142), accent: Some((44, 44, 54)), pattern: Ore, hp: 1.8),
     (id: "iron_ore", name: "Iron Ore", color: (132, 134, 142), accent: Some((214, 150, 112)), pattern: Ore, hp: 2.2),
     (id: "glass",    name: "Glass",    color: (196, 226, 240), pattern: Glass, cutout: true, hp: 0.3),

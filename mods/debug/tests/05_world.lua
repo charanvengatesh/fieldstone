@@ -10,18 +10,21 @@ end
 
 test("teleporting far away streams the ground in and the player lands on it", function()
     local x0, y0 = player_pos()
-    local x, y = x0 + 300, y0 - 120
+    local bx, by = x0 + 300, y0 - 120
     local before = perf().chunks
-    -- Over water there is nothing to land on, so move along the shore until it is dry.
-    local loaded = false
-    for _ = 1, 6 do
+    -- Over water there is nothing to land on, so try spots around the target until one
+    -- is dry under the whole body (it spans up to four columns; over water a column is
+    -- closed from the surface to the sky and the fall never starts).
+    local loaded, dry, x, y = false, false, bx, by
+    for _, o in ipairs({ { 0, 0 }, { 16, 0 }, { 0, 16 }, { -16, 0 }, { 0, -16 }, { 32, 0 }, { 0, 32 },
+        { -32, 0 }, { 0, -32 }, { 32, 32 }, { -32, -32 }, { 48, 0 } }) do
+        x, y = bx + o[1], by + o[2]
         teleport(x, y, 31)
         loaded = wait_until(function()
             return get_block(math.floor(x), math.floor(y), 0) ~= "air"
         end, 300)
-        -- The body spans up to four columns; over water a column is closed from the
-        -- surface to the sky and the fall never starts.
-        local dry = true
+        if not loaded then break end
+        dry = true
         for dx = -1, 1 do
             for dy = -1, 1 do
                 local cx, cy = math.floor(x) + dx, math.floor(y) + dy
@@ -29,9 +32,9 @@ test("teleporting far away streams the ground in and the player lands on it", fu
                 if not top or get_block(cx, cy, top) == "water" then dry = false end
             end
         end
-        if not loaded or dry then break end
-        x = x + 12
+        if dry then break end
     end
+    expect(dry, "found dry ground near the target")
     expect(loaded, "the chunk under the player loaded")
     expect(wait_until(is_grounded, 600), "the player landed")
     local _, _, pz = player_pos()

@@ -9,10 +9,10 @@
 -- frame rate stays low and climbs back when it stays high.
 
 local LEVELS = {
-    { name = "full",    shadows = true,  occlusion = true,  margin = 96, budget = 3.0 },
-    { name = "lean",    shadows = true,  occlusion = true,  margin = 48, budget = 2.0 },
-    { name = "fast",    shadows = false, occlusion = true,  margin = 32, budget = 1.5 },
-    { name = "fastest", shadows = false, occlusion = false, margin = 16, budget = 1.0 },
+    { name = "full",    shadows = true,  occlusion = true,  margin = 96, budget = 2.0 },
+    { name = "lean",    shadows = true,  occlusion = true,  margin = 48, budget = 1.5 },
+    { name = "fast",    shadows = false, occlusion = true,  margin = 32, budget = 1.0 },
+    { name = "fastest", shadows = false, occlusion = false, margin = 16, budget = 0.75 },
 }
 local LOW_FPS = 42          -- below this for LOW_SECONDS, step down
 local HIGH_FPS = 56         -- above this for HIGH_SECONDS, step up

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.9.4
+
+Trim. After 0.9.0 to 0.9.3 the base had grown past what an engine needs; this release
+removes rather than adds. The line the engine draws: rendering and simulation in Rust,
+content and behaviour in packs.
+
+### Removed
+- The sky quad, sun, moon and stars: with the camera on the player you never saw them.
+  The clear colour follows the clock instead (`core::time::sky_color`).
+- Bloom and the HDR target (`bevy_post_process` feature gone). Glowing texels clamp to
+  white.
+- Cloud shadows, and with them the per-fragment noise and the inverse view matrix.
+- The see-through dither, its uniforms and the screen-space Bayer code on both sides.
+- Leaf holes: `leaves` is a solid tile again (the cutout path stays for `glass`).
+
+### Changed
+- When blocks hide the player, a pale silhouette of the figure shows through them
+  (`SilhouetteArt`, `shaders/silhouette.wgsl`): the same quad drawn in the blend pass
+  with the depth test turned round, so it appears only where something covers it. The
+  `see_through` setting toggles it. The canvas mirrors it (`Canvas::draw_behind`).
+- The block and water materials are no longer written every frame: time comes from
+  Bevy's view globals, and the daylight uniform changes only when a channel moves a
+  visible step. The renderer stops rebuilding those bind groups each frame.
+- Fewer props on the ground (tufts, flowers, bluebells, mushrooms, pebbles at roughly
+  a third of their densities).
+- The meshing budget per frame defaults to 2 ms (was 3); the performance mod's levels
+  step down from there.
+- `[profile.dev] opt-level = 2` for the game crate: an incremental rebuild still takes
+  about two seconds, and the dev build runs closer to release. `cargo run --release` is
+  how it is meant to be played.
+- Measured: the mesher costs the same as 0.9.1 per chunk (0.95 ms with shadows and
+  occlusion, 0.40 ms without, dev profile).
+
 ## 0.9.3
 
 Feel: cracks, chips and dust, a figure that turns, and a glow around lights.

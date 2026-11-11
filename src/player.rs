@@ -3,10 +3,14 @@
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
+use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::sprite_render::AlphaMode2d;
+use bevy::render::render_resource::{
+    AsBindGroup, CompareFunction, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+    TextureDimension, TextureFormat,
+};
+use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPipeline};
 
 use crate::core::settings::Keys;
 use crate::core::time::{Daylight, GameTime, daylight};
@@ -102,6 +106,56 @@ impl Player {
 #[derive(Component)]
 pub struct GroundShadow;
 
+/// Whether the figure shows as a flat shade through whatever hides it.
+#[derive(Resource)]
+pub struct Silhouette(pub bool);
+
+impl Default for Silhouette {
+    fn default() -> Self {
+        Self(true)
+    }
+}
+
+/// The silhouette's colour (rgb) and opacity.
+pub const SILHOUETTE: Vec4 = Vec4::new(0.55, 0.65, 0.95, 0.55);
+
+/// Marks the entity that draws the silhouette.
+#[derive(Component)]
+pub struct SilhouetteQuad;
+
+/// The silhouette material: the figure texture as a flat tint, drawn only where the depth
+/// buffer holds something nearer (`shaders/silhouette.wgsl`, depth test turned round).
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+pub struct SilhouetteArt {
+    #[uniform(0)]
+    pub tint: Vec4,
+    #[texture(1)]
+    #[sampler(2)]
+    pub figure: Handle<Image>,
+}
+
+impl Material2d for SilhouetteArt {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/silhouette.wgsl".into()
+    }
+    fn alpha_mode(&self) -> AlphaMode2d {
+        AlphaMode2d::Blend
+    }
+    fn specialize(
+        _pipeline: &Material2dPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        _key: Material2dKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        // 2D depth is reversed (nearer is greater), so `Less` keeps only the texels that
+        // something else covers.
+        if let Some(depth) = descriptor.depth_stencil.as_mut() {
+            depth.depth_compare = Some(CompareFunction::Less);
+        }
+        Ok(())
+    }
+}
+
 /// How wide the ground shadow is, in blocks.
 const SHADOW_RADIUS: f32 = 0.34;
 /// Brightness of the figure in cast shadow.
@@ -143,6 +197,7 @@ pub fn spawn(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut silhouettes: ResMut<Assets<SilhouetteArt>>,
     mut commands: Commands,
 ) {
     // A loaded save hands over what the player carried.
@@ -164,15 +219,26 @@ pub fn spawn(
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(0))
     .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
+    let mesh = meshes.add(mesh);
     commands.spawn((
         Player::at(focus.0),
         inventory,
-        Mesh2d(meshes.add(mesh)),
+        Mesh2d(mesh.clone()),
         MeshMaterial2d(materials.add(ColorMaterial {
             color: Color::WHITE,
             alpha_mode: AlphaMode2d::Mask(0.5),
             texture: Some(image.clone()),
             ..default()
+        })),
+        Transform::default(),
+    ));
+    // The same quad again, drawn only where blocks cover it.
+    commands.spawn((
+        SilhouetteQuad,
+        Mesh2d(mesh),
+        MeshMaterial2d(silhouettes.add(SilhouetteArt {
+            tint: SILHOUETTE,
+            figure: image,
         })),
         Transform::default(),
     ));
@@ -278,7 +344,7 @@ pub fn movement(
 /// The figure's colour: lit by the sun (`lit` 1 in the open, less in shade) and by
 /// block light `lamp` 0..15, mixed by the time of day like the blocks are.
 pub fn figure_light(lit: f32, lamp: u8, day: &Daylight) -> Vec3 {
-    compose(Vec3::new(lit, lamp as f32 / REACH as f32, lit), day, 1.0)
+    compose(Vec3::new(lit, lamp as f32 / REACH as f32, lit), day)
 }
 
 /// Puts the figure, its ghost and its ground shadow where the body is, shows the right
@@ -370,6 +436,24 @@ pub fn place(
             }
             m.insert_attribute(Mesh::ATTRIBUTE_POSITION, ring);
         }
+    }
+}
+
+/// Puts the silhouette exactly where the figure is, and shows it only when wanted.
+pub fn place_silhouette(
+    on: Res<Silhouette>,
+    player: Single<&Transform, With<Player>>,
+    mut quad: Single<(&mut Transform, &mut Visibility), (With<SilhouetteQuad>, Without<Player>)>,
+) {
+    let (tf, vis) = &mut *quad;
+    **tf = **player;
+    let wanted = if on.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    if **vis != wanted {
+        **vis = wanted;
     }
 }
 
@@ -547,10 +631,11 @@ pub struct PlayerPlugin;
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Landed>()
+            .init_resource::<Silhouette>()
             .add_systems(Startup, spawn)
             .add_systems(
                 Update,
-                (movement, place)
+                (movement, place, place_silhouette)
                     .chain()
                     .in_set(PlayerSet)
                     .before(crate::world::WorldSet)

@@ -31,11 +31,11 @@ use crate::interact::{BlockBroken, BlockPlaced};
 use crate::interact::{Cursor, Target};
 use crate::inventory::{HOTBAR, Inventory, sort_slots};
 use crate::look::Look;
-use crate::player::Player;
+use crate::player::{Player, Silhouette};
 use crate::world::Map;
 use crate::world::iso::{Tilt, View};
 use crate::world::light;
-use crate::world::mesh::{Grid, Quality, SeeThrough};
+use crate::world::mesh::{Grid, Quality};
 use crate::world::physics::Body;
 use crate::world::stream::{Perf, Streaming};
 use crate::world::tiles::Tiles;
@@ -603,7 +603,7 @@ pub fn run(world: &mut World) {
                     "shadows" => Some(mlua::Value::Boolean(quality.shadows)),
                     "occlusion" => Some(mlua::Value::Boolean(quality.occlusion)),
                     "grid" => Some(mlua::Value::Boolean(w.resource::<Grid>().0)),
-                    "see_through" => Some(mlua::Value::Boolean(w.resource::<SeeThrough>().0)),
+                    "see_through" => Some(mlua::Value::Boolean(w.resource::<Silhouette>().0)),
                     "peek" => Some(mlua::Value::Boolean(w.resource::<Look>().peek_on)),
                     "dead_zone" => Some(mlua::Value::Boolean(w.resource::<Look>().dead_zone_on)),
                     "mesh_budget_ms" => Some(mlua::Value::Number(streaming.budget_ms as f64)),
@@ -639,7 +639,7 @@ pub fn run(world: &mut World) {
                         true
                     }
                     ("see_through", Some(on), _) => {
-                        w.resource_mut::<SeeThrough>().0 = on;
+                        w.resource_mut::<Silhouette>().0 = on;
                         true
                     }
                     ("peek", Some(on), _) => {
@@ -1183,7 +1183,7 @@ mod tests {
         world.init_resource::<Target>();
         world.init_resource::<Time<Virtual>>();
         world.init_resource::<Look>();
-        world.init_resource::<SeeThrough>();
+        world.init_resource::<Silhouette>();
         world.spawn((Player::at(Vec3::new(1.5, 2.5, 3.0)), Inventory::default()));
         world.insert_non_send(Vm::new(
             scripts

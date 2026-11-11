@@ -13,7 +13,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use bevy::window::PrimaryWindow;
 
-use crate::core::time::{Daylight, GameTime, daylight};
+use crate::core::time::{Daylight, GameTime, daylight, sky_color};
 use crate::core::{BlockDef, ItemDef, Registry};
 use crate::interact::Target;
 use crate::inventory::Inventory;
@@ -21,14 +21,12 @@ use crate::player::{Player, figure_faces, figure_texture};
 use crate::world::iso::View;
 use crate::world::light;
 use crate::world::mesh::{
-    Faces, Grid, LEVELS, Quality, SUBMERGED, SeeThrough, WATER_ALPHA, chunk_faces, cloud_cover,
-    cloud_drift, compose, see_through_target, unpack_flags,
+    Faces, Grid, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose, unpack_flags,
 };
 
 /// Time-of-day inputs the block drawing needs.
 pub struct Lighting {
     pub day: Daylight,
-    pub drift: f32,
 }
 use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
@@ -91,16 +89,20 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     let wg = world.resource::<WorldGen>();
     let tiles = world.get_resource::<Tiles>().ok_or("no tiles yet")?;
     let time = world.resource::<Time>().elapsed_secs();
-    let see_through = world.resource::<SeeThrough>().0;
-    let player_target = see_through_target(&view, pos.with_z(shown_z), see_through);
+    let silhouette = world.resource::<crate::player::Silhouette>().0;
     let center = view.project(world.resource::<Focus>().0).truncate();
     let clock = world.resource::<GameTime>();
-    let mut canvas = Canvas::new(1280, 800, scale, center, Color::NONE);
-    canvas.paint_sky(clock.frac());
+    let sky = sky_color(clock.frac());
+    let mut canvas = Canvas::new(
+        1280,
+        800,
+        scale,
+        center,
+        Color::linear_rgb(sky.x, sky.y, sky.z),
+    );
     let quality = *world.resource::<Quality>();
     let lighting = Lighting {
         day: daylight(clock.frac()),
-        drift: cloud_drift(time),
     };
     let mut waters = Vec::new();
     for chunk in map.chunks.keys() {
@@ -115,15 +117,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let origin = (*chunk * CHUNK).extend(0).as_vec3();
-        canvas.draw_blocks(
-            origin,
-            view,
-            &faces.solid,
-            tiles,
-            time,
-            player_target,
-            &lighting,
-        );
+        canvas.draw_blocks(origin, view, &faces.solid, tiles, time, &lighting);
         if faces.water.len() > 0 {
             waters.push((origin, faces.water));
         }
@@ -138,10 +132,15 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     );
     let c = crate::player::figure_light(lit, lamp, &lighting.day);
     figure.colors = vec![[c.x, c.y, c.z, 1.0]; 4];
-    canvas.draw(at, &figure, &figure_texture());
+    let texture = figure_texture();
+    canvas.draw(at, &figure, &texture);
+    // Where blocks hide the figure, its silhouette shows through them.
+    if silhouette {
+        canvas.draw_behind(at, &figure, &texture, crate::player::SILHOUETTE);
+    }
     // Water goes over everything solid, the player included when they are under it.
     for (origin, faces) in &waters {
-        canvas.draw_water(*origin, view, faces, tiles, time, player_target, &lighting);
+        canvas.draw_water(*origin, view, faces, tiles, time, &lighting);
     }
     canvas.save(name)
 }
@@ -350,6 +349,14 @@ pub struct Canvas {
     depth: Vec<f32>,
 }
 
+/// How a raster pass treats the depth buffer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mode {
+    Opaque,
+    Blend,
+    Behind,
+}
+
 impl Canvas {
     pub fn new(width: u32, height: u32, scale: f32, center: Vec2, clear: Color) -> Self {
         let c = clear.to_linear();
@@ -360,22 +367,6 @@ impl Canvas {
             center,
             color: vec![[c.red, c.green, c.blue]; (width * height) as usize],
             depth: vec![f32::NEG_INFINITY; (width * height) as usize],
-        }
-    }
-
-    /// The sky gradient behind everything, in the same dithered bands as `sky.wgsl`.
-    pub fn paint_sky(&mut self, frac: f32) {
-        let (zenith, horizon) = crate::sky::sky_colors(frac);
-        let bands = 8.0;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let texel = (Vec2::new(x as f32, y as f32) / self.scale.max(1.0)).floor();
-                let up = 1.0 - (y as f32 + 0.5) / self.height as f32;
-                let t = (up + (bayer(texel.as_ivec2()) - 0.5) / bands).clamp(0.0, 1.0);
-                let level = (t * bands).floor() / bands;
-                let c = horizon.lerp(zenith, level);
-                self.color[(y * self.width + x) as usize] = c.to_array();
-            }
         }
     }
 
@@ -406,6 +397,29 @@ impl Canvas {
         });
     }
 
+    /// Draws the texels of `faces` only where something nearer is already drawn, as a flat
+    /// `tint` (rgb, alpha) mixed over it: the silhouette of a hidden figure, the way
+    /// `assets/shaders/silhouette.wgsl` does it with an inverted depth test.
+    pub fn draw_behind(&mut self, offset: Vec3, faces: &Faces, texture: &Image, tint: Vec4) {
+        let Some(tex) = texture.data.as_ref() else {
+            return;
+        };
+        let (tw, th) = (texture.width() as usize, texture.height() as usize);
+        let place = |p: [f32; 3]| Vec3::from(p) + offset;
+        self.raster_mode(place, faces, Mode::Behind, |faces, i, w| {
+            let mix = |f: &dyn Fn(usize) -> f32| (0..3).map(|k| w[k] * f(i[k])).sum::<f32>();
+            let u = mix(&|k| faces.uvs[k][0]).clamp(0.0, 0.9999);
+            let v = mix(&|k| faces.uvs[k][1]).clamp(0.0, 0.9999);
+            let t = ((v * th as f32) as usize * tw + (u * tw as f32) as usize) * 4;
+            if tex[t + 3] < 128 {
+                return None;
+            }
+            let texel = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
+            let luma = 0.4 + 0.6 * (0.3 * texel.red + 0.6 * texel.green + 0.1 * texel.blue);
+            Some([tint.x * luma, tint.y * luma, tint.z * luma, tint.w])
+        });
+    }
+
     /// Draws block faces the way `assets/shaders/block.wgsl` does: light evaluated at each
     /// texel's centre and banded, outlines from the mask in the vertex alpha, water rows
     /// slid by `time`. Keep the two in step.
@@ -421,10 +435,9 @@ impl Canvas {
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
-        player: Vec4,
         lighting: &Lighting,
     ) {
-        self.draw_pass(origin, view, faces, tiles, time, player, lighting, false);
+        self.draw_pass(origin, view, faces, tiles, time, lighting, false);
     }
 
     /// Draws water surfaces the way `assets/shaders/water.wgsl` does: blended over what is
@@ -437,10 +450,9 @@ impl Canvas {
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
-        player: Vec4,
         lighting: &Lighting,
     ) {
-        self.draw_pass(origin, view, faces, tiles, time, player, lighting, true);
+        self.draw_pass(origin, view, faces, tiles, time, lighting, true);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -451,7 +463,6 @@ impl Canvas {
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
-        player: Vec4,
         lighting: &Lighting,
         water_pass: bool,
     ) {
@@ -461,34 +472,12 @@ impl Canvas {
         let size = tiles.size.as_vec2();
         let tile = TILE as f32;
         let place = |p: [f32; 3]| view.project(origin + Vec3::from(p));
-        let (scale, center, width, height) = (self.scale, self.center, self.width, self.height);
-        self.raster_blend(place, faces, water_pass, |faces, i, w| {
-            // See-through, as the shader does it: the fragment's screen position and depth.
-            if player.w > 0.0 {
-                let pos = (0..3)
-                    .map(|k| place(faces.positions[i[k]]) * w[k])
-                    .sum::<Vec3>();
-                if pos.z > player.z + 1.3 {
-                    let d = (pos.truncate() - Vec2::new(player.x, player.y))
-                        / Vec2::new(player.w, player.w * 0.75);
-                    let r = d.length();
-                    if r < 1.0 {
-                        let cover = {
-                            let t = ((r - 1.0) / (0.3 - 1.0)).clamp(0.0, 1.0);
-                            t * t * (3.0 - 2.0 * t)
-                        };
-                        // Canvas pixel of this fragment, then the texel it belongs to.
-                        let px = Vec2::new(
-                            (pos.x - center.x) * scale + width as f32 / 2.0,
-                            height as f32 / 2.0 - (pos.y - center.y) * scale,
-                        );
-                        let texel = (px / scale.max(1.0)).floor().as_ivec2();
-                        if bayer(texel) < cover {
-                            return None;
-                        }
-                    }
-                }
-            }
+        let mode = if water_pass {
+            Mode::Blend
+        } else {
+            Mode::Opaque
+        };
+        self.raster_mode(place, faces, mode, |faces, i, w| {
             let uv_of = |k: usize| Vec2::from(faces.uvs[k]);
             let uv = uv_of(i[0]) * w[0] + uv_of(i[1]) * w[1] + uv_of(i[2]) * w[2];
             let px = uv * size;
@@ -512,17 +501,7 @@ impl Canvas {
             }
             channels = channels.max(Vec3::ZERO);
             let (mask, water, top, submerged) = unpack_flags(faces.colors[i[0]][3]);
-            // Clouds pass over the tops of things, by world position.
-            let cloud = if top {
-                let world = (0..3)
-                    .map(|k| Vec3::from(faces.positions[i[k]]) * w[k])
-                    .sum::<Vec3>()
-                    + origin;
-                cloud_cover(world.truncate(), lighting.drift, lighting.day.level)
-            } else {
-                1.0
-            };
-            let mut light = compose(channels, &lighting.day, cloud);
+            let mut light = compose(channels, &lighting.day);
             let brightness = light.max_element();
             if brightness > 1e-4 {
                 let banded = (brightness * LEVELS).round().max(1.0) / LEVELS;
@@ -571,16 +550,17 @@ impl Canvas {
         faces: &Faces,
         shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 4]>,
     ) {
-        self.raster_blend(place, faces, false, shade);
+        self.raster_mode(place, faces, Mode::Opaque, shade);
     }
 
-    /// [`Canvas::raster`], and with `blend` the result's alpha mixes it over what is there
-    /// without claiming the depth, as the water pass does.
-    fn raster_blend(
+    /// [`Canvas::raster`] with a choice of depth rule: `Opaque` claims the depth, `Blend`
+    /// mixes by alpha over what is nearer-or-equal without claiming it (water), `Behind`
+    /// mixes only where something nearer is already drawn (a silhouette).
+    fn raster_mode(
         &mut self,
         place: impl Fn([f32; 3]) -> Vec3,
         faces: &Faces,
-        blend: bool,
+        mode: Mode,
         shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 4]>,
     ) {
         let (width, height, scale, center) = (self.width, self.height, self.scale, self.center);
@@ -618,18 +598,22 @@ impl Canvas {
                         }
                         let depth = (0..3).map(|k| w[k] * screen[k].z).sum::<f32>();
                         let at = (y * width + x) as usize;
-                        if depth < self.depth[at] {
+                        let passes = match mode {
+                            Mode::Behind => depth < self.depth[at],
+                            _ => depth >= self.depth[at],
+                        };
+                        if !passes {
                             continue;
                         }
                         if let Some(color) = shade(faces, i, w) {
-                            if blend {
+                            if mode == Mode::Opaque {
+                                self.depth[at] = depth;
+                                self.color[at] = [color[0], color[1], color[2]];
+                            } else {
                                 let a = color[3];
                                 for (dst, src) in self.color[at].iter_mut().zip(color) {
                                     *dst += (src - *dst) * a;
                                 }
-                            } else {
-                                self.depth[at] = depth;
-                                self.color[at] = [color[0], color[1], color[2]];
                             }
                         }
                     }
@@ -680,14 +664,6 @@ impl Canvas {
     }
 }
 
-/// 4 x 4 ordered dither threshold in 0..1, as in the shader.
-fn bayer(t: IVec2) -> f32 {
-    const TABLE: [f32; 16] = [
-        0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0,
-    ];
-    (TABLE[(t.x.rem_euclid(4) + t.y.rem_euclid(4) * 4) as usize] + 0.5) / 16.0
-}
-
 /// A block drawn alone as a 32 x 32 cut-out, for item icons: the same faces, tiles and
 /// shading as in the world.
 pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
@@ -700,28 +676,9 @@ pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
         |p| if p == IVec3::ZERO { block } else { 0 },
     );
     let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
-    let noon = Lighting {
-        day: daylight(0.5),
-        drift: 0.0,
-    };
-    canvas.draw_blocks(
-        Vec3::ZERO,
-        View::default(),
-        &faces.solid,
-        tiles,
-        0.0,
-        Vec4::ZERO,
-        &noon,
-    );
-    canvas.draw_water(
-        Vec3::ZERO,
-        View::default(),
-        &faces.water,
-        tiles,
-        0.0,
-        Vec4::ZERO,
-        &noon,
-    );
+    let noon = Lighting { day: daylight(0.5) };
+    canvas.draw_blocks(Vec3::ZERO, View::default(), &faces.solid, tiles, 0.0, &noon);
+    canvas.draw_water(Vec3::ZERO, View::default(), &faces.water, tiles, 0.0, &noon);
     canvas.into_image(true)
 }
 
@@ -773,6 +730,19 @@ mod tests {
             &texture,
         );
         assert_eq!(canvas.color[8 * 16 + 8], [0.0, 0.0, 1.0]);
+        // A silhouette draws only where something nearer already is: behind the blue
+        // quad it tints, out in the open (depth 2 over the black background at -inf) it
+        // does not.
+        let tint = Vec4::new(1.0, 1.0, 1.0, 0.5);
+        canvas.draw_behind(Vec3::ZERO, &quad(2.0, [1.0; 4]), &texture, tint);
+        let behind = canvas.color[8 * 16 + 8];
+        assert!(
+            behind[0] > 0.3 && behind[2] > 0.5,
+            "tinted over blue: {behind:?}"
+        );
+        let mut open = Canvas::new(16, 16, 1.0, Vec2::ZERO, Color::BLACK);
+        open.draw_behind(Vec3::ZERO, &quad(2.0, [1.0; 4]), &texture, tint);
+        assert_eq!(open.color[8 * 16 + 8], [0.0, 0.0, 0.0]);
     }
 
     #[test]

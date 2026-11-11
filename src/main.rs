@@ -12,7 +12,6 @@ mod inventory;
 mod look;
 mod player;
 mod script;
-mod sky;
 mod smoke;
 mod ui;
 mod world;
@@ -91,7 +90,8 @@ fn main() {
         .init_asset::<ColorMaterial>()
         .init_asset::<Image>()
         .init_asset::<world::mesh::BlockArt>()
-        .init_asset::<world::mesh::WaterArt>();
+        .init_asset::<world::mesh::WaterArt>()
+        .init_asset::<player::SilhouetteArt>();
     } else {
         app.add_plugins(
             DefaultPlugins
@@ -118,8 +118,8 @@ fn main() {
     let settings = core::settings::load();
     app.insert_resource(core::settings::Keys::from_names(&settings.keys))
         .insert_resource(settings)
-        // The night sky; the sky quad covers it whenever the window is open.
-        .insert_resource(ClearColor(Color::srgb(0.06, 0.07, 0.16)))
+        // Replaced each frame the daylight moves by `core::time::clear_color`.
+        .insert_resource(ClearColor(Color::srgb(0.36, 0.60, 0.92)))
         .add_plugins((
             core::CorePlugin,
             world::WorldPlugin,
@@ -162,8 +162,8 @@ fn main() {
         app.add_plugins((
             bevy::sprite_render::Material2dPlugin::<world::mesh::BlockArt>::default(),
             bevy::sprite_render::Material2dPlugin::<world::mesh::WaterArt>::default(),
+            bevy::sprite_render::Material2dPlugin::<player::SilhouetteArt>::default(),
             camera::CameraPlugin,
-            sky::SkyPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
         ))

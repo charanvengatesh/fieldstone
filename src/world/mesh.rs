@@ -77,24 +77,18 @@ const INSET: f32 = 0.01;
 #[derive(Resource, Default)]
 pub struct Grid(pub bool);
 
-/// What the block shader reads each frame.
-#[derive(ShaderType, Clone, Copy, Debug)]
+/// What the block shader reads. It changes a few times a minute as the day moves, never
+/// every frame: the clock comes from Bevy's view globals.
+#[derive(ShaderType, Clone, Copy, Debug, PartialEq)]
 pub struct BlockParams {
-    /// x: seconds, y and z: atlas size in texels, w: light bands.
+    /// x: unused, y and z: atlas size in texels, w: light bands.
     pub params: Vec4,
-    /// The player on screen: x, y in texels, z depth, w the see-through radius in texels
-    /// (0 turns the see-through off).
-    pub player: Vec4,
-    /// x: screen pixels per texel, y, z, w: unused.
-    pub screen: Vec4,
-    /// x: daylight 0..1, y: time of day 0..1, z: cloud drift in blocks, w: unused.
+    /// x: daylight 0..1, y: time of day 0..1, z, w: unused.
     pub day: Vec4,
     /// Colour of sunlight now.
     pub sun_color: Vec4,
     /// Colour of the light left in shade and at night.
     pub ambient_color: Vec4,
-    /// Inverse of the view's projection, so the shader can recover world positions.
-    pub inverse: Mat4,
 }
 
 /// The block material: the tile atlas lit by vertex colour, with outlines, banded light,
@@ -138,19 +132,6 @@ impl Material2d for WaterArt {
     }
 }
 
-/// Radius of the see-through window around the player, in texels, at its widest.
-pub const SEE_THROUGH_RADIUS: f32 = 26.0;
-
-/// Whether blocks in front of the player are dithered away.
-#[derive(Resource)]
-pub struct SeeThrough(pub bool);
-
-impl Default for SeeThrough {
-    fn default() -> Self {
-        Self(true)
-    }
-}
-
 /// The material every chunk shares.
 #[derive(Resource)]
 pub struct BlockMaterial(pub Handle<BlockArt>);
@@ -175,12 +156,9 @@ pub fn setup(
     let params = Vec4::new(0.0, tiles.size.x as f32, tiles.size.y as f32, LEVELS);
     let block = BlockParams {
         params,
-        player: Vec4::ZERO,
-        screen: Vec4::new(3.0, 0.0, 0.0, 0.0),
         day: Vec4::new(1.0, 0.5, 0.0, 0.0),
         sun_color: Vec4::ONE,
         ambient_color: Vec4::ONE,
-        inverse: Mat4::IDENTITY,
     };
     let atlas = images.add(image);
     commands.insert_resource(BlockMaterial(materials.add(BlockArt {
@@ -195,62 +173,47 @@ pub fn setup(
     commands.insert_resource(tiles);
 }
 
-/// Feeds the shader the clock, the player's place on screen and the zoom, each frame.
+/// Hands the shader the daylight, but only when it has moved by a visible step: writing a
+/// material asset makes the renderer rebuild its bind group, so this stays quiet during
+/// the long stretches where nothing changes.
 pub fn tick(
-    time: Res<Time>,
     clock: Res<GameTime>,
-    view: Res<super::iso::View>,
-    see_through: Res<SeeThrough>,
-    settings: Res<crate::core::settings::Settings>,
     handle: Option<Res<BlockMaterial>>,
     water: Option<Res<WaterMaterial>>,
-    player: Option<Single<&crate::player::Player>>,
     mut materials: ResMut<Assets<BlockArt>>,
     mut waters: ResMut<Assets<WaterArt>>,
 ) {
     let (Some(handle), Some(water)) = (handle, water) else {
         return;
     };
-    let Some(mut m) = materials.get_mut(&handle.0) else {
+    let Some(current) = materials.get(&handle.0).map(|m| m.block) else {
         return;
     };
-    m.block.params.x = time.elapsed_secs();
-    m.block.screen.x = settings.pixel_scale.clamp(1, 6) as f32;
     let day = daylight(clock.frac());
-    m.block.day = Vec4::new(
-        day.level,
-        clock.frac(),
-        cloud_drift(time.elapsed_secs()),
-        0.0,
-    );
-    m.block.sun_color = day.sun.extend(1.0);
-    m.block.ambient_color = day.ambient.extend(1.0);
-    m.block.inverse = Mat4::from_mat3(view.matrix().inverse());
-    m.block.player = match player {
-        Some(p) => see_through_target(&view, p.body.pos.with_z(p.shown_z), see_through.0),
-        None => Vec4::ZERO,
+    let wanted = BlockParams {
+        params: current.params,
+        day: Vec4::new(quantize(day.level), clock.frac(), 0.0, 0.0),
+        sun_color: day.sun.map(quantize).extend(1.0),
+        ambient_color: day.ambient.map(quantize).extend(1.0),
     };
-    let block = m.block;
+    let same = |a: Vec4, b: Vec4| (a - b).abs().max_element() < 1e-6;
+    if same(wanted.day.with_y(0.0), current.day.with_y(0.0))
+        && same(wanted.sun_color, current.sun_color)
+        && same(wanted.ambient_color, current.ambient_color)
+    {
+        return;
+    }
+    if let Some(mut m) = materials.get_mut(&handle.0) {
+        m.block = wanted;
+    }
     if let Some(mut w) = waters.get_mut(&water.0) {
-        w.block = block;
+        w.block = wanted;
     }
 }
 
-/// The player's position for the see-through window: its screen x and y (a little above
-/// the feet), its depth, and the radius, or zero radius when off.
-pub fn see_through_target(view: &super::iso::View, feet: Vec3, on: bool) -> Vec4 {
-    let at = view.project(feet);
-    Vec4::new(
-        at.x,
-        at.y + 16.0,
-        at.z,
-        if on { SEE_THROUGH_RADIUS } else { 0.0 },
-    )
-}
-
-/// How far the clouds have drifted, in blocks, after `secs`.
-pub fn cloud_drift(secs: f32) -> f32 {
-    secs * 0.6
+/// Rounds to 1/255, the smallest step a colour on screen can take.
+fn quantize(v: f32) -> f32 {
+    (v * 255.0).round() / 255.0
 }
 
 /// Packs a face's outline mask, its water flag, whether it faces up and whether it lies
@@ -276,40 +239,11 @@ pub const TORCH: Vec3 = Vec3::new(1.0, 0.80, 0.55);
 /// Composes the light at a texel from the vertex channels and the time of day, as the
 /// shader does: `channels` is (sun, block light, ambient). Returns linear rgb before
 /// banding.
-pub fn compose(channels: Vec3, day: &Daylight, cloud: f32) -> Vec3 {
-    let sun = Vec3::from(tint(channels.x)) * day.sun * day.level * cloud;
+pub fn compose(channels: Vec3, day: &Daylight) -> Vec3 {
+    let sun = Vec3::from(tint(channels.x)) * day.sun * day.level;
     let ambient = day.ambient * channels.z * (0.22 * (1.0 - day.level));
     let torch = TORCH * channels.y * 1.15;
     sun + ambient + torch
-}
-
-/// Cloud cover at a world position: 1 in the clear, 0.88 under a cloud. Value noise, the
-/// same formula as the shader's.
-pub fn cloud_cover(world: Vec2, drift: f32, daylight: f32) -> f32 {
-    if daylight < 0.5 {
-        return 1.0;
-    }
-    let p = world / 40.0 + Vec2::new(drift, drift * 0.4) / 40.0;
-    let n = value_noise(p) * 0.65 + value_noise(p * 2.1 + Vec2::splat(7.3)) * 0.35;
-    if n > 0.56 { 0.88 } else { 1.0 }
-}
-
-fn hash2(p: Vec2) -> f32 {
-    let h = p.dot(Vec2::new(127.1, 311.7));
-    ((h.sin() * 43758.547).fract() + 1.0).fract()
-}
-
-fn value_noise(p: Vec2) -> f32 {
-    let i = p.floor();
-    let f = p - i;
-    let u = f * f * (Vec2::splat(3.0) - 2.0 * f);
-    let a = hash2(i);
-    let b = hash2(i + Vec2::X);
-    let c = hash2(i + Vec2::Y);
-    let d = hash2(i + Vec2::ONE);
-    let x1 = a + (b - a) * u.x;
-    let x2 = c + (d - c) * u.x;
-    x1 + (x2 - x1) * u.y
 }
 
 /// Re-expresses an outline mask given per geometric edge as a mask per tile edge, for a
@@ -1010,16 +944,16 @@ mod tests {
         let noon = daylight(0.5);
         let night = daylight(0.0);
         let open = Vec3::new(1.0, 0.0, 1.0);
-        let lit_day = compose(open, &noon, 1.0);
-        let lit_night = compose(open, &night, 1.0);
+        let lit_day = compose(open, &noon);
+        let lit_night = compose(open, &night);
         assert!(lit_day.max_element() > 0.9);
         assert!(lit_night.max_element() < 0.35);
         // A torch matters at night and is drowned at noon.
         let torch = Vec3::new(1.0, 0.9, 1.0);
-        assert!(compose(torch, &night, 1.0).x > lit_night.x + 0.5);
-        // Clouds dim the sun only.
-        assert!(compose(open, &noon, 0.88).x < lit_day.x);
-        assert_eq!(cloud_cover(Vec2::ZERO, 0.0, 0.2), 1.0);
+        assert!(compose(torch, &night).x > lit_night.x + 0.5);
+        // The uniform only moves in visible steps.
+        assert_eq!(quantize(0.5), 128.0 / 255.0);
+        assert_eq!(quantize(0.50001), quantize(0.5));
     }
 
     #[test]
