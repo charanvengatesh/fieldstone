@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.9.6
+
+### Changed
+- The player is a small block model now (`src/figure.rs`: head, body, arms, legs as boxes
+  in world units, coloured per face and shaded by the terrain's sun) projected through
+  the view exactly as chunks are, via a shared `Projected` component that
+  `stream::apply_view` drives. It turns with the view, foreshortens with the tilt, faces
+  the way it walks (eight facings) and is covered by blocks per vertex. The flat sprite
+  strip is gone, and with it the figure texture.
+- The figure, its silhouette and shadow, the target highlight and particles are placed in
+  a `PlaceSet` that runs after the view settles for the frame, so nothing trails the
+  world through a turn by a frame any more.
+- The silhouette is the same model with its depth lifted past its own near faces
+  (`SILHOUETTE_LIFT`), drawn from vertex colour; `shaders/silhouette.wgsl` no longer
+  samples a texture.
+
 ## 0.9.5
 
 ### Fixed

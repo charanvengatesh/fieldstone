@@ -17,7 +17,7 @@ use crate::core::time::{Daylight, GameTime, daylight, sky_color};
 use crate::core::{BlockDef, ItemDef, Registry};
 use crate::interact::Target;
 use crate::inventory::Inventory;
-use crate::player::{Player, figure_faces, figure_texture};
+use crate::player::{Player, Projected};
 use crate::world::iso::View;
 use crate::world::light;
 use crate::world::mesh::{
@@ -77,11 +77,20 @@ pub fn screenshot(world: &mut World, name: &str) {
 /// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
 /// Works without a window and whatever the window's state.
 pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, String> {
-    let (pos, shown_z, facing, frame, lit) = world
+    let (pos, shown_z, facing, frame, lit, placement) = world
         .query::<&Player>()
         .iter(world)
         .next()
-        .map(|p| (p.body.pos, p.shown_z, p.facing, p.strip_frame(), p.lit))
+        .map(|p| {
+            (
+                p.body.pos,
+                p.shown_z,
+                p.facing,
+                p.frame,
+                p.lit,
+                p.placement(),
+            )
+        })
         .ok_or("no player")?;
     let map = world.resource::<Map>();
     let view = *world.resource::<View>();
@@ -122,8 +131,8 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
             waters.push((origin, faces.water));
         }
     }
-    let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
-    let mut figure = figure_faces(facing, frame, view.tilt);
+    let _ = shown_z;
+    let figure = crate::figure::model(facing, frame);
     let lamp = light::level_at(
         map,
         &tiles.light,
@@ -131,12 +140,18 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
         (pos + Vec3::Z * 0.9).floor().as_ivec3(),
     );
     let c = crate::player::figure_light(lit, lamp, &lighting.day);
-    figure.colors = vec![[c.x, c.y, c.z, 1.0]; 4];
-    let texture = figure_texture();
-    canvas.draw(at, &figure, &texture);
+    canvas.draw_model(&placement, view, &figure, c.extend(1.0), Mode::Opaque);
     // Where blocks hide the figure, its silhouette shows through them.
     if silhouette {
-        canvas.draw_behind(at, &figure, &texture, crate::player::SILHOUETTE);
+        let mut lifted = placement;
+        lifted.bias += crate::player::SILHOUETTE_LIFT;
+        canvas.draw_model(
+            &lifted,
+            view,
+            &figure,
+            crate::player::SILHOUETTE,
+            Mode::Behind,
+        );
     }
     // Water goes over everything solid, the player included when they are under it.
     for (origin, faces) in &waters {
@@ -350,8 +365,8 @@ pub struct Canvas {
 }
 
 /// How a raster pass treats the depth buffer.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Mode {
     Opaque,
     Blend,
     Behind,
@@ -370,53 +385,31 @@ impl Canvas {
         }
     }
 
-    /// Draws plain textured quads (texture times vertex colour) whose positions are
-    /// relative to `offset`: texels in x and y, depth in z. Texels with alpha below one
-    /// half are skipped.
-    pub fn draw(&mut self, offset: Vec3, faces: &Faces, texture: &Image) {
-        let Some(tex) = texture.data.as_ref() else {
-            return;
+    /// Draws a projected model (the figure) the way the renderer does: positions in blocks
+    /// about `at.origin`, scaled, through `view`, vertex colours times `tint`. In
+    /// `Mode::Behind` only what something nearer already covers is drawn, mixed by the
+    /// tint's alpha, as `shaders/silhouette.wgsl` does with its depth test turned round.
+    pub fn draw_model(
+        &mut self,
+        at: &Projected,
+        view: View,
+        faces: &Faces,
+        tint: Vec4,
+        mode: Mode,
+    ) {
+        let place = |p: [f32; 3]| {
+            let mut s = view.project(at.origin + Vec3::from(p) * at.scale);
+            s.z += at.bias;
+            s
         };
-        let (tw, th) = (texture.width() as usize, texture.height() as usize);
-        let place = |p: [f32; 3]| Vec3::from(p) + offset;
-        self.raster(place, faces, |faces, i, w| {
-            let mix = |f: &dyn Fn(usize) -> f32| (0..3).map(|k| w[k] * f(i[k])).sum::<f32>();
-            let u = mix(&|k| faces.uvs[k][0]).clamp(0.0, 0.9999);
-            let v = mix(&|k| faces.uvs[k][1]).clamp(0.0, 0.9999);
-            let t = ((v * th as f32) as usize * tw + (u * tw as f32) as usize) * 4;
-            if tex[t + 3] < 128 {
-                return None;
+        self.raster_mode(place, faces, mode, |faces, i, w| {
+            let mix = |k: usize| (0..3).map(|j| w[j] * faces.colors[i[j]][k]).sum::<f32>();
+            let (r, g, b) = (mix(0), mix(1), mix(2));
+            if mode == Mode::Behind {
+                let luma = 0.4 + 0.6 * (0.3 * r + 0.6 * g + 0.1 * b).min(1.0);
+                return Some([tint.x * luma, tint.y * luma, tint.z * luma, tint.w]);
             }
-            let texel = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
-            Some([
-                texel.red * mix(&|k| faces.colors[k][0]),
-                texel.green * mix(&|k| faces.colors[k][1]),
-                texel.blue * mix(&|k| faces.colors[k][2]),
-                1.0,
-            ])
-        });
-    }
-
-    /// Draws the texels of `faces` only where something nearer is already drawn, as a flat
-    /// `tint` (rgb, alpha) mixed over it: the silhouette of a hidden figure, the way
-    /// `assets/shaders/silhouette.wgsl` does it with an inverted depth test.
-    pub fn draw_behind(&mut self, offset: Vec3, faces: &Faces, texture: &Image, tint: Vec4) {
-        let Some(tex) = texture.data.as_ref() else {
-            return;
-        };
-        let (tw, th) = (texture.width() as usize, texture.height() as usize);
-        let place = |p: [f32; 3]| Vec3::from(p) + offset;
-        self.raster_mode(place, faces, Mode::Behind, |faces, i, w| {
-            let mix = |f: &dyn Fn(usize) -> f32| (0..3).map(|k| w[k] * f(i[k])).sum::<f32>();
-            let u = mix(&|k| faces.uvs[k][0]).clamp(0.0, 0.9999);
-            let v = mix(&|k| faces.uvs[k][1]).clamp(0.0, 0.9999);
-            let t = ((v * th as f32) as usize * tw + (u * tw as f32) as usize) * 4;
-            if tex[t + 3] < 128 {
-                return None;
-            }
-            let texel = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
-            let luma = 0.4 + 0.6 * (0.3 * texel.red + 0.6 * texel.green + 0.1 * texel.blue);
-            Some([tint.x * luma, tint.y * luma, tint.z * luma, tint.w])
+            Some([r * tint.x, g * tint.y, b * tint.z, 1.0])
         });
     }
 
@@ -544,16 +537,9 @@ impl Canvas {
     /// Fills every triangle with whatever `shade` returns for a pixel, given the three
     /// vertex indices and the pixel's weights on them, keeping the nearest result. `place`
     /// turns a vertex position into screen texels and depth.
-    fn raster(
-        &mut self,
-        place: impl Fn([f32; 3]) -> Vec3,
-        faces: &Faces,
-        shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 4]>,
-    ) {
-        self.raster_mode(place, faces, Mode::Opaque, shade);
-    }
-
-    /// [`Canvas::raster`] with a choice of depth rule: `Opaque` claims the depth, `Blend`
+    /// Fills every triangle with whatever `shade` returns for a pixel, given the three
+    /// vertex indices and the pixel's weights on them. `place` turns a vertex position
+    /// into screen texels and depth. The depth rule: `Opaque` claims the depth, `Blend`
     /// mixes by alpha over what is nearer-or-equal without claiming it (water), `Behind`
     /// mixes only where something nearer is already drawn (a silhouette).
     fn raster_mode(
@@ -696,52 +682,63 @@ mod tests {
 
     #[test]
     fn canvas_keeps_the_nearer_of_two_quads() {
-        let texture = Image::new_fill(
-            Extent3d {
-                width: 4,
-                height: 4,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            &[255, 255, 255, 255],
-            TextureFormat::Rgba8UnormSrgb,
-            RenderAssetUsages::default(),
-        );
-        let quad = |depth: f32, color: [f32; 4]| Faces {
+        // An upright quad straddling the origin, drawn through the default view; `bias`
+        // sets its depth.
+        let quad = |color: [f32; 4]| Faces {
             positions: vec![
-                [-4.0, -4.0, depth],
-                [4.0, -4.0, depth],
-                [4.0, 4.0, depth],
-                [-4.0, 4.0, depth],
+                [-0.25, 0.0, -0.25],
+                [0.25, 0.0, -0.25],
+                [0.25, 0.0, 0.25],
+                [-0.25, 0.0, 0.25],
             ],
-            uvs: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            uvs: vec![[0.0; 2]; 4],
             colors: vec![color; 4],
             flips: vec![false],
         };
+        let at = |bias: f32| Projected {
+            origin: Vec3::ZERO,
+            scale: Vec3::ONE,
+            bias,
+        };
+        let view = View::default();
+        let white = Vec4::ONE;
         let mut canvas = Canvas::new(16, 16, 1.0, Vec2::ZERO, Color::BLACK);
-        canvas.draw(Vec3::ZERO, &quad(5.0, [1.0, 0.0, 0.0, 1.0]), &texture);
-        canvas.draw(Vec3::ZERO, &quad(2.0, [0.0, 1.0, 0.0, 1.0]), &texture);
+        canvas.draw_model(
+            &at(5.0),
+            view,
+            &quad([1.0, 0.0, 0.0, 1.0]),
+            white,
+            Mode::Opaque,
+        );
+        canvas.draw_model(
+            &at(2.0),
+            view,
+            &quad([0.0, 1.0, 0.0, 1.0]),
+            white,
+            Mode::Opaque,
+        );
         // The red quad is nearer, so drawing green afterwards changes nothing.
         assert_eq!(canvas.color[8 * 16 + 8], [1.0, 0.0, 0.0]);
         assert_eq!(canvas.color[0], [0.0, 0.0, 0.0]);
-        canvas.draw(
-            Vec3::new(0.0, 0.0, 9.0),
-            &quad(2.0, [0.0, 0.0, 1.0, 1.0]),
-            &texture,
+        canvas.draw_model(
+            &at(9.0),
+            view,
+            &quad([0.0, 0.0, 1.0, 1.0]),
+            white,
+            Mode::Opaque,
         );
         assert_eq!(canvas.color[8 * 16 + 8], [0.0, 0.0, 1.0]);
         // A silhouette draws only where something nearer already is: behind the blue
-        // quad it tints, out in the open (depth 2 over the black background at -inf) it
-        // does not.
+        // quad it tints; out in the open, over the empty background, it does not.
         let tint = Vec4::new(1.0, 1.0, 1.0, 0.5);
-        canvas.draw_behind(Vec3::ZERO, &quad(2.0, [1.0; 4]), &texture, tint);
+        canvas.draw_model(&at(1.0), view, &quad([1.0; 4]), tint, Mode::Behind);
         let behind = canvas.color[8 * 16 + 8];
         assert!(
             behind[0] > 0.3 && behind[2] > 0.5,
             "tinted over blue: {behind:?}"
         );
         let mut open = Canvas::new(16, 16, 1.0, Vec2::ZERO, Color::BLACK);
-        open.draw_behind(Vec3::ZERO, &quad(2.0, [1.0; 4]), &texture, tint);
+        open.draw_model(&at(1.0), view, &quad([1.0; 4]), tint, Mode::Behind);
         assert_eq!(open.color[8 * 16 + 8], [0.0, 0.0, 0.0]);
     }
 

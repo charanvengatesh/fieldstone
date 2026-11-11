@@ -145,6 +145,12 @@ pub struct WorldSet;
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ViewSet;
 
+/// Everything that projects a world position to the screen for this frame: the figure,
+/// its silhouette and shadow, the highlight, particles. After [`ViewSet`], before the
+/// camera follows.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlaceSet;
+
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
@@ -167,6 +173,14 @@ impl Plugin for WorldPlugin {
                     .chain()
                     .in_set(ViewSet)
                     .after(crate::script::ScriptSet)
+                    .before(WorldSet),
+            )
+            .configure_sets(
+                Update,
+                PlaceSet
+                    .after(ViewSet)
+                    .after(crate::player::PlayerSet)
+                    .after(crate::interact::InteractSet)
                     .before(WorldSet),
             )
             .add_systems(

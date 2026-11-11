@@ -871,21 +871,19 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, ()| {
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
-                Ok(world
-                    .query::<&Player>()
-                    .iter(world)
-                    .next()
-                    .map(|p| match p.heading {
-                        crate::player::Heading::Side => {
-                            if p.facing < 0.0 {
-                                "left"
-                            } else {
-                                "right"
-                            }
-                        }
-                        crate::player::Heading::Away => "away",
-                        crate::player::Heading::Toward => "toward",
-                    }))
+                let view = *world.resource::<View>();
+                Ok(world.query::<&Player>().iter(world).next().map(|p| {
+                    // The facing in screen terms: along the screen's x or y axis.
+                    let right = view.ground_dir(Vec2::X).dot(p.facing);
+                    let up = view.ground_dir(Vec2::Y).dot(p.facing);
+                    if right.abs() >= up.abs() {
+                        if right < 0.0 { "left" } else { "right" }
+                    } else if up > 0.0 {
+                        "away"
+                    } else {
+                        "toward"
+                    }
+                }))
             })?,
         )?;
         g.set(

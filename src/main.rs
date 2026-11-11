@@ -5,6 +5,7 @@
 mod camera;
 mod core;
 mod debug;
+mod figure;
 mod fx;
 mod harness;
 mod interact;
@@ -139,6 +140,7 @@ fn main() {
                     .after(player::PlayerSet)
                     .after(interact::InteractSet)
                     .after(world::ViewSet)
+                    .after(world::PlaceSet)
                     .before(world::WorldSet),
             ),
         );
@@ -173,7 +175,7 @@ fn main() {
             Update,
             (
                 interact::track_cursor.before(interact::InteractSet),
-                interact::show_highlight.after(interact::InteractSet),
+                interact::show_highlight.in_set(world::PlaceSet),
             ),
         );
     }

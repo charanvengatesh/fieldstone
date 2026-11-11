@@ -13,6 +13,7 @@ use super::mesh::{BlockMaterial, Faces, Grid, Quality, WaterMaterial, chunk_face
 use super::tiles::Tiles;
 use super::worldgen::WorldGen;
 use super::{CHUNK, Chunk, Focus, HEIGHT, Map, chunk_of, light};
+use crate::player::Projected;
 
 /// What the camera shows: half its width and height in texels.
 #[derive(Resource, Clone, Copy)]
@@ -67,10 +68,6 @@ pub struct Perf {
     /// Chunk meshes built since the game started.
     pub meshed: u64,
 }
-
-/// Marks the entity that draws a chunk.
-#[derive(Component)]
-pub struct ChunkMesh(pub IVec2);
 
 /// Chunks whose blocks could appear within `reach` texels of the middle of the screen,
 /// nearest the focus first.
@@ -300,7 +297,7 @@ fn place<M: Material2d>(
         }
         None => commands
             .spawn((
-                ChunkMesh(pos),
+                Projected::at((pos * CHUNK).extend(0).as_vec3()),
                 mesh,
                 MeshMaterial2d(material.clone()),
                 Transform::default(),
@@ -312,16 +309,18 @@ fn place<M: Material2d>(
     })
 }
 
-/// Gives every chunk mesh the view's projection as its transform. The mesh is in world
-/// space, so this is all a turn of the view costs. It runs after transform propagation,
-/// which would otherwise overwrite a matrix that is not a plain move, turn and scale.
-pub fn apply_view(view: Res<View>, mut chunks: Query<(&ChunkMesh, &mut GlobalTransform)>) {
+/// Gives every projected mesh (chunks, the figure, its silhouette) the view's projection
+/// as its transform. The meshes are in world space, so this is all a turn of the view
+/// costs. It runs after transform propagation, which would otherwise overwrite a matrix
+/// that is not a plain move, turn and scale.
+pub fn apply_view(view: Res<View>, mut drawn: Query<(&Projected, &mut GlobalTransform)>) {
     let matrix = view.matrix();
-    for (chunk, mut transform) in &mut chunks {
-        let origin = (chunk.0 * CHUNK).extend(0).as_vec3();
+    for (p, mut transform) in &mut drawn {
+        let mut at = view.project(p.origin);
+        at.z += p.bias;
         let wanted = GlobalTransform::from(Affine3A::from_mat3_translation(
-            matrix,
-            view.project(origin),
+            matrix * Mat3::from_diagonal(p.scale),
+            at,
         ));
         if *transform != wanted {
             *transform = wanted;

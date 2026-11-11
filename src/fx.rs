@@ -176,8 +176,7 @@ impl Plugin for FxPlugin {
             Update,
             (emit, tick)
                 .chain()
-                .after(crate::interact::InteractSet)
-                .before(crate::world::WorldSet)
+                .in_set(crate::world::PlaceSet)
                 .run_if(crate::core::not_paused),
         );
     }

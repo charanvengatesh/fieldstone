@@ -1,22 +1,23 @@
-//! The player: a body moved by the keyboard along the screen axes, drawn as an upright
-//! quad whose vertices carry depth so blocks in front of it cover it correctly.
+//! The player: a body moved by the keyboard along the screen axes, drawn as a small block
+//! model (`crate::figure`) projected through the view like the terrain, so it turns and is
+//! covered exactly as the blocks around it are.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::ImageSampler;
+use bevy::camera::visibility::NoFrustumCulling;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, CompareFunction, Extent3d, RenderPipelineDescriptor, SpecializedMeshPipelineError,
-    TextureDimension, TextureFormat,
+    AsBindGroup, CompareFunction, RenderPipelineDescriptor, SpecializedMeshPipelineError,
 };
 use bevy::sprite_render::{AlphaMode2d, Material2d, Material2dKey, Material2dPipeline};
 
 use crate::core::settings::Keys;
 use crate::core::time::{Daylight, GameTime, daylight};
 use crate::core::{BlockDef, Registry};
+use crate::figure;
 use crate::inventory::Inventory;
-use crate::world::iso::{Tilt, View};
+use crate::world::iso::View;
 use crate::world::light::{REACH, level_at};
 use crate::world::mesh::{compose, sunlit};
 use crate::world::physics::{Body, step};
@@ -26,11 +27,9 @@ use crate::world::{AIR, Focus, HEIGHT, Map};
 /// Blocks per second.
 const SPEED: f32 = 4.5;
 /// Texels across and up one frame of the figure.
-pub const FIGURE: UVec2 = UVec2::new(16, 28);
-/// Frames in the figure strip.
+/// Frames of the stride: standing, then mid-step.
 pub const FRAMES: usize = 2;
-/// How far in front of its true depth the figure is drawn, so its feet never fight the
-/// ground they stand on.
+/// Depth nudge toward the viewer, so the figure wins against the face it stands on.
 const DEPTH_BIAS: f32 = 0.05;
 
 #[derive(Component)]
@@ -38,10 +37,8 @@ pub struct Player {
     pub body: Body,
     /// Height the figure is drawn at; eases toward the body so steps do not pop.
     pub shown_z: f32,
-    /// -1 or 1: which way the figure faces on screen.
-    pub facing: f32,
-    /// Which way the figure is turned: sideways, away from the viewer or toward them.
-    pub heading: Heading,
+    /// Which way the figure faces on the ground, in world terms (one of eight).
+    pub facing: Vec2,
     /// Distance walked, which drives the two-frame stride.
     pub stride: f32,
     /// Which frame of the figure is showing: 0 standing, 1 mid-step.
@@ -56,17 +53,6 @@ pub struct Player {
     pub squash: f32,
 }
 
-/// Which way the figure is turned, in screen terms.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub enum Heading {
-    #[default]
-    Side,
-    /// Walking up the screen: the back is to the viewer.
-    Away,
-    /// Walking down the screen: the face is to the viewer.
-    Toward,
-}
-
 /// The player landed after a fall of `drop` blocks.
 #[derive(Message, Clone, Copy)]
 pub struct Landed {
@@ -79,8 +65,7 @@ impl Player {
         Self {
             body: Body::at(pos),
             shown_z: pos.z,
-            facing: 1.0,
-            heading: Heading::Side,
+            facing: Vec2::new(1.0, -1.0).normalize(),
             stride: 0.0,
             frame: 0,
             lit: 1.0,
@@ -90,15 +75,35 @@ impl Player {
         }
     }
 
-    /// Which column of the figure strip to show: three headings, each standing and
-    /// stepping.
-    pub fn strip_frame(&self) -> usize {
-        let heading = match self.heading {
-            Heading::Side => 0,
-            Heading::Away => 1,
-            Heading::Toward => 2,
-        };
-        heading * FRAMES + self.frame
+    /// Where the figure stands for drawing, and how it is scaled about its feet.
+    pub fn placement(&self) -> Projected {
+        Projected {
+            origin: self.body.pos.with_z(self.shown_z),
+            scale: figure_scale(self.idle, self.squash),
+            bias: DEPTH_BIAS,
+        }
+    }
+}
+
+/// Something drawn in world units through the view's projection, as chunks are: its
+/// mesh positions are blocks relative to `origin`. `stream::apply_view` gives it the view
+/// matrix as its transform every frame, so a turn of the view costs nothing.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+pub struct Projected {
+    pub origin: Vec3,
+    /// Scale about the origin, in world axes.
+    pub scale: Vec3,
+    /// Depth added after projection, toward the viewer when positive.
+    pub bias: f32,
+}
+
+impl Projected {
+    pub fn at(origin: Vec3) -> Self {
+        Self {
+            origin,
+            scale: Vec3::ONE,
+            bias: 0.0,
+        }
     }
 }
 
@@ -118,20 +123,21 @@ impl Default for Silhouette {
 
 /// The silhouette's colour (rgb) and opacity.
 pub const SILHOUETTE: Vec4 = Vec4::new(0.55, 0.65, 0.95, 0.55);
+/// How far in front of the figure its silhouette sits, in depth units: past the model's
+/// own near faces, so only blocks nearer than the whole figure bring it out.
+pub const SILHOUETTE_LIFT: f32 = 0.8;
 
 /// Marks the entity that draws the silhouette.
 #[derive(Component)]
 pub struct SilhouetteQuad;
 
-/// The silhouette material: the figure texture as a flat tint, drawn only where the depth
-/// buffer holds something nearer (`shaders/silhouette.wgsl`, depth test turned round).
+/// The silhouette material: the figure's own vertex colours as a flat tint, drawn only
+/// where the depth buffer holds something nearer (`shaders/silhouette.wgsl`, depth test
+/// turned round).
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub struct SilhouetteArt {
     #[uniform(0)]
     pub tint: Vec4,
-    #[texture(1)]
-    #[sampler(2)]
-    pub figure: Handle<Image>,
 }
 
 impl Material2d for SilhouetteArt {
@@ -180,21 +186,9 @@ pub fn closed(map: &Map, blocks: &Registry<BlockDef>, c: IVec3) -> bool {
 }
 
 /// Texture coordinates of the figure quad for one frame of the strip.
-/// Columns in the figure strip: three headings of [`FRAMES`] each.
-pub const STRIP: usize = 3 * FRAMES;
-
-fn frame_uvs(frame: usize) -> Vec<[f32; 2]> {
-    let (u0, u1) = (
-        frame as f32 / STRIP as f32,
-        (frame + 1) as f32 / STRIP as f32,
-    );
-    vec![[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]]
-}
-
 pub fn spawn(
     focus: Res<Focus>,
     pending: Option<Res<crate::core::save::Pending>>,
-    mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut silhouettes: ResMut<Assets<SilhouetteArt>>,
@@ -208,39 +202,29 @@ pub fn spawn(
         }
         inventory.selected = p.selected.min(crate::inventory::HOTBAR - 1);
     }
-    let image = images.add(figure_texture());
-    let mesh = Mesh::new(
-        PrimitiveTopology::TriangleList,
-        RenderAssetUsages::default(),
-    )
-    .with_inserted_attribute(
-        Mesh::ATTRIBUTE_POSITION,
-        figure_corners(1.0, Tilt::default()),
-    )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(0))
-    .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
-    let mesh = meshes.add(mesh);
+    let player = Player::at(focus.0);
+    let placement = player.placement();
+    let mesh = meshes.add(figure::model(player.facing, player.frame).into_mesh());
     commands.spawn((
-        Player::at(focus.0),
+        player,
         inventory,
+        placement,
         Mesh2d(mesh.clone()),
         MeshMaterial2d(materials.add(ColorMaterial {
             color: Color::WHITE,
-            alpha_mode: AlphaMode2d::Mask(0.5),
-            texture: Some(image.clone()),
             ..default()
         })),
         Transform::default(),
+        NoFrustumCulling,
     ));
-    // The same quad again, drawn only where blocks cover it.
+    // The same model again, drawn only where blocks cover it.
     commands.spawn((
         SilhouetteQuad,
+        placement,
         Mesh2d(mesh),
-        MeshMaterial2d(silhouettes.add(SilhouetteArt {
-            tint: SILHOUETTE,
-            figure: image,
-        })),
+        MeshMaterial2d(silhouettes.add(SilhouetteArt { tint: SILHOUETTE })),
         Transform::default(),
+        NoFrustumCulling,
     ));
     // An eight-sided patch lying on the ground; its corners are set by `place`.
     let ring: Vec<u32> = (1..=8).flat_map(|i| [0, i, i % 8 + 1]).collect();
@@ -278,18 +262,7 @@ pub fn movement(
         keys.pressed(&input, pos) as i8 as f32 - keys.pressed(&input, neg) as i8 as f32
     };
     let screen = Vec2::new(axis(&keys.left, &keys.right), axis(&keys.down, &keys.up));
-    if screen.x != 0.0 {
-        player.facing = screen.x.signum();
-    }
-    if screen != Vec2::ZERO {
-        player.heading = if screen.x.abs() >= screen.y.abs() {
-            Heading::Side
-        } else if screen.y > 0.0 {
-            Heading::Away
-        } else {
-            Heading::Toward
-        };
-    }
+    player.facing = figure::facing_of(view.ground_dir(screen), player.facing);
     // Nothing moves until the ground under the player has streamed in; the focus still
     // follows them there, or it never would.
     if map
@@ -359,28 +332,28 @@ pub fn place(
     mut last_color: Local<Vec3>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut shown: Local<(Option<View>, usize)>,
+    mut shown: Local<(Option<View>, Option<(Vec2, usize)>)>,
     mut player: Single<(
         &mut Player,
-        &mut Transform,
+        &mut Projected,
         &Mesh2d,
         &MeshMaterial2d<ColorMaterial>,
     )>,
     mut shadow: Single<(&mut Transform, &Mesh2d), (With<GroundShadow>, Without<Player>)>,
 ) {
-    let (player, tf, mesh, material) = &mut *player;
+    let (player, projected, mesh, material) = &mut *player;
     let pos = player.body.pos.with_z(player.shown_z);
-    let mut at = view.project(pos);
-    at.z += DEPTH_BIAS;
-    tf.translation = at;
-    tf.scale = Vec3::new(player.facing, 1.0, 1.0) * figure_scale(player.idle, player.squash);
+    let placement = player.placement();
+    if **projected != placement {
+        **projected = placement;
+    }
 
-    // The stride frame and the heading.
-    let frame = player.strip_frame();
-    if shown.1 != frame {
-        shown.1 = frame;
+    // The model is rebuilt when the facing or the stride frame changes.
+    let pose = (player.facing, player.frame);
+    if shown.1 != Some(pose) {
+        shown.1 = Some(pose);
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(frame));
+            *m = figure::model(player.facing, player.frame).into_mesh();
         }
     }
 
@@ -422,11 +395,7 @@ pub fn place(
     let (shadow_tf, shadow_mesh) = &mut *shadow;
     shadow_tf.translation = view.project(pos.with_z(ground)) + Vec3::Z * 0.03;
     if shown.0 != Some(*view) {
-        let tilted = shown.0.is_none_or(|v| v.tilt != view.tilt);
         shown.0 = Some(*view);
-        if tilted && let Some(mut m) = meshes.get_mut(&mesh.0) {
-            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, figure_corners(1.0, view.tilt));
-        }
         if let Some(mut m) = meshes.get_mut(&shadow_mesh.0) {
             let mut ring = vec![[0.0f32; 3]];
             for i in 0..8 {
@@ -442,11 +411,15 @@ pub fn place(
 /// Puts the silhouette exactly where the figure is, and shows it only when wanted.
 pub fn place_silhouette(
     on: Res<Silhouette>,
-    player: Single<&Transform, With<Player>>,
-    mut quad: Single<(&mut Transform, &mut Visibility), (With<SilhouetteQuad>, Without<Player>)>,
+    player: Single<&Projected, With<Player>>,
+    mut quad: Single<(&mut Projected, &mut Visibility), (With<SilhouetteQuad>, Without<Player>)>,
 ) {
-    let (tf, vis) = &mut *quad;
-    **tf = **player;
+    let (at, vis) = &mut *quad;
+    let mut wanted_at = **player;
+    wanted_at.bias += SILHOUETTE_LIFT;
+    if **at != wanted_at {
+        **at = wanted_at;
+    }
     let wanted = if on.0 {
         Visibility::Inherited
     } else {
@@ -467,160 +440,13 @@ pub fn figure_scale(idle: f32, squash: f32) -> Vec3 {
         return Vec3::new(1.12, 0.85, 1.0);
     }
     let breath = idle > 0.0 && (idle % 1.2) > 0.9;
-    let dip = 1.0 / FIGURE.y as f32;
+    // One texel at the classic tilt (16 texels a block).
+    let dip = 1.0 / (16.0 * figure::HEIGHT);
     if breath {
         Vec3::new(1.0, 1.0 - dip, 1.0)
     } else {
         Vec3::ONE
     }
-}
-
-/// The figure quad's corners in texels with depth: feet at the origin; a texel of height
-/// is `1 / block_h` blocks up, which is `rise / block_h` nearer the viewer at this tilt.
-pub fn figure_corners(facing: f32, tilt: Tilt) -> Vec<[f32; 3]> {
-    let (w, h) = (FIGURE.x as f32 * facing.signum(), FIGURE.y as f32);
-    let top = h / tilt.block_h * tilt.rise();
-    vec![
-        [-w / 2.0, 0.0, 0.0],
-        [w / 2.0, 0.0, 0.0],
-        [w / 2.0, h, top],
-        [-w / 2.0, h, top],
-    ]
-}
-
-/// The figure's quad as plain vertex data, for the software canvas: the same corners and
-/// depths as the mesh, mirrored when facing left.
-pub fn figure_faces(facing: f32, frame: usize, tilt: Tilt) -> crate::world::mesh::Faces {
-    crate::world::mesh::Faces {
-        positions: figure_corners(facing, tilt),
-        uvs: frame_uvs(frame),
-        colors: vec![[1.0; 4]; 4],
-        flips: vec![false],
-    }
-}
-
-/// The figure as a strip of [`STRIP`] frames: for each heading (sideways, back to the
-/// viewer, facing the viewer) standing, then mid-step. Drawn here so the base pack ships no
-/// images: hair, face, a tunic lit from the left, belt, trousers, boots, and one texel of
-/// ink around the lot.
-pub fn figure_texture() -> Image {
-    const HAIR: [u8; 4] = [78, 50, 34, 255];
-    const SKIN: [u8; 4] = [236, 192, 150, 255];
-    const SKIN_DARK: [u8; 4] = [198, 148, 118, 255];
-    const TUNIC: [u8; 4] = [62, 116, 198, 255];
-    const TUNIC_LIGHT: [u8; 4] = [104, 156, 226, 255];
-    const TUNIC_DARK: [u8; 4] = [44, 78, 152, 255];
-    const BELT: [u8; 4] = [92, 62, 40, 255];
-    const LEGS: [u8; 4] = [84, 76, 104, 255];
-    const LEGS_DARK: [u8; 4] = [60, 54, 82, 255];
-    const BOOT: [u8; 4] = [52, 40, 38, 255];
-    const EYE: [u8; 4] = [40, 34, 48, 255];
-    const INK: [u8; 4] = [26, 24, 36, 255];
-    let (fw, h) = (FIGURE.x as i32, FIGURE.y as i32);
-    let w = fw * STRIP as i32;
-    let mut px = vec![[0u8; 4]; (w * h) as usize];
-    for column in 0..STRIP as i32 {
-        let ox = column * fw;
-        let mut rect = |x0: i32, y0: i32, x1: i32, y1: i32, c: [u8; 4]| {
-            for y in y0.max(0)..y1.min(h) {
-                for x in x0.max(0)..x1.min(fw) {
-                    px[(y * w + ox + x) as usize] = c;
-                }
-            }
-        };
-        let heading = column / FRAMES as i32;
-        let stepping = column % FRAMES as i32 == 1;
-        match heading {
-            0 => {
-                // Sideways, facing right: hair over the crown and down the back.
-                rect(5, 1, 11, 4, HAIR);
-                rect(5, 4, 7, 7, HAIR);
-                rect(7, 4, 11, 9, SKIN);
-                rect(6, 7, 7, 9, SKIN_DARK);
-                rect(9, 6, 10, 7, EYE);
-                rect(7, 9, 10, 10, SKIN_DARK);
-            }
-            1 => {
-                // Back to the viewer: all hair, a bit of neck.
-                rect(5, 1, 11, 8, HAIR);
-                rect(5, 8, 11, 9, HAIR);
-                rect(7, 9, 10, 10, SKIN_DARK);
-            }
-            _ => {
-                // Facing the viewer: a fringe, two eyes, a mouth.
-                rect(5, 1, 11, 4, HAIR);
-                rect(5, 4, 6, 7, HAIR);
-                rect(10, 4, 11, 7, HAIR);
-                rect(6, 4, 10, 9, SKIN);
-                rect(6, 8, 10, 9, SKIN_DARK);
-                rect(6, 6, 7, 7, EYE);
-                rect(9, 6, 10, 7, EYE);
-                rect(7, 9, 10, 10, SKIN_DARK);
-            }
-        }
-        // Tunic: lit on the left, shaded on the right, belted.
-        rect(4, 10, 12, 19, TUNIC);
-        rect(4, 10, 6, 15, TUNIC_LIGHT);
-        rect(10, 10, 12, 19, TUNIC_DARK);
-        rect(4, 17, 12, 18, BELT);
-        if heading == 1 {
-            // A seam down the back.
-            rect(8, 10, 9, 17, TUNIC_DARK);
-        }
-        // Arms swing against the legs when stepping.
-        let swing = if stepping { 1 } else { 0 };
-        rect(2, 11 - swing, 4, 17 - swing, TUNIC_LIGHT);
-        rect(2, 17 - swing, 4, 19 - swing, SKIN);
-        rect(12, 11 + swing, 14, 17 + swing, TUNIC_DARK);
-        rect(12, 17 + swing, 14, 19 + swing, SKIN_DARK);
-        // Legs and boots: together when standing, apart mid-step.
-        if stepping {
-            rect(4, 19, 7, 25, LEGS);
-            rect(3, 25, 7, 27, BOOT);
-            rect(10, 19, 13, 26, LEGS_DARK);
-            rect(10, 26, 14, 28, BOOT);
-        } else {
-            rect(5, 19, 8, 26, LEGS);
-            rect(9, 19, 12, 26, LEGS_DARK);
-            rect(4, 26, 8, 28, BOOT);
-            rect(9, 26, 13, 28, BOOT);
-        }
-    }
-    // One texel of ink around everything that was drawn, within each frame.
-    let filled: Vec<bool> = px.iter().map(|p| p[3] != 0).collect();
-    for y in 0..h {
-        for x in 0..w {
-            if filled[(y * w + x) as usize] {
-                continue;
-            }
-            let touches = [(1, 0), (-1, 0), (0, 1), (0, -1)].iter().any(|(dx, dy)| {
-                let (nx, ny) = (x + dx, y + dy);
-                // Ink never crosses from one frame into the next.
-                nx >= 0
-                    && ny >= 0
-                    && nx < w
-                    && ny < h
-                    && nx / fw == x / fw
-                    && filled[(ny * w + nx) as usize]
-            });
-            if touches {
-                px[(y * w + x) as usize] = INK;
-            }
-        }
-    }
-    let mut img = Image::new(
-        Extent3d {
-            width: w as u32,
-            height: h as u32,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        px.into_iter().flatten().collect(),
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    );
-    img.sampler = ImageSampler::nearest();
-    img
 }
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -635,10 +461,18 @@ impl Plugin for PlayerPlugin {
             .add_systems(Startup, spawn)
             .add_systems(
                 Update,
-                (movement, place, place_silhouette)
-                    .chain()
+                movement
                     .in_set(PlayerSet)
                     .before(crate::world::WorldSet)
+                    .run_if(crate::core::not_paused),
+            )
+            // Drawn through this frame's view angle, not last frame's, or the figure
+            // trails the world through every turn.
+            .add_systems(
+                Update,
+                (place, place_silhouette)
+                    .chain()
+                    .in_set(crate::world::PlaceSet)
                     .run_if(crate::core::not_paused),
             );
     }
@@ -678,16 +512,5 @@ mod tests {
         // A block laid on the water makes a bridge.
         map.set(IVec3::new(2, 0, 2), stone);
         assert!(!closed(&map, &blocks, IVec3::new(2, 0, 3)));
-    }
-
-    #[test]
-    fn figure_is_outlined_and_mostly_opaque() {
-        let img = figure_texture();
-        let data = img.data.as_ref().unwrap();
-        let opaque = data.chunks(4).filter(|p| p[3] == 255).count();
-        assert!(opaque > 900 && opaque < (FIGURE.x * FIGURE.y) as usize * STRIP);
-        assert_eq!(img.width(), FIGURE.x * STRIP as u32);
-        // The corners stay transparent.
-        assert_eq!(data[3], 0);
     }
 }
