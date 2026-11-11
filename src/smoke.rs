@@ -14,6 +14,21 @@ use crate::world::stream::Picture;
 use crate::world::worldgen::WorldGen;
 use crate::world::{AIR, Map};
 
+/// A wall of the one-block hole at `b` that the camera can pick: the texel to aim at and
+/// the direction `d` such that the wall is the face of `b - d` looking into the hole.
+fn far_wall(cam: &Cam, size: Vec2, map: &Map, b: IVec3) -> Option<(Vec2, IVec3)> {
+    let centre = b.as_vec3() + Vec3::splat(0.5);
+    [IVec3::X, IVec3::NEG_X, IVec3::Y, IVec3::NEG_Y]
+        .into_iter()
+        .find_map(|d| {
+            let lateral = Vec3::new(-d.y as f32, d.x as f32, 0.0);
+            let point = centre - d.as_vec3() * 0.5 + lateral * 0.3 + Vec3::Z * 0.1;
+            let at = cam.project(size, point).truncate();
+            let hit = cam.pick(size, at, |c| c != b && map.block(c) != AIR)?;
+            (hit.block == b - d && hit.normal == d).then_some((at, d))
+        })
+}
+
 #[derive(Resource)]
 pub struct Smoke {
     frame: u32,
@@ -92,6 +107,9 @@ pub fn drive(
     }
 
     match smoke.frame {
+        // The pointer the script holds is a fixed texel; the camera must not lean toward
+        // it, or the block under it changes while the button is held.
+        1 => cam.peek_on = false,
         // The world has streamed in and the player has settled on the ground.
         120 => {
             // Every chunk the camera can see is loaded, meshed and drawn.
@@ -158,32 +176,19 @@ pub fn drive(
                     Some(IVec3::new(feet.x + d.x, feet.y + d.y, top))
                 })
                 .find(|b| {
-                    let (left, right) = cam.sides();
                     let size = picture.size;
                     let top = cam
                         .project(size, b.as_vec3() + Vec3::new(0.3, 0.6, 1.0))
                         .truncate();
-                    // Where the far wall of the hole will be once the block is gone.
-                    let wall = cam
-                        .project(
-                            size,
-                            b.as_vec3() + Vec3::splat(0.5)
-                                - right.as_vec3() * 0.5
-                                - left.as_vec3() * 0.3
-                                + Vec3::Z * 0.1,
-                        )
-                        .truncate();
                     blocks.at(map.block(*b)).breakable
                         && within_reach(player.body.pos, *b)
-                        && within_reach(player.body.pos, *b - right)
                         && cam
                             .pick(size, top, |c| map.block(c) != AIR)
                             .is_some_and(|h| h.block == *b && h.normal == IVec3::Z)
-                        // With the block dug out, its far wall must be in plain view so
-                        // it can be clicked to put the block back.
-                        && cam
-                            .pick(size, wall, |c| c != *b && map.block(c) != AIR)
-                            .is_some_and(|h| h.block == *b - right && h.normal == right)
+                        // With the block dug out, one of its walls must be in plain view
+                        // and in reach so it can be clicked to put the block back.
+                        && far_wall(&cam, size, &map, *b)
+                            .is_some_and(|(_, d)| within_reach(player.body.pos, *b - d))
                 });
             match spot {
                 Some(b) => {
@@ -223,19 +228,12 @@ pub fn drive(
                         items.id_of(item.unwrap())
                     );
                 }
-                // Put it back. The floor of a one-block hole is hidden behind its near
-                // walls, so aim at the far wall: the face that looks into the hole.
-                let (left, right) = cam.sides();
-                let centre = b.as_vec3() + Vec3::splat(0.5);
-                let wall = centre - right.as_vec3() * 0.5 - left.as_vec3() * 0.3 + Vec3::Z * 0.1;
-                let at = cam.project(picture.size, wall).truncate();
-                let hit = cam.pick(picture.size, at, |c| map.block(c) != AIR);
-                if hit.map(|h| (h.block, h.normal)) != Some((b - right, right)) {
-                    fail(
-                        &mut smoke,
-                        format!("far wall of the hole not pickable: {hit:?}"),
-                    );
-                }
+                // Put it back. The floor of a one-block hole may be hidden behind its near
+                // walls, so aim at a wall that looks into the hole and faces the camera.
+                let Some((at, _)) = far_wall(&cam, picture.size, &map, b) else {
+                    fail(&mut smoke, "no wall of the hole is pickable".into());
+                    return;
+                };
                 inv.selected = inv.slots.iter().position(|s| s.is_some()).unwrap_or(0);
                 cursor.0 = Some(at);
                 mouse.press(MouseButton::Right);

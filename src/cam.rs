@@ -214,22 +214,6 @@ impl Cam {
         (right * screen.x + away * screen.y).normalize_or_zero()
     }
 
-    /// The world axes nearest the picture's "away" (up the screen) and "right"
-    /// directions on the ground, as unit cell steps.
-    pub fn sides(&self) -> (IVec3, IVec3) {
-        let axis = |d: Vec2| {
-            if d.x.abs() >= d.y.abs() {
-                IVec3::new(d.x.signum() as i32, 0, 0)
-            } else {
-                IVec3::new(0, d.y.signum() as i32, 0)
-            }
-        };
-        (
-            axis(self.ground_dir(Vec2::Y)),
-            axis(self.ground_dir(Vec2::X)),
-        )
-    }
-
     /// The first solid cell under a texel of a `target`-sized picture.
     pub fn pick(
         &self,
