@@ -73,7 +73,7 @@ const STEP: f32 = 0.42;
 pub fn closed(map: &Map, blocks: &Registry<BlockDef>, c: IVec3) -> bool {
     let b = map.block(c);
     if b != AIR {
-        return blocks.at(b).solid;
+        return blocks.at(b).blocks_movement();
     }
     for z in (0..c.z.min(HEIGHT)).rev() {
         let below = map.block(IVec3::new(c.x, c.y, z));
@@ -245,7 +245,7 @@ pub fn place(
     // Light: sampled at chest height, eased so walking under a tree fades.
     let solid = |c: IVec3| {
         let b = map.block(c);
-        b != AIR && blocks.at(b).solid && blocks.at(b).walkable
+        b != AIR && blocks.at(b).blocks_movement() && blocks.at(b).walkable
     };
     let target = if sunlit(pos + Vec3::Z * 0.9, solid) {
         1.0

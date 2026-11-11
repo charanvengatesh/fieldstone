@@ -21,8 +21,8 @@ use crate::player::{Player, figure_faces, figure_texture};
 use crate::world::iso::View;
 use crate::world::light;
 use crate::world::mesh::{
-    Faces, Grid, LEVELS, Quality, SeeThrough, chunk_faces, cloud_cover, cloud_drift, compose,
-    see_through_target, unpack_flags,
+    Faces, Grid, LEVELS, Quality, SUBMERGED, SeeThrough, WATER_ALPHA, chunk_faces, cloud_cover,
+    cloud_drift, compose, see_through_target, unpack_flags,
 };
 
 /// Time-of-day inputs the block drawing needs.
@@ -102,6 +102,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
         day: daylight(clock.frac()),
         drift: cloud_drift(time),
     };
+    let mut waters = Vec::new();
     for chunk in map.chunks.keys() {
         let lamps = light::flood(
             *chunk,
@@ -114,7 +115,18 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let origin = (*chunk * CHUNK).extend(0).as_vec3();
-        canvas.draw_blocks(origin, view, &faces, tiles, time, player_target, &lighting);
+        canvas.draw_blocks(
+            origin,
+            view,
+            &faces.solid,
+            tiles,
+            time,
+            player_target,
+            &lighting,
+        );
+        if faces.water.len() > 0 {
+            waters.push((origin, faces.water));
+        }
     }
     let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
     let mut figure = figure_faces(facing, frame, view.tilt);
@@ -127,6 +139,10 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     let c = crate::player::figure_light(lit, lamp, &lighting.day);
     figure.colors = vec![[c.x, c.y, c.z, 1.0]; 4];
     canvas.draw(at, &figure, &figure_texture());
+    // Water goes over everything solid, the player included when they are under it.
+    for (origin, faces) in &waters {
+        canvas.draw_water(*origin, view, faces, tiles, time, player_target, &lighting);
+    }
     canvas.save(name)
 }
 
@@ -385,6 +401,7 @@ impl Canvas {
                 texel.red * mix(&|k| faces.colors[k][0]),
                 texel.green * mix(&|k| faces.colors[k][1]),
                 texel.blue * mix(&|k| faces.colors[k][2]),
+                1.0,
             ])
         });
     }
@@ -407,6 +424,37 @@ impl Canvas {
         player: Vec4,
         lighting: &Lighting,
     ) {
+        self.draw_pass(origin, view, faces, tiles, time, player, lighting, false);
+    }
+
+    /// Draws water surfaces the way `assets/shaders/water.wgsl` does: blended over what is
+    /// under them, with foam where the outline mask marks a shore.
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_water(
+        &mut self,
+        origin: Vec3,
+        view: View,
+        faces: &Faces,
+        tiles: &Tiles,
+        time: f32,
+        player: Vec4,
+        lighting: &Lighting,
+    ) {
+        self.draw_pass(origin, view, faces, tiles, time, player, lighting, true);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_pass(
+        &mut self,
+        origin: Vec3,
+        view: View,
+        faces: &Faces,
+        tiles: &Tiles,
+        time: f32,
+        player: Vec4,
+        lighting: &Lighting,
+        water_pass: bool,
+    ) {
         let Some(tex) = tiles.image.data.as_ref() else {
             return;
         };
@@ -414,7 +462,7 @@ impl Canvas {
         let tile = TILE as f32;
         let place = |p: [f32; 3]| view.project(origin + Vec3::from(p));
         let (scale, center, width, height) = (self.scale, self.center, self.width, self.height);
-        self.raster(place, faces, |faces, i, w| {
+        self.raster_blend(place, faces, water_pass, |faces, i, w| {
             // See-through, as the shader does it: the fragment's screen position and depth.
             if player.w > 0.0 {
                 let pos = (0..3)
@@ -463,7 +511,7 @@ impl Canvas {
                 channels += Vec3::new(c[0], c[1], c[2]) * wc[k];
             }
             channels = channels.max(Vec3::ZERO);
-            let (mask, water, top) = unpack_flags(faces.colors[i[0]][3]);
+            let (mask, water, top, submerged) = unpack_flags(faces.colors[i[0]][3]);
             // Clouds pass over the tops of things, by world position.
             let cloud = if top {
                 let world = (0..3)
@@ -487,16 +535,30 @@ impl Canvas {
             }
             let at = cell + sample;
             let t = ((at.y as usize) * tiles.size.x as usize + at.x as usize) * 4;
+            if tex[t + 3] < 128 {
+                // A hole in a cutout tile.
+                return None;
+            }
             let texel_colour = Color::srgb_u8(tex[t], tex[t + 1], tex[t + 2]).to_linear();
             let mut c = Vec3::new(texel_colour.red, texel_colour.green, texel_colour.blue) * light;
+            if submerged {
+                c *= SUBMERGED;
+            }
             let edge = (mask & 1 != 0 && local.y < 0.5)
                 || (mask & 2 != 0 && local.x > tile - 1.5)
                 || (mask & 4 != 0 && local.y > tile - 1.5)
                 || (mask & 8 != 0 && local.x < 0.5);
+            if water {
+                // Foam along a shore instead of ink; the surface lets the bed show through.
+                if edge && top {
+                    c = c.lerp(light * 0.9, 0.7);
+                }
+                return Some([c.x, c.y, c.z, if top { WATER_ALPHA } else { 0.85 }]);
+            }
             if edge {
                 c *= Vec3::new(0.50, 0.50, 0.58);
             }
-            Some(c.to_array())
+            Some([c.x, c.y, c.z, 1.0])
         });
     }
 
@@ -507,7 +569,19 @@ impl Canvas {
         &mut self,
         place: impl Fn([f32; 3]) -> Vec3,
         faces: &Faces,
-        shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 3]>,
+        shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 4]>,
+    ) {
+        self.raster_blend(place, faces, false, shade);
+    }
+
+    /// [`Canvas::raster`], and with `blend` the result's alpha mixes it over what is there
+    /// without claiming the depth, as the water pass does.
+    fn raster_blend(
+        &mut self,
+        place: impl Fn([f32; 3]) -> Vec3,
+        faces: &Faces,
+        blend: bool,
+        shade: impl Fn(&Faces, [usize; 3], [f32; 3]) -> Option<[f32; 4]>,
     ) {
         let (width, height, scale, center) = (self.width, self.height, self.scale, self.center);
         let to_px = |p: Vec3| {
@@ -548,8 +622,15 @@ impl Canvas {
                             continue;
                         }
                         if let Some(color) = shade(faces, i, w) {
-                            self.depth[at] = depth;
-                            self.color[at] = color;
+                            if blend {
+                                let a = color[3];
+                                for (dst, src) in self.color[at].iter_mut().zip(color) {
+                                    *dst += (src - *dst) * a;
+                                }
+                            } else {
+                                self.depth[at] = depth;
+                                self.color[at] = [color[0], color[1], color[2]];
+                            }
                         }
                     }
                 }
@@ -626,7 +707,16 @@ pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
     canvas.draw_blocks(
         Vec3::ZERO,
         View::default(),
-        &faces,
+        &faces.solid,
+        tiles,
+        0.0,
+        Vec4::ZERO,
+        &noon,
+    );
+    canvas.draw_water(
+        Vec3::ZERO,
+        View::default(),
+        &faces.water,
         tiles,
         0.0,
         Vec4::ZERO,

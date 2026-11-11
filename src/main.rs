@@ -89,7 +89,8 @@ fn main() {
         .init_asset::<Mesh>()
         .init_asset::<ColorMaterial>()
         .init_asset::<Image>()
-        .init_asset::<world::mesh::BlockArt>();
+        .init_asset::<world::mesh::BlockArt>()
+        .init_asset::<world::mesh::WaterArt>();
     } else {
         app.add_plugins(
             DefaultPlugins
@@ -158,6 +159,7 @@ fn main() {
     } else {
         app.add_plugins((
             bevy::sprite_render::Material2dPlugin::<world::mesh::BlockArt>::default(),
+            bevy::sprite_render::Material2dPlugin::<world::mesh::WaterArt>::default(),
             camera::CameraPlugin,
             sky::SkyPlugin,
             debug::DebugPlugin,

@@ -47,15 +47,21 @@ them from `color`, `top` (top face, when it differs) and `accent` (a second colo
 | `Bricks` | courses with `accent` mortar |
 | `Ore` | stone with nuggets of `accent` |
 | `Water` | wave dashes; the shader makes them move |
+| `Glass` | a rim and two glints around a hole (use with `cutout: true`) |
+| `Tuft`, `Flower`, `Mushroom`, `Pebbles`, `Torch` | upright sprites for `shape: Cross` props: blades in `color`; a stem with a bloom in `accent`; a stalk in `color` under a cap in `top` with `accent` spots; stones in `color`; a stick in `color` with a flame in `top` |
 
 To draw your own instead, put PNGs in the pack: `textures/<id>_top.png` and
 `textures/<id>_side.png`, or one `textures/<id>.png` for both. Each is 16 x 16, drawn the
 usual way up.
 
-Other fields: `light` (1 to 15: the block is a light source and lights the air around it,
-one level less per block, through anything that is not solid), `glow` (0..1, the least
-brightness the block's own texels ever have, so a lamp looks lit in shadow), `solid`, `walkable` (false for water: nothing stands on or over it until something
-is built there), `hp` (seconds to break), `breakable`, `drops` (an item id; the block itself
+Other fields: `shape: Cross` (two crossed upright quads drawn from the side tile instead
+of a cube: plants, torches; never blocks the way, breaks in a touch, lets light through),
+`cutout: true` (texels with alpha under one half are holes, as `Leaves` and `Glass` draw
+them; the faces behind the block are drawn and light passes), `light` (1 to 15: the block
+is a light source and lights the air around it, one level less per block, through anything
+that is not a solid cube), `glow` (0..1, the least brightness the block's own texels ever
+have, so a lamp looks lit in shadow), `solid`, `walkable` (false for water and lava: nothing stands on or over them until
+something is built there; water is drawn see-through, blended over its bed), `hp` (seconds to break), `breakable`, `drops` (an item id; the block itself
 when absent), `item` (false to make no item). Blocks with the same `color` and `top` are one
 family and get no outline between them, which is how ore sits cleanly in stone.
 

@@ -2,7 +2,8 @@
 // from `color`, `top` and `accent` by `pattern`; a pack can replace them with
 // textures/<id>_top.png and textures/<id>_side.png. `hp` is seconds to break by hand.
 // A block gets an item that places it unless `item: false`. `light` 1 to 15 makes it a
-// light source; `glow` keeps its own texels bright in shade.
+// light source; `glow` keeps its own texels bright in shade. `cutout` tiles have holes;
+// `shape: Cross` is an upright sprite prop drawn from the side tile.
 [
     (id: "bedrock",  name: "Bedrock",  color: (58, 56, 68), pattern: Stone, breakable: false, item: false),
     (id: "stone",    name: "Stone",    color: (132, 134, 142), pattern: Stone, hp: 1.6),
@@ -12,10 +13,17 @@
     (id: "snow",     name: "Snow",     color: (228, 234, 242), pattern: Snow, hp: 0.3),
     (id: "water",    name: "Water",    color: (52, 112, 196), pattern: Water, walkable: false, breakable: false, item: false),
     (id: "log",      name: "Log",      color: (104, 72, 44), top: Some((184, 146, 92)), pattern: Log, hp: 0.9),
-    (id: "leaves",   name: "Leaves",   color: (62, 132, 60), pattern: Leaves, hp: 0.2),
+    (id: "leaves",   name: "Leaves",   color: (62, 132, 60), pattern: Leaves, cutout: true, hp: 0.2),
     (id: "coal_ore", name: "Coal Ore", color: (132, 134, 142), accent: Some((44, 44, 54)), pattern: Ore, hp: 1.8),
     (id: "iron_ore", name: "Iron Ore", color: (132, 134, 142), accent: Some((214, 150, 112)), pattern: Ore, hp: 2.2),
+    (id: "glass",    name: "Glass",    color: (196, 226, 240), pattern: Glass, cutout: true, hp: 0.3),
     // Light sources: `light` spreads 15 levels at most, one less per block.
-    (id: "torch",    name: "Torch",    color: (238, 186, 86), top: Some((255, 226, 150)), pattern: Smooth, glow: 1.0, light: 14, hp: 0.2),
+    (id: "torch",    name: "Torch",    color: (110, 78, 46), top: Some((255, 214, 96)), pattern: Torch, shape: Cross, glow: 1.0, light: 14, hp: 0.1),
     (id: "lava",     name: "Lava",     color: (222, 92, 28), top: Some((250, 158, 44)), pattern: Water, glow: 0.9, light: 12, walkable: false, hp: 0.8),
+    // Props: crossed sprites that never block the way and break at a touch.
+    (id: "tuft",     name: "Grass Tuft", color: (88, 160, 62), pattern: Tuft, shape: Cross, hp: 0.05, item: false),
+    (id: "flower",   name: "Flower",   color: (96, 150, 60), accent: Some((236, 92, 112)), pattern: Flower, shape: Cross, hp: 0.05),
+    (id: "bluebell", name: "Bluebell", color: (96, 150, 60), accent: Some((110, 130, 232)), pattern: Flower, shape: Cross, hp: 0.05),
+    (id: "mushroom", name: "Mushroom", color: (222, 206, 176), top: Some((196, 72, 50)), accent: Some((250, 240, 220)), pattern: Mushroom, shape: Cross, hp: 0.05),
+    (id: "pebbles",  name: "Pebbles",  color: (150, 148, 150), pattern: Pebbles, shape: Cross, hp: 0.05),
 ]

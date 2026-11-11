@@ -28,4 +28,11 @@
             ["s ", "  "],
         ],
         legend: { 's': "stone" }),
+
+    // One-cell props.
+    (id: "tuft",     layers: [["g"]], legend: { 'g': "tuft" }),
+    (id: "flower",   layers: [["f"]], legend: { 'f': "flower" }),
+    (id: "bluebell", layers: [["b"]], legend: { 'b': "bluebell" }),
+    (id: "mushroom", layers: [["m"]], legend: { 'm': "mushroom" }),
+    (id: "pebbles",  layers: [["p"]], legend: { 'p': "pebbles" }),
 ]

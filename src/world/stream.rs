@@ -6,9 +6,10 @@ use std::time::Instant;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::math::Affine3A;
 use bevy::prelude::*;
+use bevy::sprite_render::{Material2d, MeshMaterial2d};
 
 use super::iso::View;
-use super::mesh::{BlockMaterial, Grid, Quality, chunk_faces};
+use super::mesh::{BlockMaterial, Faces, Grid, Quality, WaterMaterial, chunk_faces};
 use super::tiles::Tiles;
 use super::worldgen::WorldGen;
 use super::{CHUNK, Chunk, Focus, HEIGHT, Map, chunk_of, light};
@@ -139,6 +140,9 @@ pub fn stream(
         if let Some(e) = map.entities.remove(&pos) {
             commands.entity(e).despawn();
         }
+        if let Some(e) = map.waters.remove(&pos) {
+            commands.entity(e).despawn();
+        }
     }
     // Generation gets the smaller share of the frame's budget; meshing gets the rest.
     let budget = streaming.budget_ms * 0.4;
@@ -207,12 +211,13 @@ pub fn remesh(
     wg: Res<WorldGen>,
     tiles: Option<Res<Tiles>>,
     material: Option<Res<BlockMaterial>>,
+    water: Option<Res<WaterMaterial>>,
     mut perf: ResMut<Perf>,
     mut map: ResMut<Map>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut commands: Commands,
 ) {
-    let (Some(tiles), Some(material)) = (tiles, material) else {
+    let (Some(tiles), Some(material), Some(water)) = (tiles, material, water) else {
         return;
     };
     let center = chunk_of(focus.0.floor().as_ivec3());
@@ -245,33 +250,22 @@ pub fn remesh(
         let faces = chunk_faces(pos, grid.0, *quality, &tiles, &lamps, |p| {
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
-        let quads = faces.len();
+        let quads = faces.solid.len() + faces.water.len();
+        // Each mesh keeps or loses its entity on its own.
         let old = map.entities.remove(&pos);
-        if quads == 0 {
-            if let Some(e) = old {
-                commands.entity(e).despawn();
-            }
-        } else {
-            let mesh = Mesh2d(meshes.add(faces.into_mesh()));
-            let e = match old {
-                Some(e) => {
-                    commands.entity(e).insert(mesh);
-                    e
-                }
-                None => commands
-                    .spawn((
-                        ChunkMesh(pos),
-                        mesh,
-                        MeshMaterial2d(material.0.clone()),
-                        Transform::default(),
-                        // Loaded chunks are on screen by construction, so culling would
-                        // only cost time, and its bounds are not meant for sheared
-                        // transforms.
-                        NoFrustumCulling,
-                    ))
-                    .id(),
-            };
+        if let Some(e) = place(
+            faces.solid,
+            old,
+            &material.0,
+            pos,
+            &mut meshes,
+            &mut commands,
+        ) {
             map.entities.insert(pos, e);
+        }
+        let old = map.waters.remove(&pos);
+        if let Some(e) = place(faces.water, old, &water.0, pos, &mut meshes, &mut commands) {
+            map.waters.insert(pos, e);
         }
         let chunk = map.chunks.get_mut(&pos).expect("listed above");
         chunk.dirty = false;
@@ -280,6 +274,42 @@ pub fn remesh(
         perf.meshed += 1;
     }
     perf.mesh_ms = started.elapsed().as_secs_f32() * 1000.0;
+}
+
+/// Puts `faces` on `old` or a new entity with `material`, or despawns `old` when there is
+/// nothing to draw. Returns the entity that now draws the chunk, if any.
+fn place<M: Material2d>(
+    faces: Faces,
+    old: Option<Entity>,
+    material: &Handle<M>,
+    pos: IVec2,
+    meshes: &mut Assets<Mesh>,
+    commands: &mut Commands,
+) -> Option<Entity> {
+    if faces.len() == 0 {
+        if let Some(e) = old {
+            commands.entity(e).despawn();
+        }
+        return None;
+    }
+    let mesh = Mesh2d(meshes.add(faces.into_mesh()));
+    Some(match old {
+        Some(e) => {
+            commands.entity(e).insert(mesh);
+            e
+        }
+        None => commands
+            .spawn((
+                ChunkMesh(pos),
+                mesh,
+                MeshMaterial2d(material.clone()),
+                Transform::default(),
+                // Loaded chunks are on screen by construction, so culling would only
+                // cost time, and its bounds are not meant for sheared transforms.
+                NoFrustumCulling,
+            ))
+            .id(),
+    })
 }
 
 /// Gives every chunk mesh the view's projection as its transform. The mesh is in world

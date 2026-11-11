@@ -58,6 +58,8 @@ impl Chunk {
 pub struct Map {
     pub chunks: HashMap<IVec2, Chunk>,
     pub entities: HashMap<IVec2, Entity>,
+    /// The entity drawing each chunk's water, where it has any.
+    pub waters: HashMap<IVec2, Entity>,
     pub parked: HashMap<IVec2, Blocks>,
 }
 

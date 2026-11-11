@@ -73,6 +73,28 @@ pub enum Pattern {
     Ore,
     /// Wave dashes; the shader makes them move.
     Water,
+    /// Clear with a rim and two glints; a cutout.
+    Glass,
+    /// A clump of grass blades, for a cross prop.
+    Tuft,
+    /// A stem with a bloom in the `accent` colour, for a cross prop.
+    Flower,
+    /// A stalk with a cap in the `top` colour, for a cross prop.
+    Mushroom,
+    /// A few small stones lying low, for a cross prop.
+    Pebbles,
+    /// A stick with a flame in the `top` colour, for a cross prop.
+    Torch,
+}
+
+/// How a block fills its cell.
+#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Shape {
+    #[default]
+    Cube,
+    /// Two upright quads crossing at the centre, drawn from the side tile: plants, torches.
+    /// Cross blocks never block movement and are see-through.
+    Cross,
 }
 
 /// `blocks.ron`: one kind of cube. Its tiles are generated from `color`, `top` and `accent`
@@ -100,6 +122,12 @@ pub struct BlockDef {
     /// per block.
     #[serde(default)]
     pub light: u8,
+    #[serde(default)]
+    pub shape: Shape,
+    /// Texels with alpha under one half are holes: leaves with gaps, glass. The faces behind
+    /// a cutout block are drawn, and light passes through it.
+    #[serde(default)]
+    pub cutout: bool,
     /// Blocks movement and can be stood on.
     #[serde(default = "yes")]
     pub solid: bool,
@@ -139,6 +167,8 @@ impl BlockDef {
             pattern: Pattern::Smooth,
             glow: 0.0,
             light: 0,
+            shape: Shape::Cube,
+            cutout: false,
             solid: false,
             walkable: true,
             hp: 0.0,
@@ -146,6 +176,16 @@ impl BlockDef {
             drops: None,
             item: false,
         }
+    }
+
+    /// Whether a body cannot pass through this block: solid cubes only.
+    pub fn blocks_movement(&self) -> bool {
+        self.solid && self.shape == Shape::Cube
+    }
+
+    /// Whether light and the faces behind it show through: air, water, cutouts and props.
+    pub fn see_through(&self) -> bool {
+        self.pattern == Pattern::Water || self.cutout || self.shape == Shape::Cross
     }
 }
 

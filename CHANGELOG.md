@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.9.2
+
+World: see-through water, leaves with gaps, glass, and small plants and stones.
+
+### New
+- Transparent water: each chunk's water surfaces are a second mesh (`WaterArt`,
+  `shaders/water.wgsl`) blended over what lies under them. The bed is drawn, tinted
+  blue and darker, and the shore gets foam along the water's edge instead of ink.
+- Cutouts: `cutout: true` on a block makes alpha holes in its tiles real. Leaves have
+  gaps, `glass` is a rimmed pane. Faces behind a cutout are drawn and light passes through.
+- Props: `shape: Cross` blocks are two upright quads from the side tile, lit as tops, never
+  in the way and gone in a touch. Patterns `Tuft`, `Flower`, `Mushroom`, `Pebbles`,
+  `Torch`. Base scatters tufts, flowers, bluebells, mushrooms in the shade and pebbles on
+  sand and stone; the torch is a prop now.
+- Harness scenarios: walking through props, standing over water, a snapshot with glass and
+  props; unit tests for the water split, the submerged flag, cutout culling and cross quads.
+
+### Changed
+- `Tiles` carries `cross` and `see_through` per block; `BlockDef::blocks_movement` is what
+  physics asks (solid cubes only). Vertex flags gained a `submerged` bit.
+- Only cubes (leaves included) cast shadows and darken corners; water and props do not.
+
 ## 0.9.1
 
 Light: block light, a day that passes, a sky, cloud shadows.

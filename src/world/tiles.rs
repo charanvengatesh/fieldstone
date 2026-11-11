@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::core::packs::LoadedPacks;
-use crate::core::{BlockDef, Pattern, Registry, Rgb, hash01};
+use crate::core::{BlockDef, Pattern, Registry, Rgb, Shape, hash01};
 
 /// Texels per side of a tile.
 pub const TILE: u32 = 16;
@@ -33,8 +33,12 @@ pub struct Tiles {
     pub glow: Vec<f32>,
     /// Per block: light given off, 0 to 15.
     pub light: Vec<u8>,
-    /// Per block: whether light and sight pass through it (air does; so would glass).
+    /// Per block: whether light and sight pass through it (air, water, cutouts, props).
     pub passes: Vec<bool>,
+    /// Per block: drawn as two crossed upright quads instead of a cube.
+    pub cross: Vec<bool>,
+    /// Per block: the faces behind it are drawn too (water, cutouts, props).
+    pub see_through: Vec<bool>,
     /// Per block: blocks with the same base and top colour share a number, and no outline
     /// is drawn between them (ore set in stone).
     pub family: Vec<u16>,
@@ -56,6 +60,9 @@ struct Px {
     color: Rgb,
     step: i32,
 }
+
+/// A `step` that means "no texel here": the tile is see-through at that spot.
+const HOLE: i32 = i32::MIN;
 
 /// Moves a colour along its ramp: negative steps darken and cool, positive lighten and warm.
 pub fn ramp(c: Rgb, step: i32) -> Rgb {
@@ -84,6 +91,13 @@ pub fn draw(def: &BlockDef) -> (Tile, Tile) {
     let top = def.top.unwrap_or(base);
     let accent = def.accent.unwrap_or(ramp(base, 2));
     let px = |color: Rgb, step: i32| Px { color, step };
+    let hole = Px {
+        color: base,
+        step: HOLE,
+    };
+    // A prop is drawn on the side tile (upright, row 0 at the ground); its top tile is the
+    // same picture, for the item icon.
+    let within = |x: i32, lo: i32, hi: i32| x >= lo && x <= hi;
 
     let grain = |c: Rgb, x: i32, y: i32| {
         let r = h(x, y, 1);
@@ -187,6 +201,7 @@ pub fn draw(def: &BlockDef) -> (Tile, Tile) {
                             grain(base, x, y)
                         }
                     }
+                    Pattern::Leaves if def.cutout && h(x / 2, y / 2, 3) < 0.10 => hole,
                     Pattern::Leaves => {
                         let clump = h(x / 2, y / 2, 3);
                         let r = h(x, y, 1);
@@ -293,7 +308,104 @@ pub fn draw(def: &BlockDef) -> (Tile, Tile) {
                             px(c, 0)
                         }
                     }
+                    Pattern::Glass => {
+                        let rim = x == 0 || y == 0 || x == T - 1 || y == T - 1;
+                        if rim {
+                            px(base, if x == 0 || y == T - 1 { 1 } else { 0 })
+                        } else if (x == 3 && within(y, 10, 12)) || (x == 4 && y == 13) {
+                            px(base, 2)
+                        } else {
+                            hole
+                        }
+                    }
+                    Pattern::Tuft => {
+                        // Five blades of different heights, leaning apart at the tips.
+                        let blades = [(2, 9), (5, 12), (8, 10), (11, 13), (14, 8)];
+                        let mut p = hole;
+                        for (i, (bx, height)) in blades.iter().enumerate() {
+                            let lean = if y > height / 2 {
+                                (i as i32 % 3) - 1
+                            } else {
+                                0
+                            };
+                            if y < *height && x == bx + lean {
+                                p = px(base, if y >= height - 2 { 1 } else { 0 });
+                            }
+                        }
+                        p
+                    }
+                    Pattern::Flower => {
+                        let bloom = within(x, 6, 9) && within(y, 8, 11);
+                        let petal_edge = (x == 6 || x == 9) && (y == 8 || y == 11);
+                        if bloom && !petal_edge {
+                            px(accent, if x == 7 && y == 10 { 2 } else { 0 })
+                        } else if x == 7 && y < 8 {
+                            px(base, 0)
+                        } else if (within(x, 5, 6) && y == 3) || (within(x, 8, 9) && y == 5) {
+                            px(base, 1)
+                        } else {
+                            hole
+                        }
+                    }
+                    Pattern::Mushroom => {
+                        let cap = (y == 5 && within(x, 3, 11))
+                            || (within(y, 6, 7) && within(x, 2, 12))
+                            || (y == 8 && within(x, 3, 11))
+                            || (y == 9 && within(x, 5, 9));
+                        if cap {
+                            let spot =
+                                (x == 4 && y == 7) || (x == 9 && y == 8) || (x == 7 && y == 6);
+                            px(if spot { accent } else { top }, if y >= 8 { 1 } else { 0 })
+                        } else if within(x, 6, 8) && y < 5 {
+                            px(base, if x == 6 { -1 } else { 0 })
+                        } else {
+                            hole
+                        }
+                    }
+                    Pattern::Pebbles => {
+                        let stones = [(3, 1, 2), (9, 1, 3), (13, 1, 1)];
+                        let mut p = hole;
+                        for (cx, cy, r) in stones {
+                            let (dx, dy) = (x - cx, (y - cy) * 2);
+                            if dx * dx + dy * dy <= r * r + 1 {
+                                p = px(
+                                    base,
+                                    if dy < 0 && dx <= 0 {
+                                        1
+                                    } else if dy > 0 {
+                                        -1
+                                    } else {
+                                        0
+                                    },
+                                );
+                            }
+                        }
+                        p
+                    }
+                    Pattern::Torch => {
+                        if within(x, 7, 8) && y < 10 {
+                            px(base, if x == 7 { 0 } else { -1 })
+                        } else if (within(x, 6, 9) && within(y, 10, 12))
+                            || (within(x, 7, 8) && y == 13)
+                            || (x == 7 && y == 14)
+                        {
+                            px(
+                                top,
+                                if within(x, 7, 8) && within(y, 10, 11) {
+                                    2
+                                } else {
+                                    0
+                                },
+                            )
+                        } else {
+                            hole
+                        }
+                    }
                 };
+                if p.step == HOLE {
+                    tile.push([0, 0, 0, 0]);
+                    continue;
+                }
                 let c = ramp(p.color, p.step);
                 tile.push([c[0], c[1], c[2], 255]);
             }
@@ -356,7 +468,15 @@ pub fn atlas(blocks: &Registry<BlockDef>, packs: Option<&LoadedPacks>) -> (Image
             .collect(),
         glow: blocks.iter().map(|(_, b)| b.glow.clamp(0.0, 1.0)).collect(),
         light: blocks.iter().map(|(_, b)| b.light.min(15)).collect(),
-        passes: blocks.iter().map(|(_, b)| !b.solid).collect(),
+        passes: blocks
+            .iter()
+            .map(|(_, b)| !b.solid || b.see_through())
+            .collect(),
+        cross: blocks
+            .iter()
+            .map(|(_, b)| b.shape == Shape::Cross)
+            .collect(),
+        see_through: blocks.iter().map(|(_, b)| b.see_through()).collect(),
         family: blocks
             .iter()
             .map(|(i, b)| {

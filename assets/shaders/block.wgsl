@@ -1,6 +1,7 @@
 // Block faces. The texture is the tile atlas; the vertex colour carries light as channels
 // (r sun, g block light, b ambient) that are mixed by the time of day here, and in alpha
-// the face's outline mask, water flag and top flag (see pack_flags in src/world/mesh.rs).
+// the face's outline mask, water, top and submerged flags (pack_flags in src/world/mesh.rs).
+// Water surfaces are drawn by water.wgsl, which shares the light and texel logic here.
 //
 // Three things happen here that make the result read as pixel art rather than as lit
 // polygons: light is evaluated at the centre of each texel instead of each screen pixel,
@@ -42,6 +43,7 @@ const TILE: f32 = 16.0;
 const SHADE_TINT: vec3<f32> = vec3<f32>(0.80, 0.88, 1.08);
 const SUN_TINT: vec3<f32> = vec3<f32>(1.06, 1.0, 0.90);
 const TORCH: vec3<f32> = vec3<f32>(1.0, 0.80, 0.55);
+const SUBMERGED: vec3<f32> = vec3<f32>(0.50, 0.68, 0.92);
 
 fn hash(p: vec2<f32>) -> f32 {
     let h = dot(p, vec2<f32>(127.1, 311.7));
@@ -151,10 +153,11 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     channels = max(channels, vec3<f32>(0.0));
 
-    let flags = i32(round(in.color.a * 64.0));
+    let flags = i32(round(in.color.a * 128.0));
     let mask = flags % 16;
     let water = (flags / 16) % 2 == 1;
-    let top = flags >= 32;
+    let top = (flags / 32) % 2 == 1;
+    let submerged = flags >= 64;
 
     // Clouds pass over the tops of things, by world position.
     let world = (block.inverse * vec4<f32>(in.world_position.xyz, 0.0)).xyz;
@@ -182,7 +185,15 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     let uv = (cell + sample_at + vec2<f32>(0.5)) / size;
-    var color = textureSampleLevel(atlas, atlas_sampler, uv, 0.0).rgb * light + vec3<f32>(glint);
+    let texel_color = textureSampleLevel(atlas, atlas_sampler, uv, 0.0);
+    // Holes in cutout tiles: leaves, glass, props.
+    if (texel_color.a < 0.5) {
+        discard;
+    }
+    var color = texel_color.rgb * light + vec3<f32>(glint);
+    if (submerged) {
+        color = color * SUBMERGED;
+    }
 
     // Outline: the border texels of the tile on the sides the mask names.
     let edge = ((mask & 1) != 0 && local.y < 0.5)

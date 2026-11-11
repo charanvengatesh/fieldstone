@@ -118,6 +118,26 @@ impl Material2d for BlockArt {
     }
 }
 
+/// The water material: the same inputs as [`BlockArt`], blended over what lies under the
+/// surface, in `shaders/water.wgsl`. Drawn after the solid pass without writing depth.
+#[derive(Asset, TypePath, AsBindGroup, Clone)]
+pub struct WaterArt {
+    #[uniform(0)]
+    pub block: BlockParams,
+    #[texture(1)]
+    #[sampler(2)]
+    pub atlas: Handle<Image>,
+}
+
+impl Material2d for WaterArt {
+    fn fragment_shader() -> bevy::shader::ShaderRef {
+        "shaders/water.wgsl".into()
+    }
+    fn alpha_mode(&self) -> AlphaMode2d {
+        AlphaMode2d::Blend
+    }
+}
+
 /// Radius of the see-through window around the player, in texels, at its widest.
 pub const SEE_THROUGH_RADIUS: f32 = 26.0;
 
@@ -135,27 +155,35 @@ impl Default for SeeThrough {
 #[derive(Resource)]
 pub struct BlockMaterial(pub Handle<BlockArt>);
 
+/// The material every chunk's water shares.
+#[derive(Resource)]
+pub struct WaterMaterial(pub Handle<WaterArt>);
+
 pub fn setup(
     blocks: Res<Registry<BlockDef>>,
     packs: Option<Res<LoadedPacks>>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<BlockArt>>,
+    mut waters: ResMut<Assets<WaterArt>>,
     mut commands: Commands,
 ) {
     let (image, tiles) = atlas(&blocks, packs.as_deref());
     let params = Vec4::new(0.0, tiles.size.x as f32, tiles.size.y as f32, LEVELS);
+    let block = BlockParams {
+        params,
+        player: Vec4::ZERO,
+        screen: Vec4::new(3.0, 0.0, 0.0, 0.0),
+        day: Vec4::new(1.0, 0.5, 0.0, 0.0),
+        sun_color: Vec4::ONE,
+        ambient_color: Vec4::ONE,
+        inverse: Mat4::IDENTITY,
+    };
+    let atlas = images.add(image);
     commands.insert_resource(BlockMaterial(materials.add(BlockArt {
-        block: BlockParams {
-            params,
-            player: Vec4::ZERO,
-            screen: Vec4::new(3.0, 0.0, 0.0, 0.0),
-            day: Vec4::new(1.0, 0.5, 0.0, 0.0),
-            sun_color: Vec4::ONE,
-            ambient_color: Vec4::ONE,
-            inverse: Mat4::IDENTITY,
-        },
-        atlas: images.add(image),
+        block,
+        atlas: atlas.clone(),
     })));
+    commands.insert_resource(WaterMaterial(waters.add(WaterArt { block, atlas })));
     commands.insert_resource(tiles);
 }
 
@@ -167,29 +195,36 @@ pub fn tick(
     see_through: Res<SeeThrough>,
     settings: Res<crate::core::settings::Settings>,
     handle: Option<Res<BlockMaterial>>,
+    water: Option<Res<WaterMaterial>>,
     player: Option<Single<&crate::player::Player>>,
     mut materials: ResMut<Assets<BlockArt>>,
+    mut waters: ResMut<Assets<WaterArt>>,
 ) {
-    let Some(handle) = handle else {
+    let (Some(handle), Some(water)) = (handle, water) else {
         return;
     };
-    if let Some(mut m) = materials.get_mut(&handle.0) {
-        m.block.params.x = time.elapsed_secs();
-        m.block.screen.x = settings.pixel_scale.clamp(1, 6) as f32;
-        let day = daylight(clock.frac());
-        m.block.day = Vec4::new(
-            day.level,
-            clock.frac(),
-            cloud_drift(time.elapsed_secs()),
-            0.0,
-        );
-        m.block.sun_color = day.sun.extend(1.0);
-        m.block.ambient_color = day.ambient.extend(1.0);
-        m.block.inverse = Mat4::from_mat3(view.matrix().inverse());
-        m.block.player = match player {
-            Some(p) => see_through_target(&view, p.body.pos.with_z(p.shown_z), see_through.0),
-            None => Vec4::ZERO,
-        };
+    let Some(mut m) = materials.get_mut(&handle.0) else {
+        return;
+    };
+    m.block.params.x = time.elapsed_secs();
+    m.block.screen.x = settings.pixel_scale.clamp(1, 6) as f32;
+    let day = daylight(clock.frac());
+    m.block.day = Vec4::new(
+        day.level,
+        clock.frac(),
+        cloud_drift(time.elapsed_secs()),
+        0.0,
+    );
+    m.block.sun_color = day.sun.extend(1.0);
+    m.block.ambient_color = day.ambient.extend(1.0);
+    m.block.inverse = Mat4::from_mat3(view.matrix().inverse());
+    m.block.player = match player {
+        Some(p) => see_through_target(&view, p.body.pos.with_z(p.shown_z), see_through.0),
+        None => Vec4::ZERO,
+    };
+    let block = m.block;
+    if let Some(mut w) = waters.get_mut(&water.0) {
+        w.block = block;
     }
 }
 
@@ -210,17 +245,22 @@ pub fn cloud_drift(secs: f32) -> f32 {
     secs * 0.6
 }
 
-/// Packs a face's outline mask, its water flag and whether it faces up into the vertex
-/// alpha.
-pub fn pack_flags(mask: u32, water: bool, top: bool) -> f32 {
-    (mask + 16 * water as u32 + 32 * top as u32) as f32 / 64.0
+/// Packs a face's outline mask, its water flag, whether it faces up and whether it lies
+/// under water into the vertex alpha.
+pub fn pack_flags(mask: u32, water: bool, top: bool, submerged: bool) -> f32 {
+    (mask + 16 * water as u32 + 32 * top as u32 + 64 * submerged as u32) as f32 / 128.0
 }
 
-/// The inverse of [`pack_flags`]: `(outline mask, water, top)`.
-pub fn unpack_flags(alpha: f32) -> (u32, bool, bool) {
-    let v = (alpha * 64.0).round() as u32;
-    (v % 16, (v / 16) % 2 == 1, v >= 32)
+/// The inverse of [`pack_flags`]: `(outline mask, water, top, submerged)`.
+pub fn unpack_flags(alpha: f32) -> (u32, bool, bool, bool) {
+    let v = (alpha * 128.0).round() as u32;
+    (v % 16, (v / 16) % 2 == 1, (v / 32) % 2 == 1, v >= 64)
 }
+
+/// How the ground under water is tinted: bluer and a little darker.
+pub const SUBMERGED: Vec3 = Vec3::new(0.50, 0.68, 0.92);
+/// Opacity of the water surface.
+pub const WATER_ALPHA: f32 = 0.66;
 
 /// Colour of a block's light.
 pub const TORCH: Vec3 = Vec3::new(1.0, 0.80, 0.55);
@@ -365,6 +405,32 @@ pub fn sunlit(point: Vec3, casts: impl Fn(IVec3) -> bool) -> bool {
     !shadowed(point, SUN, &casts)
 }
 
+/// The meshes of one chunk: the solid faces and, drawn after them with blending, the
+/// water surfaces.
+#[derive(Default)]
+pub struct ChunkFaces {
+    pub solid: Faces,
+    pub water: Faces,
+}
+
+/// A quad about to be lit and pushed.
+struct Quad {
+    /// The cell the quad belongs to, in the world.
+    p: IVec3,
+    /// Direction the quad faces, for shade and for which cells it looks into. A cross quad
+    /// looks up from its own cell.
+    normal: IVec3,
+    corners: [Vec3; 4],
+    /// Outline mask by tile edge, after turning.
+    mask: u32,
+    tile: u32,
+    rot: u32,
+    flip: bool,
+    /// A solid face against water: tinted under the surface.
+    submerged: bool,
+    cross: bool,
+}
+
 /// Builds every exposed face of chunk `pos` except undersides, which no view shows.
 /// `block` answers for any world position, including cells in neighbouring chunks.
 pub fn chunk_faces(
@@ -374,15 +440,18 @@ pub fn chunk_faces(
     tiles: &Tiles,
     light: &super::light::Grid,
     block: impl Fn(IVec3) -> u16,
-) -> Faces {
-    let mut out = Faces::default();
+) -> ChunkFaces {
+    let mut out = ChunkFaces::default();
     let origin = (pos * CHUNK).extend(0);
     let water = |b: u16| tiles.water.get(b as usize).copied().unwrap_or(false);
+    let cross = |b: u16| tiles.cross.get(b as usize).copied().unwrap_or(false);
+    let clear = |b: u16| b == AIR || tiles.see_through.get(b as usize).copied().unwrap_or(false);
     let family = |b: u16| tiles.family.get(b as usize).copied().unwrap_or(b);
-    // Anything but air and water blocks light.
+    // Cubes block the sun and darken corners, leaves with gaps included; water and props
+    // do not.
     let casts = |c: IVec3| {
         let b = block(c);
-        b != AIR && !water(b)
+        b != AIR && !water(b) && !cross(b)
     };
     // Normal, the four edge directions in corner order, which tile.
     let side = |n: IVec3| {
@@ -400,6 +469,12 @@ pub fn chunk_faces(
         side(IVec3::NEG_X),
         side(IVec3::NEG_Y),
     ];
+    // A face shows when the cell it looks into lets it be seen: air, or something
+    // see-through of another kind (water under water and leaves against leaves stay
+    // closed).
+    let shows = |id: u16, next: u16| next == AIR || (clear(next) && next != id);
+
+    let mut quads: Vec<Quad> = Vec::new();
     for z in 0..HEIGHT {
         for y in 0..CHUNK {
             for x in 0..CHUNK {
@@ -409,8 +484,29 @@ pub fn chunk_faces(
                 if id == AIR {
                     continue;
                 }
+                if cross(id) {
+                    let b = local.as_vec3();
+                    for (a, c) in [
+                        (b, b + Vec3::new(1.0, 1.0, 0.0)),
+                        (b + Vec3::X, b + Vec3::Y),
+                    ] {
+                        quads.push(Quad {
+                            p,
+                            normal: IVec3::Z,
+                            corners: [a, c, c + Vec3::Z, a + Vec3::Z],
+                            mask: 0,
+                            tile: 1,
+                            rot: 0,
+                            flip: false,
+                            submerged: false,
+                            cross: true,
+                        });
+                    }
+                    continue;
+                }
                 for (normal, edges, tile) in faces {
-                    if block(p + normal) != AIR {
+                    let next = block(p + normal);
+                    if !shows(id, next) {
                         continue;
                     }
                     let mut mask = 0u32;
@@ -418,7 +514,8 @@ pub fn chunk_faces(
                         // The same face on the neighbouring block continues this surface
                         // only when that block is of the same family and is also exposed.
                         let q = p + *e;
-                        let continues = family(block(q)) == family(id) && block(q + normal) == AIR;
+                        let continues =
+                            family(block(q)) == family(id) && shows(block(q), block(q + normal));
                         if grid || !continues {
                             mask |= 1 << bit;
                         }
@@ -434,71 +531,106 @@ pub fn chunk_faces(
                     } else {
                         (0, pick < 0.5)
                     };
-                    let flags =
-                        pack_flags(tile_mask(mask, rot, flip), water(id), normal == IVec3::Z);
-                    let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
-                    let shade = face_shade(normal);
-                    let lit = quality.shadows && normal.as_vec3().dot(SUN) > 0.0;
-                    let corners = corners(local, normal);
-                    let centre = corners.iter().sum::<Vec3>() / 4.0;
-                    let block_centre = local.as_vec3() + Vec3::splat(0.5);
-                    let lift = 1.0 + (z as f32 - MID) * RISE;
-                    let tile_origin = tiles.origin(id, tile);
-                    let mut lights = [0.0f32; 4];
-                    for (i, corner) in corners.iter().enumerate() {
-                        // The two neighbours beside this corner and the one diagonal to
-                        // it, all in the layer the face looks into.
-                        let toward = (*corner - block_centre).signum().as_ivec3();
-                        let mut sides = [IVec3::ZERO; 2];
-                        let mut n = 0;
-                        for a in 0..3 {
-                            if normal[a] == 0 {
-                                sides[n][a] = toward[a];
-                                n += 1;
-                            }
-                        }
-                        let cells = [
-                            p + normal,
-                            p + normal + sides[0],
-                            p + normal + sides[1],
-                            p + normal + sides[0] + sides[1],
-                        ];
-                        let mut open = 3;
-                        if quality.occlusion {
-                            let s1 = casts(cells[1]);
-                            let s2 = casts(cells[2]);
-                            let diagonal = casts(cells[3]);
-                            open = if s1 && s2 {
-                                0
-                            } else {
-                                3 - (s1 as usize + s2 as usize + diagonal as usize)
-                            };
-                        }
-                        // Block light: the brightest open cell beside the corner.
-                        let lamp = cells.iter().map(|c| light.at(*c)).max().unwrap_or(0) as f32
-                            / super::light::REACH as f32;
-                        // Shadow is sampled a quarter of the way in from the corner.
-                        let sample =
-                            origin.as_vec3() + corner.lerp(centre, 0.5) + normal.as_vec3() * 0.02;
-                        let shade_cast = lit && shadowed(sample, SUN, &casts);
-                        let ambient = shade * OCCLUSION[open] * lift;
-                        let sun = ambient * if shade_cast { 1.0 - SHADOW } else { 1.0 };
-                        lights[i] = sun.max(glow);
-                        let uv = (tile_origin
-                            + Vec2::splat(INSET)
-                            + tile_corner(i, rot, flip) * (TILE as f32 - 2.0 * INSET))
-                            / tiles.size.as_vec2();
-                        out.positions.push(corner.to_array());
-                        out.uvs.push(uv.to_array());
-                        out.colors
-                            .push([sun.max(glow), lamp.max(glow), ambient, flags]);
-                    }
-                    // Split along the brighter diagonal so a dark corner stays a corner.
-                    out.flips
-                        .push(lights[1] + lights[3] > lights[0] + lights[2]);
+                    quads.push(Quad {
+                        p,
+                        normal,
+                        corners: corners(local, normal),
+                        mask: tile_mask(mask, rot, flip),
+                        tile,
+                        rot,
+                        flip,
+                        submerged: !water(id) && water(next),
+                        cross: false,
+                    });
                 }
             }
         }
+    }
+
+    for q in quads {
+        let id = block(q.p);
+        let is_water = water(id);
+        let target = if is_water {
+            &mut out.water
+        } else {
+            &mut out.solid
+        };
+        let flags = pack_flags(
+            q.mask,
+            is_water,
+            q.normal == IVec3::Z && !q.cross,
+            q.submerged,
+        );
+        let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
+        let shade = if q.cross {
+            // Upright, but a little under full top light so it sits in its cell.
+            face_shade(IVec3::Z) * 0.92
+        } else {
+            face_shade(q.normal)
+        };
+        let lit = quality.shadows && q.normal.as_vec3().dot(SUN) > 0.0;
+        let centre = q.corners.iter().sum::<Vec3>() / 4.0;
+        let local = q.p - origin;
+        let block_centre = local.as_vec3() + Vec3::splat(0.5);
+        let lift = 1.0 + (local.z as f32 - MID) * RISE;
+        let tile_origin = tiles.origin(id, q.tile);
+        let mut lights = [0.0f32; 4];
+        for (i, corner) in q.corners.iter().enumerate() {
+            // The two neighbours beside this corner and the one diagonal to it, all in
+            // the layer the face looks into. A cross quad reads its own cell.
+            let cells = if q.cross {
+                [q.p; 4]
+            } else {
+                let toward = (*corner - block_centre).signum().as_ivec3();
+                let mut sides = [IVec3::ZERO; 2];
+                let mut n = 0;
+                for a in 0..3 {
+                    if q.normal[a] == 0 {
+                        sides[n][a] = toward[a];
+                        n += 1;
+                    }
+                }
+                [
+                    q.p + q.normal,
+                    q.p + q.normal + sides[0],
+                    q.p + q.normal + sides[1],
+                    q.p + q.normal + sides[0] + sides[1],
+                ]
+            };
+            let mut open = 3;
+            if quality.occlusion && !q.cross {
+                let s1 = casts(cells[1]);
+                let s2 = casts(cells[2]);
+                let diagonal = casts(cells[3]);
+                open = if s1 && s2 {
+                    0
+                } else {
+                    3 - (s1 as usize + s2 as usize + diagonal as usize)
+                };
+            }
+            // Block light: the brightest open cell beside the corner.
+            let lamp = cells.iter().map(|c| light.at(*c)).max().unwrap_or(0) as f32
+                / super::light::REACH as f32;
+            // Shadow is sampled a quarter of the way in from the corner.
+            let sample = origin.as_vec3() + corner.lerp(centre, 0.5) + q.normal.as_vec3() * 0.02;
+            let shade_cast = lit && shadowed(sample, SUN, &casts);
+            let ambient = shade * OCCLUSION[open] * lift;
+            let sun = ambient * if shade_cast { 1.0 - SHADOW } else { 1.0 };
+            lights[i] = sun.max(glow);
+            let uv = (tile_origin
+                + Vec2::splat(INSET)
+                + tile_corner(i, q.rot, q.flip) * (TILE as f32 - 2.0 * INSET))
+                / tiles.size.as_vec2();
+            target.positions.push(corner.to_array());
+            target.uvs.push(uv.to_array());
+            target
+                .colors
+                .push([sun.max(glow), lamp.max(glow), ambient, flags]);
+        }
+        // Split along the brighter diagonal so a dark corner stays a corner.
+        target
+            .flips
+            .push(lights[1] + lights[3] > lights[0] + lights[2]);
     }
     out
 }
@@ -533,7 +665,33 @@ mod tests {
         blocks.insert(ron::from_str(r#"(id: "b", color: (10, 20, 30))"#).unwrap());
         blocks
             .insert(ron::from_str(r#"(id: "lamp", color: (250, 240, 200), glow: 0.95)"#).unwrap());
+        // 4 water, 5 leaves with gaps, 6 a tuft.
+        blocks.insert(
+            ron::from_str(
+                r#"(id: "water", color: (50, 110, 200), pattern: Water, walkable: false)"#,
+            )
+            .unwrap(),
+        );
+        blocks.insert(
+            ron::from_str(r#"(id: "leaves", color: (60, 130, 60), pattern: Leaves, cutout: true)"#)
+                .unwrap(),
+        );
+        blocks.insert(
+            ron::from_str(r#"(id: "tuft", color: (90, 160, 60), pattern: Tuft, shape: Cross)"#)
+                .unwrap(),
+        );
         atlas(&blocks, None).1
+    }
+
+    fn both(world: impl Fn(IVec3) -> u16) -> ChunkFaces {
+        chunk_faces(
+            IVec2::ZERO,
+            false,
+            Quality::default(),
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            world,
+        )
     }
 
     fn mesh(world: impl Fn(IVec3) -> u16) -> Faces {
@@ -545,6 +703,7 @@ mod tests {
             &super::super::light::Grid::empty(),
             world,
         )
+        .solid
     }
 
     fn masks(f: &Faces) -> Vec<u32> {
@@ -564,10 +723,12 @@ mod tests {
         for mask in 0..16 {
             for water in [false, true] {
                 for top in [false, true] {
-                    assert_eq!(
-                        unpack_flags(pack_flags(mask, water, top)),
-                        (mask, water, top)
-                    );
+                    for under in [false, true] {
+                        assert_eq!(
+                            unpack_flags(pack_flags(mask, water, top, under)),
+                            (mask, water, top, under)
+                        );
+                    }
                 }
             }
         }
@@ -614,7 +775,8 @@ mod tests {
             &t,
             &super::super::light::Grid::empty(),
             floor,
-        );
+        )
+        .solid;
         assert!(masks(&g).iter().all(|m| *m == 15));
     }
 
@@ -689,7 +851,8 @@ mod tests {
             &tiles(),
             &super::super::light::Grid::empty(),
             world,
-        );
+        )
+        .solid;
         let flat = lights(&g, floor_quad(&g, 4, 5));
         assert!(flat.iter().all(|v| (*v - far[0]).abs() < 1e-6), "{flat:?}");
     }
@@ -719,7 +882,8 @@ mod tests {
             &tiles(),
             &super::super::light::Grid::empty(),
             world,
-        );
+        )
+        .solid;
         let unshaded = lights(&g, floor_quad(&g, 10, 7));
         assert!(
             unshaded.iter().all(|v| (*v - open).abs() < 1e-6),
@@ -778,6 +942,7 @@ mod tests {
                         &super::super::light::Grid::empty(),
                         |p| map.get(p).unwrap_or_else(|| wg.block(p)),
                     )
+                    .solid
                     .len();
                 }
             }
@@ -818,7 +983,8 @@ mod tests {
             &tiles(),
             &grid,
             |q| map.block(q),
-        );
+        )
+        .solid;
         let lamp = |q: usize| {
             f.colors[q * 4..q * 4 + 4]
                 .iter()
@@ -846,5 +1012,83 @@ mod tests {
         // Clouds dim the sun only.
         assert!(compose(open, &noon, 0.88).x < lit_day.x);
         assert_eq!(cloud_cover(Vec2::ZERO, 0.0, 0.2), 1.0);
+    }
+
+    #[test]
+    fn water_goes_in_its_own_mesh_and_tints_the_bed_under_it() {
+        // Sand (1) at z 0, water (4) at z 1 over the left half, air elsewhere.
+        let f = both(|p| match (p.z, p.x < 8) {
+            (0, _) => 1,
+            (1, true) => 4,
+            _ => 0,
+        });
+        assert!(f.water.len() > 0, "water surfaces");
+        // Every water quad is flagged water; no solid quad is.
+        assert!(f.water.colors.iter().all(|c| unpack_flags(c[3]).1));
+        assert!(f.solid.colors.iter().all(|c| !unpack_flags(c[3]).1));
+        // The sand under water is drawn (seen through it) and flagged submerged; dry sand
+        // is not.
+        let wet = floor_quad(&f.solid, 3, 3);
+        let dry = floor_quad(&f.solid, 12, 3);
+        assert!(
+            unpack_flags(f.solid.colors[wet * 4][3]).3,
+            "wet sand is submerged"
+        );
+        assert!(
+            !unpack_flags(f.solid.colors[dry * 4][3]).3,
+            "dry sand is not"
+        );
+        // Water tops only face air: no surfaces between water and water.
+        let tops = f
+            .water
+            .positions
+            .chunks(4)
+            .filter(|q| q.iter().all(|p| (p[2] - 2.0).abs() < 1e-6))
+            .count();
+        assert_eq!(tops, 8 * 16);
+    }
+
+    #[test]
+    fn faces_behind_leaves_are_drawn_and_leaves_do_not_touch_each_other() {
+        // A stone column at x 0 with a leaf block beside it at x 1, and another leaf at x 2.
+        let f = mesh(|p| match (p.x, p.y, p.z) {
+            (0, 0, 0) => 1,
+            (1, 0, 0) | (2, 0, 0) => 5,
+            _ => 0,
+        });
+        // Stone's +x face (toward the leaves) is present: the leaves have gaps.
+        let stone_px = f
+            .positions
+            .chunks(4)
+            .any(|q| q.iter().all(|p| (p[0] - 1.0).abs() < 1e-6 && p[1] <= 1.0));
+        assert!(stone_px, "stone shows through the leaves");
+        // Between the two leaf blocks there is no face at x 2 from either side.
+        let between = f
+            .positions
+            .chunks(4)
+            .filter(|q| {
+                q.iter()
+                    .all(|p| (p[0] - 2.0).abs() < 1e-6 && p[1] <= 1.0 && p[2] <= 1.0)
+            })
+            .count();
+        assert_eq!(between, 0, "leaves against leaves stay closed");
+    }
+
+    #[test]
+    fn a_cross_prop_is_two_upright_quads_from_the_side_tile() {
+        let f = mesh(|p| if p == IVec3::new(3, 3, 0) { 6 } else { 0 });
+        assert_eq!(f.len(), 2);
+        for q in 0..2 {
+            let pos: Vec<Vec3> = (0..4).map(|k| Vec3::from(f.positions[q * 4 + k])).collect();
+            // Bottom two corners at z 0, top two at z 1, running corner to corner of cell.
+            assert!(pos[0].z == 0.0 && pos[1].z == 0.0 && pos[2].z == 1.0 && pos[3].z == 1.0);
+            assert!((pos[1].truncate() - pos[0].truncate()).length() > 1.4);
+            let (mask, water, top, _) = unpack_flags(f.colors[q * 4][3]);
+            assert_eq!((mask, water, top), (0, false, false));
+        }
+        // From the side tile: its uv row is the second tile of the block.
+        let t = tiles();
+        let origin = t.origin(6, 1) / t.size.as_vec2();
+        assert!((f.uvs[0][0] - origin.x).abs() < 0.01 && (f.uvs[0][1] - origin.y).abs() < 0.01);
     }
 }
