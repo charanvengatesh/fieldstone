@@ -5,6 +5,7 @@
 mod camera;
 mod core;
 mod debug;
+mod harness;
 mod interact;
 mod inventory;
 mod player;
@@ -30,6 +31,8 @@ pub struct Options {
     pub grid: bool,
     /// `--angle DEGREES`: start at a free view angle instead of a quarter turn.
     pub angle: Option<f32>,
+    /// `--test`: headless; run every `tests/*.lua` in the packs and exit with the result.
+    pub test: bool,
 }
 
 fn main() {
@@ -56,7 +59,8 @@ fn main() {
         seed: value("--seed").and_then(|v| v.parse().ok()),
         headless: args
             .iter()
-            .any(|a| a == "--headless-smoke" || a == "--snapshot"),
+            .any(|a| a == "--headless-smoke" || a == "--snapshot" || a == "--test"),
+        test: args.iter().any(|a| a == "--test"),
         snapshot: value("--snapshot").cloned(),
         scale: value("--scale").and_then(|v| v.parse().ok()).unwrap_or(2.0),
         rot: value("--rot").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -110,6 +114,7 @@ fn main() {
             world::WorldPlugin,
             player::PlayerPlugin,
             interact::InteractPlugin,
+            harness::HarnessPlugin,
             script::ScriptPlugin,
         ))
         .insert_resource(world::mesh::Grid(options.grid))
@@ -120,7 +125,9 @@ fn main() {
             half: Vec2::new(640.0, 400.0) / options.scale.max(0.25),
         });
     }
-    if options.headless {
+    if options.test {
+        app.insert_resource(script::RunTests);
+    } else if options.headless {
         app.insert_resource(smoke::Smoke::new(options.snapshot.clone(), options.scale))
             .add_systems(
                 Update,
@@ -145,7 +152,10 @@ fn main() {
             ),
         );
     }
-    app.run();
+    // A failed self-test or test run is an error exit, so scripts and CI can see it.
+    if app.run().is_error() {
+        std::process::exit(1);
+    }
 }
 
 /// Builds the generator from `worldgen.ron` and either the save file or a fresh seed.

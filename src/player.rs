@@ -196,11 +196,13 @@ pub fn movement(
     if screen.x != 0.0 {
         player.facing = screen.x.signum();
     }
-    // Nothing moves until the ground under the player has streamed in.
+    // Nothing moves until the ground under the player has streamed in; the focus still
+    // follows them there, or it never would.
     if map
         .get(player.body.pos.floor().as_ivec3().with_z(0))
         .is_none()
     {
+        focus.0 = player.body.pos.with_z(player.shown_z);
         return;
     }
     let wish = view.ground_dir(screen) * SPEED;

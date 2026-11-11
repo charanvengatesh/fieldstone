@@ -1,8 +1,6 @@
 //! The camera looks at [`Focus`] through the current [`View`]. Zoom is a whole number of
 //! screen pixels per texel so block edges stay crisp.
 
-use std::f32::consts::FRAC_PI_2;
-
 use bevy::camera::visibility::RenderLayers;
 use bevy::input::gestures::PinchGesture;
 use bevy::prelude::*;
@@ -10,7 +8,6 @@ use bevy::prelude::*;
 use crate::core::settings::{Keys, Settings};
 use crate::world::Focus;
 use crate::world::iso::View;
-use crate::world::mesh::Grid;
 use crate::world::stream::Viewport;
 
 /// Both cameras: the world camera and the overlay drawn on top of it.
@@ -113,24 +110,6 @@ pub fn zoom(
     }
 }
 
-/// `Q` / `E` turn the view a quarter; `G` toggles the full block grid.
-pub fn view_keys(
-    input: Res<ButtonInput<KeyCode>>,
-    keys: Res<Keys>,
-    mut view: ResMut<View>,
-    mut grid: ResMut<Grid>,
-) {
-    if keys.just(&input, &keys.rotate_left) {
-        view.turn_by(FRAC_PI_2);
-    }
-    if keys.just(&input, &keys.rotate_right) {
-        view.turn_by(-FRAC_PI_2);
-    }
-    if keys.just(&input, &keys.grid) {
-        grid.0 = !grid.0;
-    }
-}
-
 pub struct CameraPlugin;
 
 impl Plugin for CameraPlugin {
@@ -145,7 +124,7 @@ impl Plugin for CameraPlugin {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (view_keys, zoom, follow)
+            (zoom, follow)
                 .chain()
                 .after(crate::player::PlayerSet)
                 .before(crate::world::WorldSet),

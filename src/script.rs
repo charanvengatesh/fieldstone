@@ -3,8 +3,15 @@
 //! its functions and calls the hooks; the functions act on the world directly, so a script
 //! reads a block and sees the answer on the next line.
 //!
-//! The Lua standard library is cut down to `table`, `string`, `math` and `utf8`: scripts
-//! have no file or process access beyond `append_file`, which stays inside `debug/`.
+//! The Lua standard library is cut down to `table`, `string`, `math`, `utf8` and
+//! `coroutine`: scripts have no file or process access beyond `append_file`, which stays
+//! inside `debug/`.
+//!
+//! With `--test`, every `tests/*.lua` in the packs is loaded too. Those files call
+//! `test(name, function)`; each function runs as a coroutine, one test at a time, and may
+//! `wait(frames)`, `wait_until(check, frames)` and `expect(condition, message)`. Input it
+//! injects is indistinguishable from a player's. When the last test ends the game exits,
+//! non-zero if anything failed.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -18,12 +25,15 @@ use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, StdLib, Table};
 use crate::core::packs::LoadedPacks;
 use crate::core::settings::{Settings, parse_key};
 use crate::core::{BlockDef, Hud, ItemDef, PointerCaptured, Registry, Toast};
+use crate::harness::{Fake, Injected};
 use crate::interact::{BlockBroken, BlockPlaced};
+use crate::interact::{Cursor, Target};
 use crate::inventory::{HOTBAR, Inventory, sort_slots};
 use crate::player::Player;
 use crate::world::Map;
 use crate::world::iso::View;
 use crate::world::mesh::{Grid, Quality};
+use crate::world::physics::Body;
 use crate::world::stream::{Perf, Streaming};
 
 /// Things that happened since the scripts last ran.
@@ -44,6 +54,28 @@ struct Script {
     env: Table,
 }
 
+/// Present when the game was started with `--test`.
+#[derive(Resource)]
+pub struct RunTests;
+
+/// One registered test and, once it has run, what went wrong.
+struct Test {
+    name: String,
+    body: Function,
+    failures: Vec<String>,
+}
+
+/// The tests, the one running now (as a coroutine and the frames it still waits), and how
+/// many frames have passed.
+#[derive(Default)]
+struct TestRun {
+    tests: Vec<Test>,
+    next: usize,
+    running: Option<(mlua::Thread, u32)>,
+    frame: u64,
+    done: bool,
+}
+
 /// The Lua state and the scripts in it. Not `Send`, so it lives as a non-send resource and
 /// only [`run`] touches it.
 pub struct Vm {
@@ -53,23 +85,68 @@ pub struct Vm {
     pending: Vec<(String, String)>,
     /// `script:hook` pairs that already failed, so an error is logged once, not every frame.
     reported: HashSet<String>,
+    /// Present under `--test`.
+    tests: Option<TestRun>,
+    /// Whether the permanent wrappers around the engine functions exist yet.
+    wrapped: bool,
 }
+
+/// Registers engine functions under a private name and remembers the public one.
+struct Api<'a> {
+    table: &'a Table,
+    names: RefCell<Vec<&'static str>>,
+}
+
+impl Api<'_> {
+    fn set(&self, name: &'static str, f: Function) -> mlua::Result<()> {
+        self.names.borrow_mut().push(name);
+        self.table.set(format!("__{name}"), f)
+    }
+}
+
+/// Helpers tests get in Lua: waiting is a coroutine yield counted in frames.
+const PRELUDE: &str = r#"
+function wait(frames)
+    coroutine.yield(math.max(1, math.floor(frames or 1)))
+end
+function wait_until(check, frames)
+    for _ = 1, (frames or 600) do
+        if check() then return true end
+        coroutine.yield(1)
+    end
+    return false
+end
+function near(a, b, tolerance)
+    return math.abs(a - b) <= (tolerance or 0.01)
+end
+"#;
 
 impl Vm {
     pub fn new(sources: Vec<(String, String)>) -> Self {
-        let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8;
+        let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE;
+        let lua = Lua::new_with(libs, LuaOptions::default()).expect("lua state");
+        lua.load(PRELUDE).exec().expect("prelude");
         Self {
-            lua: Lua::new_with(libs, LuaOptions::default()).expect("lua state"),
+            lua,
             scripts: Vec::new(),
             pending: sources,
             reported: HashSet::new(),
+            tests: None,
+            wrapped: false,
         }
+    }
+
+    pub fn with_tests(mut self) -> Self {
+        self.tests = Some(TestRun::default());
+        self
     }
 }
 
 /// Reads each pack's script files.
 pub fn setup(world: &mut World) {
+    let testing = world.contains_resource::<RunTests>();
     let mut sources = Vec::new();
+    let mut tests = Vec::new();
     for (dir, pack) in &world.resource::<LoadedPacks>().0 {
         for rel in &pack.scripts {
             let path = dir.join(rel);
@@ -81,8 +158,28 @@ pub fn setup(world: &mut World) {
                 Err(e) => error!("{}: {e}", path.display()),
             }
         }
+        if testing && let Ok(entries) = std::fs::read_dir(dir.join("tests")) {
+            let mut files: Vec<_> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|x| x == "lua"))
+                .collect();
+            files.sort();
+            for path in files {
+                match std::fs::read_to_string(&path) {
+                    Ok(src) => {
+                        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                        tests.push((format!("{}/tests/{name}", pack.name), src));
+                    }
+                    Err(e) => error!("{}: {e}", path.display()),
+                }
+            }
+        }
     }
-    world.insert_non_send(Vm::new(sources));
+    // Test files load after every mod, so the mods' hooks are in place when tests run.
+    sources.extend(tests);
+    let vm = Vm::new(sources);
+    world.insert_non_send(if testing { vm.with_tests() } else { vm });
 }
 
 pub fn collect(
@@ -125,7 +222,10 @@ pub fn run(world: &mut World) {
         mut scripts,
         mut pending,
         mut reported,
+        tests,
+        wrapped,
     } = vm;
+    let tests = RefCell::new(tests);
     let events = std::mem::take(&mut world.resource_mut::<ScriptEvents>().0);
     let dt = world.resource::<Time>().delta_secs_f64();
     let names: Vec<(IVec3, String, bool)> = {
@@ -141,6 +241,13 @@ pub fn run(world: &mut World) {
     let shared = RefCell::new(&mut *world);
     let result = lua.scope(|scope| {
         let g = lua.globals();
+        // Engine functions are scoped to this frame. Scripts call them through permanent
+        // Lua wrappers (see below), so a function fetched before a coroutine `wait` is still
+        // good after it.
+        let g = Api {
+            table: &g,
+            names: RefCell::new(Vec::new()),
+        };
         g.set(
             "log",
             scope.create_function(|_, msg: String| {
@@ -274,11 +381,8 @@ pub fn run(world: &mut World) {
         g.set(
             "mouse_pressed",
             scope.create_function(|_, name: String| {
-                let button = match name.as_str() {
-                    "left" => MouseButton::Left,
-                    "right" => MouseButton::Right,
-                    "middle" => MouseButton::Middle,
-                    _ => return Ok(false),
+                let Some(button) = mouse_button(&name) else {
+                    return Ok(false);
                 };
                 let w = shared.borrow();
                 Ok(w.resource::<ButtonInput<MouseButton>>().pressed(button))
@@ -473,6 +577,210 @@ pub fn run(world: &mut World) {
                 Ok(())
             })?,
         )?;
+        // Injected input: lands next frame where real input would.
+        g.set(
+            "press_key",
+            scope.create_function(|_, name: String| {
+                if let Some(k) = parse_key(&name) {
+                    shared.borrow_mut().resource_mut::<Injected>().press.push(k);
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "release_key",
+            scope.create_function(|_, name: String| {
+                if let Some(k) = parse_key(&name) {
+                    shared
+                        .borrow_mut()
+                        .resource_mut::<Injected>()
+                        .release
+                        .push(k);
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "press_mouse",
+            scope.create_function(|_, name: String| {
+                if let Some(b) = mouse_button(&name) {
+                    shared
+                        .borrow_mut()
+                        .resource_mut::<Injected>()
+                        .mouse_press
+                        .push(b);
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "release_mouse",
+            scope.create_function(|_, name: String| {
+                if let Some(b) = mouse_button(&name) {
+                    shared
+                        .borrow_mut()
+                        .resource_mut::<Injected>()
+                        .mouse_release
+                        .push(b);
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "move_mouse",
+            scope.create_function(|_, (dx, dy): (f32, f32)| {
+                shared.borrow_mut().resource_mut::<Injected>().motion += Vec2::new(dx, dy);
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "scroll",
+            scope.create_function(|_, lines: f32| {
+                shared.borrow_mut().resource_mut::<Injected>().scroll += lines;
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "twist",
+            scope.create_function(|_, radians: f32| {
+                shared.borrow_mut().resource_mut::<Injected>().twist += radians;
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "aim_at",
+            scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
+                let mut w = shared.borrow_mut();
+                let at = w.resource::<View>().project(Vec3::new(x, y, z)).truncate();
+                w.resource_mut::<Injected>().cursor = Some(at);
+                w.resource_mut::<Cursor>().0 = Some(at);
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "clear_aim",
+            scope.create_function(|_, ()| {
+                let mut w = shared.borrow_mut();
+                w.resource_mut::<Injected>().cursor = None;
+                w.resource_mut::<Cursor>().0 = None;
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "teleport",
+            scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
+                let mut w = shared.borrow_mut();
+                let world: &mut World = &mut w;
+                if let Some(mut p) = world.query::<&mut Player>().iter_mut(world).next() {
+                    p.body = Body::at(Vec3::new(x, y, z));
+                    p.shown_z = z;
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "set_time_scale",
+            scope.create_function(|_, scale: f32| {
+                shared
+                    .borrow_mut()
+                    .resource_mut::<Time<Virtual>>()
+                    .set_relative_speed(scale.clamp(0.0, 64.0));
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "simulate_frame_ms",
+            scope.create_function(|_, ms: Option<f32>| {
+                shared.borrow_mut().resource_mut::<Fake>().frame_ms = ms.filter(|m| *m > 0.0);
+                Ok(())
+            })?,
+        )?;
+        // Readouts.
+        g.set(
+            "frame",
+            scope.create_function(|_, ()| Ok(tests.borrow().as_ref().map_or(0, |t| t.frame)))?,
+        )?;
+        g.set(
+            "view_turning",
+            scope.create_function(|_, ()| Ok(shared.borrow().resource::<View>().turning()))?,
+        )?;
+        g.set(
+            "hud_text",
+            scope.create_function(|_, key: String| {
+                Ok(shared.borrow().resource::<Hud>().0.get(&key).cloned())
+            })?,
+        )?;
+        g.set(
+            "selected_slot",
+            scope.create_function(|_, ()| {
+                let mut w = shared.borrow_mut();
+                let world: &mut World = &mut w;
+                Ok(world
+                    .query_filtered::<&Inventory, With<Player>>()
+                    .iter(world)
+                    .next()
+                    .map_or(0, |inv| inv.selected + 1))
+            })?,
+        )?;
+        g.set(
+            "is_grounded",
+            scope.create_function(|_, ()| {
+                let mut w = shared.borrow_mut();
+                let world: &mut World = &mut w;
+                Ok(world
+                    .query::<&Player>()
+                    .iter(world)
+                    .next()
+                    .is_some_and(|p| p.body.grounded))
+            })?,
+        )?;
+        g.set(
+            "target",
+            scope.create_function(|lua, ()| {
+                let w = shared.borrow();
+                let Some(hit) = w.resource::<Target>().0 else {
+                    return Ok(None);
+                };
+                let id = w.resource::<Map>().block(hit.block);
+                let t = lua.create_table()?;
+                t.set("x", hit.block.x)?;
+                t.set("y", hit.block.y)?;
+                t.set("z", hit.block.z)?;
+                t.set("block", w.resource::<Registry<BlockDef>>().id_of(id))?;
+                t.set("nx", hit.normal.x)?;
+                t.set("ny", hit.normal.y)?;
+                t.set("nz", hit.normal.z)?;
+                Ok(Some(t))
+            })?,
+        )?;
+        // Tests.
+        g.set(
+            "test",
+            scope.create_function(|_, (name, body): (String, Function)| {
+                if let Some(run) = tests.borrow_mut().as_mut() {
+                    run.tests.push(Test {
+                        name,
+                        body,
+                        failures: Vec::new(),
+                    });
+                }
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "expect",
+            scope.create_function(|_, (ok, message): (bool, Option<String>)| {
+                if !ok && let Some(run) = tests.borrow_mut().as_mut() {
+                    let message = message.unwrap_or_else(|| "expectation failed".into());
+                    let i = run.next.saturating_sub(1);
+                    if let Some(t) = run.tests.get_mut(i) {
+                        warn!("test {}: {message}", t.name);
+                        t.failures.push(message);
+                    }
+                }
+                Ok(())
+            })?,
+        )?;
         g.set(
             "screenshot",
             scope.create_function(|_, name: String| {
@@ -501,12 +809,20 @@ pub fn run(world: &mut World) {
             })?,
         )?;
 
+        if !wrapped {
+            // One permanent wrapper per engine function, looking the real one up by name.
+            let mut src = String::new();
+            for name in g.names.borrow().iter() {
+                src.push_str(&format!("function {name}(...) return __{name}(...) end\n"));
+            }
+            lua.load(&src).set_name("api").exec()?;
+        }
         for (name, src) in pending.drain(..) {
             // Each script sees the globals through its own table, so two mods can both
             // define `on_tick`.
             let env = lua.create_table()?;
             let meta = lua.create_table()?;
-            meta.set("__index", g.clone())?;
+            meta.set("__index", g.table.clone())?;
             env.set_metatable(Some(meta))?;
             match lua
                 .load(&src)
@@ -535,17 +851,115 @@ pub fn run(world: &mut World) {
                 call(script, hook, (at.x, at.y, at.z, id.as_str()), &mut reported);
             }
         }
+        drive_tests(&lua, &tests, &shared)?;
         Ok(())
     });
+    let wrapped = true;
     if let Err(e) = result {
         error!("script runtime: {e}");
+    }
+    let tests = tests.into_inner();
+    if let Some(run) = &tests
+        && run.done
+    {
+        let failed: Vec<&Test> = run
+            .tests
+            .iter()
+            .filter(|t| !t.failures.is_empty())
+            .collect();
+        for t in &run.tests {
+            if t.failures.is_empty() {
+                info!("test {}: ok", t.name);
+            } else {
+                error!("test {}: {}", t.name, t.failures.join("; "));
+            }
+        }
+        if run.tests.is_empty() {
+            error!("no tests found: put tests/*.lua in a pack");
+            world.write_message(AppExit::error());
+        } else if failed.is_empty() {
+            info!("{} tests passed", run.tests.len());
+            world.write_message(AppExit::Success);
+        } else {
+            error!("{} of {} tests FAILED", failed.len(), run.tests.len());
+            world.write_message(AppExit::error());
+        }
     }
     world.insert_non_send(Vm {
         lua,
         scripts,
         pending,
         reported,
+        tests,
+        wrapped,
     });
+}
+
+/// Runs the current test coroutine for one frame, starting the next test when one ends.
+/// Each test begins with nothing held and the clock at normal speed. The test list is not
+/// borrowed while the coroutine runs, since `expect` inside it needs it.
+fn drive_tests(
+    lua: &Lua,
+    tests: &RefCell<Option<TestRun>>,
+    shared: &RefCell<&mut World>,
+) -> mlua::Result<()> {
+    let (thread, index) = {
+        let mut guard = tests.borrow_mut();
+        let Some(run) = guard.as_mut() else {
+            return Ok(());
+        };
+        if run.done {
+            return Ok(());
+        }
+        run.frame += 1;
+        // Give the world a moment to stream in before the first test.
+        if run.frame < 90 {
+            return Ok(());
+        }
+        if let Some((_, waiting)) = &mut run.running
+            && *waiting > 1
+        {
+            *waiting -= 1;
+            return Ok(());
+        }
+        if run.running.is_none() {
+            let Some(test) = run.tests.get(run.next) else {
+                run.done = true;
+                return Ok(());
+            };
+            info!("test {}: starting", test.name);
+            crate::harness::release_all(&mut shared.borrow_mut());
+            let thread = lua.create_thread(test.body.clone())?;
+            run.running = Some((thread, 0));
+            run.next += 1;
+        }
+        let (thread, _) = run.running.take().expect("set above");
+        (thread, run.next - 1)
+    };
+    let result = thread.resume::<Option<u32>>(());
+    let mut guard = tests.borrow_mut();
+    let run = guard.as_mut().expect("still testing");
+    match result {
+        Ok(frames) if thread.status() == mlua::ThreadStatus::Resumable => {
+            run.running = Some((thread, frames.unwrap_or(1).max(1)));
+        }
+        Ok(_) => {}
+        Err(e) => {
+            let message = format!("error: {e}");
+            error!("test {}: {message}", run.tests[index].name);
+            run.tests[index].failures.push(message);
+        }
+    }
+    Ok(())
+}
+
+fn mouse_button(name: &str) -> Option<MouseButton> {
+    match name {
+        "left" => Some(MouseButton::Left),
+        "right" => Some(MouseButton::Right),
+        "middle" => Some(MouseButton::Middle),
+        _ => None,
+    }
 }
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -609,6 +1023,11 @@ mod tests {
         world.init_resource::<Streaming>();
         world.init_resource::<Perf>();
         world.insert_resource(Settings::default());
+        world.init_resource::<Injected>();
+        world.init_resource::<Fake>();
+        world.init_resource::<Cursor>();
+        world.init_resource::<Target>();
+        world.init_resource::<Time<Virtual>>();
         world.spawn((Player::at(Vec3::new(1.5, 2.5, 3.0)), Inventory::default()));
         world.insert_non_send(Vm::new(
             scripts

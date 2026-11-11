@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.8.1
+
+The debug mod becomes a test harness: scripts can play the game.
+
+### New
+- Lua can inject input the engine and other scripts cannot tell from a player's:
+  `press_key`, `release_key`, `press_mouse`, `release_mouse`, `move_mouse`, `scroll`, `twist`
+  (trackpad rotation), `aim_at(x, y, z)`, `clear_aim`. It lands at the start of the next
+  frame where the real input systems put theirs, so "just pressed" lasts one frame.
+- Fakes: `simulate_frame_ms(ms)` makes the performance numbers read as on a slow machine;
+  `set_time_scale(s)` speeds the game clock; `teleport(x, y, z)`.
+- Readouts: `frame`, `view_turning`, `hud_text(key)`, `selected_slot`, `is_grounded`,
+  `target()`.
+- `cargo run -- --test` loads every `tests/*.lua` in the packs. A file calls
+  `test(name, function)`; the function runs as a coroutine and may `wait(frames)`,
+  `wait_until(check, frames)` and `expect(condition, message)`. Tests run one at a time with
+  nothing held between them. The process exits non-zero if any check failed, and CI runs it.
+- `mods/debug/tests/`: sixteen scenarios covering injected keys and scrolling, Q and R,
+  Alt-drag orbit, trackpad twist, Ctrl-scroll zoom, the compass, F4, F6, adaptive quality
+  on a pretend 25 fps machine and its recovery, how much cheaper the lower quality levels
+  rebuild the world, breaking and placing through the pointer, streaming after a long
+  teleport, and walls versus steps.
+
+### Fixed
+- After a teleport the world never streamed in under the player: movement waited for the
+  ground, and the camera focus (which drives streaming) only moved once movement ran.
+- Q and E only turned the view in windowed mode.
+- R in the camera mod returned to world north, not to the view the game started with.
+- A failed self-test exited with status 0.
+- An engine function fetched before a coroutine `wait` was dead afterwards; scripts now call
+  permanent wrappers.
+
+### Measured (dev build)
+- Rebuilding about 24 loaded chunks: 38 ms at full quality, 21 to 23 ms with shadows and
+  corner shading off. The GPU side of a frame is not measured headlessly.
+
 ## 0.8.0
 
 Rotation and performance, as engine capabilities plus two mods that drive them.

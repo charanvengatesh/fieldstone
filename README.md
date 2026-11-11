@@ -40,6 +40,7 @@ cargo run -- --new               # ignore the save and start a fresh world
 cargo run -- --seed 42           # fix the world seed
 cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
+cargo run -- --test              # no window: run every tests/*.lua in the packs; non-zero on failure
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
                                  #   options: --scale N  --rot 0..3  --angle DEGREES  --grid
 cargo build --release
@@ -76,7 +77,8 @@ cargo build --release
 - `assets/shaders/block.wgsl` the block shader
 - `src/player.rs`, `src/interact.rs`, `src/inventory.rs`, `src/camera.rs`, `src/ui.rs`
 - `src/script.rs` Lua hooks and API
-- `src/debug.rs` screenshots, software snapshots, text dumps; `src/smoke.rs` the self-test
+- `src/debug.rs` screenshots, software snapshots, text dumps; `src/smoke.rs` the self-test;
+  `src/harness.rs` injected input and fakes for Lua tests
 - `assets/packs/base/` the base pack: `blocks.ron`, `worldgen.ron`, `stamps.ron`, `features.ron`
 - `mods/` packs loaded after the base; see `mods/README.md`
 

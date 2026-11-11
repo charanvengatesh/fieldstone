@@ -26,6 +26,8 @@ jobs:
           cargo run -- --headless-smoke --seed 42 2>&1 | tee smoke.log
           # The dig, place and save steps must have run, not been skipped.
           grep -q "breaks, places, saves" smoke.log
+      - name: Script tests
+        run: cargo run -- --test --seed 42
 
   release:
     needs: check

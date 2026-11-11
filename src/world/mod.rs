@@ -155,6 +155,7 @@ impl Plugin for WorldPlugin {
                 (
                     mesh::tick,
                     stream::measure,
+                    stream::view_keys,
                     stream::ease_view,
                     stream::stream,
                     stream::settings_changed,

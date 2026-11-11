@@ -160,6 +160,24 @@ pub fn stream(
     }
 }
 
+/// `Q` / `E` turn the view a quarter; `G` toggles the full block grid.
+pub fn view_keys(
+    input: Res<ButtonInput<KeyCode>>,
+    keys: Res<crate::core::settings::Keys>,
+    mut view: ResMut<View>,
+    mut grid: ResMut<Grid>,
+) {
+    if keys.just(&input, &keys.rotate_left) {
+        view.turn_by(std::f32::consts::FRAC_PI_2);
+    }
+    if keys.just(&input, &keys.rotate_right) {
+        view.turn_by(-std::f32::consts::FRAC_PI_2);
+    }
+    if keys.just(&input, &keys.grid) {
+        grid.0 = !grid.0;
+    }
+}
+
 /// Moves the view toward the angle it was asked for.
 pub fn ease_view(time: Res<Time<Real>>, mut view: ResMut<View>) {
     if view.turning() {
@@ -201,6 +219,7 @@ pub fn remesh(
         .map(|(p, _)| *p)
         .collect();
     if dirty.is_empty() {
+        perf.mesh_ms = 0.0;
         return;
     }
     dirty.sort_by_key(|p| (*p - center).length_squared());
@@ -270,8 +289,13 @@ pub fn apply_view(view: Res<View>, mut chunks: Query<(&ChunkMesh, &mut GlobalTra
 }
 
 /// Keeps the smoothed frame time and the world totals current.
-pub fn measure(time: Res<Time<Real>>, map: Res<Map>, mut perf: ResMut<Perf>) {
-    let ms = time.delta_secs() * 1000.0;
+pub fn measure(
+    time: Res<Time<Real>>,
+    fake: Res<crate::harness::Fake>,
+    map: Res<Map>,
+    mut perf: ResMut<Perf>,
+) {
+    let ms = fake.frame_ms.unwrap_or(time.delta_secs() * 1000.0);
     if ms > 0.0 {
         perf.frame_ms = if perf.frame_ms == 0.0 {
             ms

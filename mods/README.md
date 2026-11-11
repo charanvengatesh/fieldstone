@@ -129,6 +129,38 @@ Functions you can call. They act immediately: a `set_block` is visible to the ne
 Scripts run in a sandbox: `table`, `string`, `math` and `utf8` only. There is no `io`, `os` or
 `require`. Scripts load once at startup; there is no hot reload yet.
 
+## Testing a mod
+
+Put `tests/*.lua` in a pack and run `cargo run -- --test`. Test files are scripts like any
+other (they may define hooks), plus:
+
+```lua
+test("Q turns a quarter", function()
+    local start = view_target()
+    press_key("Q") wait(1) release_key("Q")
+    expect(near(view_target(), start + 90, 0.01), "Q asks for a quarter turn")
+    expect(wait_until(function() return not view_turning() end, 120), "the turn finishes")
+end)
+```
+
+| Function | Does |
+|----------|------|
+| `test(name, fn)` | registers a test; `fn` runs as a coroutine, one test at a time, nothing held between tests |
+| `wait(frames)`, `wait_until(check, frames)` | pause the test; `wait_until` returns whether `check` came true |
+| `expect(ok, message)` | records a failure; the run exits non-zero if any |
+| `near(a, b, tolerance)` | numeric closeness |
+| `press_key`, `release_key`, `press_mouse`, `release_mouse` | held from the next frame; names as in `settings.ron`, buttons `"left"`, `"right"`, `"middle"` |
+| `move_mouse(dx, dy)`, `scroll(lines)`, `twist(radians)` | pointer motion, wheel, trackpad rotation |
+| `aim_at(x, y, z)`, `clear_aim()` | point at a world position, as a player would with the pointer |
+| `teleport(x, y, z)` | move the player's feet |
+| `set_time_scale(s)` | run the game clock faster (hooks see a bigger `dt`) |
+| `simulate_frame_ms(ms)` | make `perf()` read as on a machine with that frame time; `nil` stops |
+| `frame()`, `view_turning()`, `hud_text(key)`, `selected_slot()`, `is_grounded()`, `target()` | readouts; `target()` is a table `x, y, z, block, nx, ny, nz` or `nil` |
+
+Injected input is indistinguishable from a player's to the engine and to other scripts,
+so a test can drive another mod's controls. `mods/debug/tests/` covers the engine, the
+camera mod and the performance mod; copy one to start.
+
 ## The mods in this folder
 
 - `camera/` adds free orbit to the engine's quarter turns: Alt-drag, middle-drag or a

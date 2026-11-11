@@ -3,7 +3,7 @@
 --   Hold Alt (or the middle mouse button) and drag sideways   orbit freely
 --   Trackpad rotate gesture (two fingers, twist)               orbit freely
 --   Let go                                                     settle on the nearest quarter view
---   R                                                          back to the starting view
+--   R                                                          back to the view the game started with
 --   Ctrl or Cmd + scroll                                       zoom
 --   C                                                          show or hide the compass
 --
@@ -20,6 +20,7 @@ local twisting = false       -- a trackpad twist is in progress
 local since_twist = 0
 local zoom_scroll = 0
 local compass = true
+local home = 0              -- the view the game started with; R comes back to it
 
 local NAMES = { "south-west", "south", "south-east", "east", "north-east", "north", "north-west", "west" }
 
@@ -30,6 +31,7 @@ local function facing(degrees)
 end
 
 function on_script_loaded()
+    home = view_target()
     log("camera: Alt-drag or twist to orbit, R resets, Ctrl/Cmd-scroll zooms, C toggles the compass")
 end
 
@@ -67,7 +69,7 @@ function on_tick(dt)
 
     if key_just_pressed("R") then
         -- Turn the short way round to the starting view.
-        local off = view_target() % 360
+        local off = (view_target() - home) % 360
         if off > 180 then off = off - 360 end
         turn_view(-off)
     end
