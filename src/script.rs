@@ -564,6 +564,15 @@ pub fn run(world: &mut World) {
             })?,
         )?;
         g.set(
+            "screen_of",
+            scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
+                let w = shared.borrow();
+                let at = w.resource::<View>().project(Vec3::new(x, y, z)).truncate();
+                let o = at - w.resource::<Look>().center;
+                Ok((o.x, o.y))
+            })?,
+        )?;
+        g.set(
             "aim_screen",
             scope.create_function(|_, (sx, sy): (f32, f32)| {
                 let mut w = shared.borrow_mut();
@@ -844,6 +853,39 @@ pub fn run(world: &mut World) {
                     .iter(world)
                     .next()
                     .is_some_and(|p| p.body.grounded))
+            })?,
+        )?;
+        g.set(
+            "particles",
+            scope.create_function(|_, ()| {
+                let mut w = shared.borrow_mut();
+                let world: &mut World = &mut w;
+                Ok(world
+                    .query_filtered::<(), With<crate::fx::Particle>>()
+                    .iter(world)
+                    .count())
+            })?,
+        )?;
+        g.set(
+            "player_heading",
+            scope.create_function(|_, ()| {
+                let mut w = shared.borrow_mut();
+                let world: &mut World = &mut w;
+                Ok(world
+                    .query::<&Player>()
+                    .iter(world)
+                    .next()
+                    .map(|p| match p.heading {
+                        crate::player::Heading::Side => {
+                            if p.facing < 0.0 {
+                                "left"
+                            } else {
+                                "right"
+                            }
+                        }
+                        crate::player::Heading::Away => "away",
+                        crate::player::Heading::Toward => "toward",
+                    }))
             })?,
         )?;
         g.set(

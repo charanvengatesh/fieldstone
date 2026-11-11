@@ -83,7 +83,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
         .query::<&Player>()
         .iter(world)
         .next()
-        .map(|p| (p.body.pos, p.shown_z, p.facing, p.frame, p.lit))
+        .map(|p| (p.body.pos, p.shown_z, p.facing, p.strip_frame(), p.lit))
         .ok_or("no player")?;
     let map = world.resource::<Map>();
     let view = *world.resource::<View>();

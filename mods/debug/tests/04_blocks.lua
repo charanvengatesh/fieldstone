@@ -4,6 +4,10 @@ local broken, placed = nil, nil
 function on_block_broken(x, y, z, block) broken = { x = x, y = y, z = z, block = block } end
 function on_block_placed(x, y, z, block) placed = { x = x, y = y, z = z, block = block } end
 
+-- Ground blocks that drop an item when broken; props drop nothing and water and bedrock
+-- do not break.
+local CUBES = { grass = true, dirt = true, sand = true, stone = true, snow = true, log = true, leaves = true }
+
 local function top_of(x, y)
     for z = 31, 0, -1 do
         if get_block(x, y, z) ~= "air" then return z end
@@ -28,7 +32,7 @@ local function find_block(min_r)
                         wait(1)
                         local t = target()
                         if t and t.x == x and t.y == y and t.z == z and t.nz == 1
-                            and t.block ~= "water" and t.block ~= "bedrock" then
+                            and CUBES[t.block] then
                             return x, y, z, t.block
                         end
                     end

@@ -19,18 +19,32 @@ test("teleporting far away streams the ground in and the player lands on it", fu
         loaded = wait_until(function()
             return get_block(math.floor(x), math.floor(y), 0) ~= "air"
         end, 300)
-        local top = top_of(math.floor(x), math.floor(y))
-        if not loaded or (top and get_block(math.floor(x), math.floor(y), top) ~= "water") then
-            break
+        -- The body spans up to four columns; over water a column is closed from the
+        -- surface to the sky and the fall never starts.
+        local dry = true
+        for dx = -1, 1 do
+            for dy = -1, 1 do
+                local cx, cy = math.floor(x) + dx, math.floor(y) + dy
+                local top = top_of(cx, cy)
+                if not top or get_block(cx, cy, top) == "water" then dry = false end
+            end
         end
+        if not loaded or dry then break end
         x = x + 12
     end
     expect(loaded, "the chunk under the player loaded")
     expect(wait_until(is_grounded, 600), "the player landed")
     local _, _, pz = player_pos()
-    local top = top_of(math.floor(x), math.floor(y))
-    expect(top ~= nil and near(pz, top + 1, 1.01),
-        string.format("the player stands on the surface (feet %.2f, top %s)", pz, tostring(top)))
+    -- The body spans up to four columns and may have landed on any of them, a tree top
+    -- included.
+    local highest = 0
+    for dx = -1, 1 do
+        for dy = -1, 1 do
+            highest = math.max(highest, top_of(math.floor(x) + dx, math.floor(y) + dy) or 0)
+        end
+    end
+    expect(pz <= highest + 1.01 and pz > 0.99,
+        string.format("the player stands on the ground (feet %.2f, highest top %d)", pz, highest))
     expect(perf().chunks >= 6 and perf().chunks <= 40,
         string.format("%d chunks around the new spot (was %d)", perf().chunks, before))
     -- Home again, so later tests start where they expect.

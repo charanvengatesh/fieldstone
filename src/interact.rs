@@ -15,8 +15,9 @@ use crate::core::{BlockDef, ItemDef, PointerCaptured, Registry, UiHovered};
 use crate::inventory::{HOTBAR, Inventory};
 use crate::player::Player;
 use crate::world::iso::{Hit, View};
-use crate::world::mesh::corners;
+use crate::world::mesh::{AtlasImage, corners};
 use crate::world::physics::{TALL, fits};
+use crate::world::tiles::{CRACKS, Tiles};
 use crate::world::{AIR, HEIGHT, Map};
 
 /// How far from the player's middle a block may be worked, in blocks.
@@ -213,6 +214,7 @@ pub fn spawn_highlight(
         RenderAssetUsages::default(),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 4])
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 4])
     .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
     commands.spawn((
         Highlight,
@@ -227,11 +229,24 @@ pub fn spawn_highlight(
     ));
 }
 
-/// Lays a translucent quad over the targeted face; it brightens as the block wears down.
+/// Which crack tile a breaking progress shows: 0 (the plain highlight) until the first
+/// hit lands, then the stages in turn.
+pub fn crack_stage(progress: f32) -> u32 {
+    if progress <= 0.0 {
+        0
+    } else {
+        ((progress * (CRACKS - 1) as f32).ceil() as u32).clamp(1, CRACKS - 1)
+    }
+}
+
+/// Lays a translucent quad over the targeted face; once the block starts to wear down the
+/// quad shows a crack tile from the atlas instead, deepening with progress.
 pub fn show_highlight(
     target: Res<Target>,
     breaking: Res<Breaking>,
     view: Res<View>,
+    tiles: Option<Res<Tiles>>,
+    atlas: Option<Res<AtlasImage>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut quad: Single<
@@ -250,22 +265,34 @@ pub fn show_highlight(
         return;
     };
     **vis = Visibility::Visible;
+    let stage = crack_stage(breaking.progress);
     if let Some(mut m) = meshes.get_mut(&mesh.0) {
         let positions: Vec<[f32; 3]> = corners(IVec3::ZERO, hit.normal)
             .iter()
             .map(|c| view.project(*c).to_array())
             .collect();
         m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        if let Some(tiles) = tiles.as_deref() {
+            let (lo, hi) = tiles.crack_uv(stage);
+            m.insert_attribute(
+                Mesh::ATTRIBUTE_UV_0,
+                vec![[lo.x, lo.y], [hi.x, lo.y], [hi.x, hi.y], [lo.x, hi.y]],
+            );
+        }
     }
     // A hair nearer than the face so it never fights it.
     tf.translation = view.project(hit.block.as_vec3()) + Vec3::Z * 0.02;
     if let Some(mut m) = materials.get_mut(&material.0) {
-        m.color = Color::srgba(
-            1.0,
-            1.0,
-            1.0,
-            0.25 + 0.5 * breaking.progress.clamp(0.0, 1.0),
-        );
+        if m.texture.is_none()
+            && let Some(atlas) = atlas.as_deref()
+        {
+            m.texture = Some(atlas.0.clone());
+        }
+        m.color = if stage == 0 {
+            Color::srgba(1.0, 1.0, 1.0, 0.25)
+        } else {
+            Color::WHITE
+        };
     }
 }
 

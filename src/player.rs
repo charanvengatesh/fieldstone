@@ -36,12 +36,38 @@ pub struct Player {
     pub shown_z: f32,
     /// -1 or 1: which way the figure faces on screen.
     pub facing: f32,
+    /// Which way the figure is turned: sideways, away from the viewer or toward them.
+    pub heading: Heading,
     /// Distance walked, which drives the two-frame stride.
     pub stride: f32,
     /// Which frame of the figure is showing: 0 standing, 1 mid-step.
     pub frame: usize,
     /// Brightness the figure is drawn at; eases between sun and shade.
     pub lit: f32,
+    /// Seconds spent standing still, for the idle breath.
+    pub idle: f32,
+    /// Highest point of the current fall, for the landing.
+    pub fall_from: f32,
+    /// Seconds of landing squash left.
+    pub squash: f32,
+}
+
+/// Which way the figure is turned, in screen terms.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Heading {
+    #[default]
+    Side,
+    /// Walking up the screen: the back is to the viewer.
+    Away,
+    /// Walking down the screen: the face is to the viewer.
+    Toward,
+}
+
+/// The player landed after a fall of `drop` blocks.
+#[derive(Message, Clone, Copy)]
+pub struct Landed {
+    pub pos: Vec3,
+    pub drop: f32,
 }
 
 impl Player {
@@ -50,10 +76,25 @@ impl Player {
             body: Body::at(pos),
             shown_z: pos.z,
             facing: 1.0,
+            heading: Heading::Side,
             stride: 0.0,
             frame: 0,
             lit: 1.0,
+            idle: 0.0,
+            fall_from: pos.z,
+            squash: 0.0,
         }
+    }
+
+    /// Which column of the figure strip to show: three headings, each standing and
+    /// stepping.
+    pub fn strip_frame(&self) -> usize {
+        let heading = match self.heading {
+            Heading::Side => 0,
+            Heading::Away => 1,
+            Heading::Toward => 2,
+        };
+        heading * FRAMES + self.frame
     }
 }
 
@@ -85,10 +126,13 @@ pub fn closed(map: &Map, blocks: &Registry<BlockDef>, c: IVec3) -> bool {
 }
 
 /// Texture coordinates of the figure quad for one frame of the strip.
+/// Columns in the figure strip: three headings of [`FRAMES`] each.
+pub const STRIP: usize = 3 * FRAMES;
+
 fn frame_uvs(frame: usize) -> Vec<[f32; 2]> {
     let (u0, u1) = (
-        frame as f32 / FRAMES as f32,
-        (frame + 1) as f32 / FRAMES as f32,
+        frame as f32 / STRIP as f32,
+        (frame + 1) as f32 / STRIP as f32,
     );
     vec![[u0, 1.0], [u1, 1.0], [u1, 0.0], [u0, 0.0]]
 }
@@ -161,6 +205,7 @@ pub fn movement(
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
     mut focus: ResMut<Focus>,
+    mut landed: MessageWriter<Landed>,
     mut player: Single<&mut Player>,
 ) {
     let axis = |neg: &[KeyCode], pos: &[KeyCode]| {
@@ -169,6 +214,15 @@ pub fn movement(
     let screen = Vec2::new(axis(&keys.left, &keys.right), axis(&keys.down, &keys.up));
     if screen.x != 0.0 {
         player.facing = screen.x.signum();
+    }
+    if screen != Vec2::ZERO {
+        player.heading = if screen.x.abs() >= screen.y.abs() {
+            Heading::Side
+        } else if screen.y > 0.0 {
+            Heading::Away
+        } else {
+            Heading::Toward
+        };
     }
     // Nothing moves until the ground under the player has streamed in; the focus still
     // follows them there, or it never would.
@@ -181,15 +235,36 @@ pub fn movement(
     }
     let wish = view.ground_dir(screen) * SPEED;
     let before = player.body.pos;
+    let was_grounded = player.body.grounded;
     step(&mut player.body, wish, time.delta_secs(), &|c| {
         closed(&map, &blocks, c)
     });
+    // Falls are measured from their highest point; a landing of a block or more squashes
+    // the figure and raises dust.
+    if !player.body.grounded {
+        player.fall_from = player.fall_from.max(player.body.pos.z);
+    } else if !was_grounded {
+        let drop = player.fall_from - player.body.pos.z;
+        if drop >= 1.0 {
+            player.squash = SQUASH_SECS;
+            landed.write(Landed {
+                pos: player.body.pos,
+                drop,
+            });
+        }
+        player.fall_from = player.body.pos.z;
+    } else {
+        player.fall_from = player.body.pos.z;
+    }
+    player.squash = (player.squash - time.delta_secs()).max(0.0);
     let walked = (player.body.pos - before).truncate().length();
     if walked > 1e-4 && player.body.grounded {
         player.stride += walked;
         player.frame = (player.stride / STEP) as usize % FRAMES;
+        player.idle = 0.0;
     } else {
         player.frame = 0;
+        player.idle += time.delta_secs();
     }
     let target = player.body.pos.z;
     let ease = (time.delta_secs() * 18.0).min(1.0);
@@ -232,13 +307,14 @@ pub fn place(
     let mut at = view.project(pos);
     at.z += DEPTH_BIAS;
     tf.translation = at;
-    tf.scale = Vec3::new(player.facing, 1.0, 1.0);
+    tf.scale = Vec3::new(player.facing, 1.0, 1.0) * figure_scale(player.idle, player.squash);
 
-    // The stride frame.
-    if shown.1 != player.frame {
-        shown.1 = player.frame;
+    // The stride frame and the heading.
+    let frame = player.strip_frame();
+    if shown.1 != frame {
+        shown.1 = frame;
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(player.frame));
+            m.insert_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(frame));
         }
     }
 
@@ -297,6 +373,24 @@ pub fn place(
     }
 }
 
+/// Seconds the landing squash lasts.
+pub const SQUASH_SECS: f32 = 0.1;
+
+/// How the figure is scaled about its feet: a landing squashes it wide and short for a
+/// moment; standing still, it breathes a texel every 1.2 seconds.
+pub fn figure_scale(idle: f32, squash: f32) -> Vec3 {
+    if squash > 0.0 {
+        return Vec3::new(1.12, 0.85, 1.0);
+    }
+    let breath = idle > 0.0 && (idle % 1.2) > 0.9;
+    let dip = 1.0 / FIGURE.y as f32;
+    if breath {
+        Vec3::new(1.0, 1.0 - dip, 1.0)
+    } else {
+        Vec3::ONE
+    }
+}
+
 /// The figure quad's corners in texels with depth: feet at the origin; a texel of height
 /// is `1 / block_h` blocks up, which is `rise / block_h` nearer the viewer at this tilt.
 pub fn figure_corners(facing: f32, tilt: Tilt) -> Vec<[f32; 3]> {
@@ -321,9 +415,10 @@ pub fn figure_faces(facing: f32, frame: usize, tilt: Tilt) -> crate::world::mesh
     }
 }
 
-/// The figure as a strip of [`FRAMES`] frames: standing, then mid-step. Drawn here so the
-/// base pack ships no images: hair, face, a tunic lit from the left, belt, trousers, boots,
-/// and one texel of ink around the lot.
+/// The figure as a strip of [`STRIP`] frames: for each heading (sideways, back to the
+/// viewer, facing the viewer) standing, then mid-step. Drawn here so the base pack ships no
+/// images: hair, face, a tunic lit from the left, belt, trousers, boots, and one texel of
+/// ink around the lot.
 pub fn figure_texture() -> Image {
     const HAIR: [u8; 4] = [78, 50, 34, 255];
     const SKIN: [u8; 4] = [236, 192, 150, 255];
@@ -338,10 +433,10 @@ pub fn figure_texture() -> Image {
     const EYE: [u8; 4] = [40, 34, 48, 255];
     const INK: [u8; 4] = [26, 24, 36, 255];
     let (fw, h) = (FIGURE.x as i32, FIGURE.y as i32);
-    let w = fw * FRAMES as i32;
+    let w = fw * STRIP as i32;
     let mut px = vec![[0u8; 4]; (w * h) as usize];
-    for frame in 0..FRAMES as i32 {
-        let ox = frame * fw;
+    for column in 0..STRIP as i32 {
+        let ox = column * fw;
         let mut rect = |x0: i32, y0: i32, x1: i32, y1: i32, c: [u8; 4]| {
             for y in y0.max(0)..y1.min(h) {
                 for x in x0.max(0)..x1.min(fw) {
@@ -349,19 +444,45 @@ pub fn figure_texture() -> Image {
                 }
             }
         };
-        let stepping = frame == 1;
-        // Head, facing right: hair over the crown and down the back.
-        rect(5, 1, 11, 4, HAIR);
-        rect(5, 4, 7, 7, HAIR);
-        rect(7, 4, 11, 9, SKIN);
-        rect(6, 7, 7, 9, SKIN_DARK);
-        rect(9, 6, 10, 7, EYE);
-        rect(7, 9, 10, 10, SKIN_DARK);
+        let heading = column / FRAMES as i32;
+        let stepping = column % FRAMES as i32 == 1;
+        match heading {
+            0 => {
+                // Sideways, facing right: hair over the crown and down the back.
+                rect(5, 1, 11, 4, HAIR);
+                rect(5, 4, 7, 7, HAIR);
+                rect(7, 4, 11, 9, SKIN);
+                rect(6, 7, 7, 9, SKIN_DARK);
+                rect(9, 6, 10, 7, EYE);
+                rect(7, 9, 10, 10, SKIN_DARK);
+            }
+            1 => {
+                // Back to the viewer: all hair, a bit of neck.
+                rect(5, 1, 11, 8, HAIR);
+                rect(5, 8, 11, 9, HAIR);
+                rect(7, 9, 10, 10, SKIN_DARK);
+            }
+            _ => {
+                // Facing the viewer: a fringe, two eyes, a mouth.
+                rect(5, 1, 11, 4, HAIR);
+                rect(5, 4, 6, 7, HAIR);
+                rect(10, 4, 11, 7, HAIR);
+                rect(6, 4, 10, 9, SKIN);
+                rect(6, 8, 10, 9, SKIN_DARK);
+                rect(6, 6, 7, 7, EYE);
+                rect(9, 6, 10, 7, EYE);
+                rect(7, 9, 10, 10, SKIN_DARK);
+            }
+        }
         // Tunic: lit on the left, shaded on the right, belted.
         rect(4, 10, 12, 19, TUNIC);
         rect(4, 10, 6, 15, TUNIC_LIGHT);
         rect(10, 10, 12, 19, TUNIC_DARK);
         rect(4, 17, 12, 18, BELT);
+        if heading == 1 {
+            // A seam down the back.
+            rect(8, 10, 9, 17, TUNIC_DARK);
+        }
         // Arms swing against the legs when stepping.
         let swing = if stepping { 1 } else { 0 };
         rect(2, 11 - swing, 4, 17 - swing, TUNIC_LIGHT);
@@ -425,14 +546,16 @@ pub struct PlayerPlugin;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn).add_systems(
-            Update,
-            (movement, place)
-                .chain()
-                .in_set(PlayerSet)
-                .before(crate::world::WorldSet)
-                .run_if(crate::core::not_paused),
-        );
+        app.add_message::<Landed>()
+            .add_systems(Startup, spawn)
+            .add_systems(
+                Update,
+                (movement, place)
+                    .chain()
+                    .in_set(PlayerSet)
+                    .before(crate::world::WorldSet)
+                    .run_if(crate::core::not_paused),
+            );
     }
 }
 
@@ -477,8 +600,8 @@ mod tests {
         let img = figure_texture();
         let data = img.data.as_ref().unwrap();
         let opaque = data.chunks(4).filter(|p| p[3] == 255).count();
-        assert!(opaque > 300 && opaque < (FIGURE.x * FIGURE.y) as usize * FRAMES);
-        assert_eq!(img.width(), FIGURE.x * FRAMES as u32);
+        assert!(opaque > 900 && opaque < (FIGURE.x * FIGURE.y) as usize * STRIP);
+        assert_eq!(img.width(), FIGURE.x * STRIP as u32);
         // The corners stay transparent.
         assert_eq!(data[3], 0);
     }

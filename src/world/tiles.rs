@@ -27,6 +27,8 @@ pub type Tile = Vec<[u8; 4]>;
 pub struct Tiles {
     /// Atlas size in texels.
     pub size: UVec2,
+    /// How many blocks the atlas holds; the crack tiles follow their tiles.
+    pub blocks: u32,
     /// Per block: whether the shader animates it.
     pub water: Vec<bool>,
     /// Per block: minimum brightness.
@@ -46,12 +48,72 @@ pub struct Tiles {
     pub image: Image,
 }
 
+/// Crack stages drawn after the block tiles: stage 0 is a plain white square for the
+/// target highlight, 1 to `CRACKS - 1` are deepening cracks.
+pub const CRACKS: u32 = 5;
+
 impl Tiles {
     /// Texel origin of a block's tile: `face` 0 is the top, 1 the sides.
     pub fn origin(&self, block: u16, face: u32) -> Vec2 {
         let i = block as u32 * 2 + face;
         Vec2::new(((i % COLS) * TILE) as f32, ((i / COLS) * TILE) as f32)
     }
+
+    /// Atlas rectangle of crack stage `stage` as uv min and max.
+    pub fn crack_uv(&self, stage: u32) -> (Vec2, Vec2) {
+        let i = self.blocks * 2 + stage.min(CRACKS - 1);
+        let o = Vec2::new(((i % COLS) * TILE) as f32, ((i / COLS) * TILE) as f32);
+        let size = self.size.as_vec2();
+        (o / size, (o + Vec2::splat(TILE as f32)) / size)
+    }
+}
+
+/// A crack tile: `stage` 0 is solid white; higher stages grow dark arms from the middle,
+/// alpha only where there is a crack.
+pub fn crack_tile(stage: u32) -> Tile {
+    let mut tile = vec![[0u8; 4]; (TILE * TILE) as usize];
+    if stage == 0 {
+        return vec![[255, 255, 255, 255]; (TILE * TILE) as usize];
+    }
+    let mut ink = |x: i32, y: i32, a: u8| {
+        if (0..T).contains(&x) && (0..T).contains(&y) {
+            tile[(y * T + x) as usize] = [18, 16, 24, a];
+        }
+    };
+    // Arms wander out from the centre; each stage adds two and lengthens the rest.
+    let arms = 2 * stage as i32;
+    for a in 0..arms {
+        let (mut x, mut y) = (7 + a % 2, 7 + (a / 2) % 2);
+        let (mut dx, mut dy) = match a % 4 {
+            0 => (1, 0),
+            1 => (-1, 0),
+            2 => (0, 1),
+            _ => (0, -1),
+        };
+        let length = 3 + stage as i32 + a % 3;
+        for i in 0..length {
+            ink(x, y, if i < length - 1 { 255 } else { 160 });
+            let r = hash01(0xC4AC, a, i, stage);
+            // Mostly straight on, sometimes a sidestep.
+            if r < 0.30 {
+                std::mem::swap(&mut dx, &mut dy);
+                if r < 0.15 {
+                    dx = -dx;
+                    dy = -dy;
+                }
+                x += dx;
+                y += dy;
+                std::mem::swap(&mut dx, &mut dy);
+                if r < 0.15 {
+                    dx = -dx;
+                    dy = -dy;
+                }
+            }
+            x += dx;
+            y += dy;
+        }
+    }
+    tile
 }
 
 /// A colour and how many steps lighter or darker than it to draw.
@@ -455,13 +517,24 @@ fn png_tile(packs: &LoadedPacks, rel: &str, side: bool) -> Option<Tile> {
     None
 }
 
+/// Copies a tile into the atlas at texel `o`.
+fn blit(data: &mut [u8], size: UVec2, o: UVec2, tile: &Tile) {
+    for y in 0..TILE {
+        for x in 0..TILE {
+            let at = (((o.y + y) * size.x + o.x + x) * 4) as usize;
+            data[at..at + 4].copy_from_slice(&tile[(y * TILE + x) as usize]);
+        }
+    }
+}
+
 /// Builds the atlas for every block, preferring pack PNGs over generated tiles.
 pub fn atlas(blocks: &Registry<BlockDef>, packs: Option<&LoadedPacks>) -> (Image, Tiles) {
-    let rows = (blocks.len() as u32 * 2).div_ceil(COLS).max(1);
+    let rows = (blocks.len() as u32 * 2 + CRACKS).div_ceil(COLS).max(1);
     let size = UVec2::new(COLS * TILE, rows * TILE);
     let mut data = vec![0u8; (size.x * size.y * 4) as usize];
     let mut info = Tiles {
         size,
+        blocks: blocks.len() as u32,
         water: blocks
             .iter()
             .map(|(_, b)| b.pattern == Pattern::Water)
@@ -505,13 +578,17 @@ pub fn atlas(blocks: &Registry<BlockDef>, packs: Option<&LoadedPacks>) -> (Image
         }
         for (face, tile) in [top, side].iter().enumerate() {
             let o = info.origin(i, face as u32).as_uvec2();
-            for y in 0..TILE {
-                for x in 0..TILE {
-                    let at = (((o.y + y) * size.x + o.x + x) * 4) as usize;
-                    data[at..at + 4].copy_from_slice(&tile[(y * TILE + x) as usize]);
-                }
-            }
+            blit(&mut data, size, o, tile);
         }
+    }
+    for stage in 0..CRACKS {
+        let (min, _) = info.crack_uv(stage);
+        blit(
+            &mut data,
+            size,
+            (min * size.as_vec2()).round().as_uvec2(),
+            &crack_tile(stage),
+        );
     }
     let mut img = Image::new(
         Extent3d {
@@ -535,6 +612,52 @@ mod tests {
 
     fn block(ron: &str) -> BlockDef {
         ron::from_str(ron).unwrap()
+    }
+
+    #[test]
+    fn cracks_deepen_by_stage_and_props_have_holes() {
+        let inked = |stage: u32| crack_tile(stage).iter().filter(|p| p[3] > 0).count();
+        assert_eq!(inked(0), (TILE * TILE) as usize);
+        let counts: Vec<usize> = (1..CRACKS).map(inked).collect();
+        assert!(counts.windows(2).all(|w| w[0] < w[1]), "{counts:?}");
+        assert!(
+            counts[0] >= 6 && counts[CRACKS as usize - 2] < 120,
+            "{counts:?}"
+        );
+        // Print the stages for a look when run with --nocapture.
+        for stage in 1..CRACKS {
+            let t = crack_tile(stage);
+            for y in 0..T {
+                let row: String = (0..T)
+                    .map(|x| {
+                        if t[(y * T + x) as usize][3] > 0 {
+                            '#'
+                        } else {
+                            '.'
+                        }
+                    })
+                    .collect();
+                println!("{row}");
+            }
+            println!();
+        }
+        let tuft = draw(&block(
+            r#"(id: "t", color: (90, 160, 60), pattern: Tuft, shape: Cross)"#,
+        ))
+        .1;
+        let holes = tuft.iter().filter(|p| p[3] == 0).count();
+        assert!(holes > 150 && holes < 250, "a tuft is mostly air: {holes}");
+        let glass = draw(&block(
+            r#"(id: "g", color: (190, 220, 240), pattern: Glass, cutout: true)"#,
+        ))
+        .0;
+        assert!(glass.iter().filter(|p| p[3] == 0).count() > 180);
+        // The atlas leaves room for the crack stages after the blocks.
+        let mut blocks = Registry::<BlockDef>::default();
+        blocks.insert(BlockDef::air());
+        let tiles = atlas(&blocks, None).1;
+        let (lo, hi) = tiles.crack_uv(CRACKS - 1);
+        assert!(hi.x <= 1.0 && hi.y <= 1.0 && lo.x < hi.x && lo.y < hi.y);
     }
 
     #[test]

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.9.3
+
+Feel: cracks, chips and dust, a figure that turns, and a glow around lights.
+
+### New
+- Cracks: the target highlight shows a crack tile from the atlas once a block starts to
+  wear, deepening through four stages (`Tiles::crack_uv`, drawn by `crack_tile`).
+- Particles (`src/fx.rs`): breaking a block throws eight chips coloured from its tile;
+  landing after a fall of a block or more raises dust. They fall, settle on the ground and
+  fade in 0.6 s; at most 200 live. Lua `particles()`.
+- The figure turns with the walk: sideways, back to the viewer, facing the viewer, each
+  standing and stepping (a six-column strip). Standing still it breathes a texel every
+  1.2 s; a landing squashes it for a tenth of a second. Lua `player_heading()`.
+- Bloom: the camera renders HDR and blooms only what is brighter than white, so torches,
+  lava and crystal glow a little while everything else stays crisp pixels. Needs the
+  `bevy_post_process` feature; tonemapping stays linear.
+- Lua `screen_of(x, y, z)`; harness scenarios for chips, dust and the heading; the
+  zoom-to-pointer scenario builds its own target block so it no longer depends on what
+  the terrain around the spawn looks like.
+
 ## 0.9.2
 
 World: see-through water, leaves with gaps, glass, and small plants and stones.

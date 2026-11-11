@@ -5,6 +5,7 @@
 mod camera;
 mod core;
 mod debug;
+mod fx;
 mod harness;
 mod interact;
 mod inventory;
@@ -124,6 +125,7 @@ fn main() {
             world::WorldPlugin,
             player::PlayerPlugin,
             interact::InteractPlugin,
+            fx::FxPlugin,
             harness::HarnessPlugin,
             script::ScriptPlugin,
         ))

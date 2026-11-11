@@ -163,10 +163,12 @@ end)
 | `press_key`, `release_key`, `press_mouse`, `release_mouse` | held from the next frame; names as in `settings.ron`, buttons `"left"`, `"right"`, `"middle"` |
 | `move_mouse(dx, dy)`, `scroll(lines)`, `twist(radians)` | pointer motion, wheel, trackpad rotation |
 | `aim_at(x, y, z)`, `aim_screen(x, y)`, `clear_aim()` | point at a world position, or at a screen offset from the middle in texels |
+| `screen_of(x, y, z)` | where a world position lands on screen, as an offset from the middle in texels |
 | `teleport(x, y, z)` | move the player's feet |
 | `set_time_scale(s)` | run the game clock faster (hooks see a bigger `dt`) |
 | `simulate_frame_ms(ms)` | make `perf()` read as on a machine with that frame time; `nil` stops |
 | `frame()`, `view_turning()`, `hud_text(key)`, `selected_slot()`, `is_grounded()`, `target()` | readouts; `target()` is a table `x, y, z, block, nx, ny, nz` or `nil` |
+| `particles()`, `player_heading()` | live particles; which way the figure is turned: `left`, `right`, `away`, `toward` |
 
 Injected input is indistinguishable from a player's to the engine and to other scripts,
 so a test can drive another mod's controls. `mods/debug/tests/` covers the engine, the

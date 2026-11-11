@@ -140,33 +140,38 @@ end)
 test("zooming toward the pointer keeps the block under it", function()
     local z = zoom()
     set_setting("peek", false)
-    -- A screen point with a block under it before and after the zoom; water, empty air
-    -- and anything out of reach give no target, so try a few spots.
-    local before, after = nil, nil
-    for _, p in ipairs({ { 90, 0 }, { -90, 0 }, { 0, 50 }, { 0, -50 }, { 60, 30 }, { -60, -30 } }) do
-        aim_screen(p[1], p[2])
-        wait(2)
-        before = target()
-        if before then
-            zoom_at(6, p[1], p[2])
-            -- Long enough for the 0.15 s zoom ease, short enough that the pan has not
-            -- started drifting home (1.5 s), even on a slow machine.
-            wait(20)
-            -- The same screen pixel is now that many fewer texels from the middle.
-            aim_screen(p[1] * z / 6, p[2] * z / 6)
-            wait(2)
-            after = target()
-            if after then break end
-            local cx, cy = camera_center()
-            local px, py, pz = player_pos()
-            log(string.format("zoom test: no target after zooming at %d,%d (zoom %d, centre %.0f,%.0f, player %.1f,%.1f,%.1f, before %d,%d,%d %s)",
-                p[1], p[2], zoom(), cx, cy, px, py, pz, before.x, before.y, before.z, before.block))
-            clear_aim()
-            set_zoom(z)
-            wait(60)
+    -- A stone of our own two cells over and one up, with the air above it cleared, so
+    -- the pointer finds it whatever the terrain around the spawn looks like.
+    local px, py, pz = player_pos()
+    local bx, by, bz = math.floor(px) + 2, math.floor(py), math.floor(pz) + 1
+    -- Nothing above or beside it up to tree height, whichever way the view faces.
+    local cleared = {}
+    for dx = -1, 1 do
+        for dy = -1, 1 do
+            for h = bz, bz + 7 do
+                local b = get_block(bx + dx, by + dy, h)
+                if b ~= "air" then
+                    cleared[#cleared + 1] = { bx + dx, by + dy, h, b }
+                    set_block(bx + dx, by + dy, h, "air")
+                end
+            end
         end
     end
-    expect(before ~= nil and after ~= nil, "something is under the pointer both times")
+    set_block(bx, by, bz, "stone")
+    wait(2)
+    local sx, sy = screen_of(bx + 0.5, by + 0.5, bz + 1)
+    aim_screen(sx, sy)
+    wait(2)
+    local before = target()
+    zoom_at(6, sx, sy)
+    -- Long enough for the 0.15 s zoom ease, short enough that the pan has not started
+    -- drifting home (1.5 s), even on a slow machine.
+    wait(20)
+    -- The same screen pixel is now that many fewer texels from the middle.
+    aim_screen(sx * z / 6, sy * z / 6)
+    wait(2)
+    local after = target()
+    expect(before ~= nil and after ~= nil, string.format("something is under the pointer both times (%.0f,%.0f)", sx, sy))
     if before and after then
         expect(before.x == after.x and before.y == after.y and before.z == after.z,
             string.format("same block: %d,%d,%d vs %d,%d,%d", before.x, before.y, before.z, after.x, after.y, after.z))
@@ -174,5 +179,7 @@ test("zooming toward the pointer keeps the block under it", function()
     clear_aim()
     set_zoom(z)
     set_setting("peek", true)
+    set_block(bx, by, bz, "air")
+    for _, c in ipairs(cleared) do set_block(c[1], c[2], c[3], c[4]) end
     wait(40)
 end)

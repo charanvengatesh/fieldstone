@@ -159,6 +159,10 @@ pub struct BlockMaterial(pub Handle<BlockArt>);
 #[derive(Resource)]
 pub struct WaterMaterial(pub Handle<WaterArt>);
 
+/// The tile atlas as an image, for anything drawn with plain materials: the crack overlay.
+#[derive(Resource)]
+pub struct AtlasImage(pub Handle<Image>);
+
 pub fn setup(
     blocks: Res<Registry<BlockDef>>,
     packs: Option<Res<LoadedPacks>>,
@@ -183,7 +187,11 @@ pub fn setup(
         block,
         atlas: atlas.clone(),
     })));
-    commands.insert_resource(WaterMaterial(waters.add(WaterArt { block, atlas })));
+    commands.insert_resource(WaterMaterial(waters.add(WaterArt {
+        block,
+        atlas: atlas.clone(),
+    })));
+    commands.insert_resource(AtlasImage(atlas));
     commands.insert_resource(tiles);
 }
 
