@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.9.5
+
+### Fixed
+- Turning the view (Q, E, R, the orbit drag, a tilt change) swung the camera around
+  before it settled. The projection pivots on the world origin, so the player's point on
+  screen moved and the camera chased it through the dead zone and its easing. The camera
+  now takes that swing in full each frame, so the world turns about the player, and the
+  view settles (`ViewSet`) before the camera reads it rather than a frame after.
+
 ## 0.9.4
 
 Trim. After 0.9.0 to 0.9.3 the base had grown past what an engine needs; this release

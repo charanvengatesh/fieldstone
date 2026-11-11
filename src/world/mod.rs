@@ -140,6 +140,11 @@ impl Map {
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct WorldSet;
 
+/// Where the view angle and tilt for this frame are decided: after scripts and input,
+/// before the camera follows and the world streams.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ViewSet;
+
 pub struct WorldPlugin;
 
 impl Plugin for WorldPlugin {
@@ -153,13 +158,22 @@ impl Plugin for WorldPlugin {
             .init_resource::<stream::Streaming>()
             .init_resource::<stream::Perf>()
             .add_systems(Startup, mesh::setup)
+            // The view settles before the camera reads it, so the camera and the world
+            // agree on the angle within a frame; scripts (the camera mod) get their say
+            // first.
+            .add_systems(
+                Update,
+                (stream::view_keys, stream::ease_view)
+                    .chain()
+                    .in_set(ViewSet)
+                    .after(crate::script::ScriptSet)
+                    .before(WorldSet),
+            )
             .add_systems(
                 Update,
                 (
                     mesh::tick,
                     stream::measure,
-                    stream::view_keys,
-                    stream::ease_view,
                     stream::stream,
                     stream::settings_changed,
                     stream::remesh,

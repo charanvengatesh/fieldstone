@@ -17,6 +17,17 @@ test("Q turns a quarter smoothly and R comes back", function()
     wait(1)
     expect(near(view_target(), start + 90, 0.01), "Q asks for a quarter turn")
     expect(view_turning(), "the turn is a motion, not a cut")
+    -- The world turns about the player: they stay put on screen all the way round.
+    local px, py, pz = player_pos()
+    local sx0, sy0 = screen_of(px, py, pz)
+    local worst = 0
+    for _ = 1, 120 do
+        if settled() then break end
+        local sx, sy = screen_of(px, py, pz)
+        worst = math.max(worst, math.abs(sx - sx0), math.abs(sy - sy0))
+        wait(1)
+    end
+    expect(worst < 2.0, string.format("the player stayed within %.1f texels of their spot mid-turn", worst))
     expect(wait_until(settled, 120), "the turn finishes")
     expect(near(view_angle(), view_target(), 0.01), "the angle lands on the target")
     press_key("R")

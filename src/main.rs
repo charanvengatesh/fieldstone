@@ -138,6 +138,7 @@ fn main() {
                 look::update
                     .after(player::PlayerSet)
                     .after(interact::InteractSet)
+                    .after(world::ViewSet)
                     .before(world::WorldSet),
             ),
         );

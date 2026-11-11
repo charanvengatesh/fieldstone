@@ -47,6 +47,10 @@ pub struct Look {
     level: u32,
     /// Pointer offset to zoom about on the next update, if a script named one.
     zoom_about: Option<Vec2>,
+    /// Where the focus projected last frame and the view it projected through, to tell a
+    /// turn of the view from a walk.
+    last_focus: Vec2,
+    last_view: Option<View>,
     started: bool,
 }
 
@@ -68,6 +72,8 @@ impl Default for Look {
             pan_rest: 0.0,
             level: 0,
             zoom_about: None,
+            last_focus: Vec2::ZERO,
+            last_view: None,
             started: false,
         }
     }
@@ -115,10 +121,26 @@ pub fn update(
         look.started = true;
         look.settled = p.truncate();
         look.center = p.truncate();
+        look.last_focus = p.truncate();
         look.level = settings.pixel_scale;
         look.scale = 1.0 / settings.pixel_scale.clamp(1, 6) as f32;
         look.scale_target = look.scale;
     }
+
+    // While the view turns or tilts, the focus swings across the screen (the projection
+    // pivots on the world origin, not on the player). The camera takes that swing in full
+    // and at once, so the world turns about the player instead of the camera chasing them
+    // round through the dead zone.
+    let view_moved = look
+        .last_view
+        .is_some_and(|v| v.angle != view.angle || v.tilt != view.tilt);
+    if view_moved {
+        let swing = p.truncate() - look.last_focus;
+        look.settled += swing;
+        look.center += swing;
+    }
+    look.last_focus = p.truncate();
+    look.last_view = Some(*view);
 
     // Zoom: a new resting level eases the scale, and the point under the pointer stays
     // where it is by shifting the pan.
@@ -206,6 +228,34 @@ mod tests {
                 .advance_by(std::time::Duration::from_millis(16));
             sys.run((), w).unwrap();
             sys.apply_deferred(w);
+        }
+    }
+
+    #[test]
+    fn a_turn_of_the_view_pivots_on_the_player() {
+        let mut w = world();
+        w.insert_resource(Focus(Vec3::new(40.5, -12.5, 10.0)));
+        run(&mut w, 30);
+        let offset = |w: &World| {
+            let p = w
+                .resource::<View>()
+                .project(w.resource::<Focus>().0)
+                .truncate();
+            w.resource::<Look>().center - p
+        };
+        let before = offset(&w);
+        w.resource_mut::<View>()
+            .turn_by(std::f32::consts::FRAC_PI_2);
+        for _ in 0..40 {
+            // The view eases a step, then the camera reacts in the same frame order as
+            // the game: ease_view runs before look::update.
+            w.resource_mut::<View>().ease(1.0 / 60.0);
+            run(&mut w, 1);
+            let now = offset(&w);
+            assert!(
+                now.distance(before) < 0.5,
+                "the player drifted on screen mid-turn: {before} -> {now}"
+            );
         }
     }
 
