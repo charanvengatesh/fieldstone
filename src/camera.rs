@@ -29,19 +29,6 @@ pub fn setup(mut commands: Commands) {
     ));
 }
 
-/// Keeps the picture size current: until the pixel target exists the window itself is
-/// the picture, at `magnify` window pixels per texel.
-pub fn measure(
-    cam: Res<Cam>,
-    window: Single<&Window, With<PrimaryWindow>>,
-    mut picture: ResMut<Picture>,
-) {
-    let size = Vec2::new(window.width(), window.height()) / cam.magnify.max(1e-3);
-    if size.x > 1.0 && (size - picture.size).abs().max_element() > 0.5 {
-        picture.size = size;
-    }
-}
-
 /// Puts the camera where [`Cam`] says. The eye is snapped so the focus lands on a whole
 /// texel, which keeps texels from straddling pixels and shimmering as the camera eases.
 pub fn follow(
@@ -55,7 +42,8 @@ pub fn follow(
     let nudge = (right * snap.x + up * snap.y) / cam.zoom();
     let mut snapped = *cam;
     snapped.focus -= nudge;
-    let (transform, projection) = snapped.pose(picture.size);
+    // The picture is its own render target: one texel is one of its pixels.
+    let (transform, projection) = snapped.pose(picture.size, 1.0);
     for (mut tf, mut proj) in &mut cams {
         if *tf != transform {
             *tf = transform;
@@ -64,16 +52,17 @@ pub fn follow(
     }
 }
 
-/// The pointer as texels from the middle of the picture, x right, y up.
+/// The pointer as texels from the middle of the picture, x right, y up. A texel is
+/// `pixel_scale` physical pixels; the window reports the pointer in logical ones.
 pub fn track_cursor(
-    cam: Res<Cam>,
+    settings: Res<Settings>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut cursor: ResMut<Cursor>,
 ) {
     cursor.0 = window.cursor_position().map(|p| {
         let centre = Vec2::new(window.width(), window.height()) / 2.0;
-        let d = p - centre;
-        Vec2::new(d.x, -d.y) / cam.magnify.max(1e-3)
+        let d = (p - centre) * window.scale_factor();
+        Vec2::new(d.x, -d.y) / settings.pixel_scale.clamp(1, 6) as f32
     });
 }
 
@@ -124,7 +113,7 @@ impl Plugin for CameraPlugin {
         .add_systems(
             Update,
             (
-                (track_cursor, measure).before(crate::interact::InteractSet),
+                track_cursor.before(crate::interact::InteractSet),
                 zoom.before(crate::cam::follow),
                 follow.after(crate::cam::follow),
             )

@@ -897,6 +897,58 @@ pub fn run(world: &mut World) {
             })?,
         )?;
         g.set(
+            "shader_passes",
+            scope.create_function(|lua, ()| {
+                let w = shared.borrow();
+                let list = lua.create_table()?;
+                if let Some(chain) = w.get_resource::<crate::post::Chain>() {
+                    for (i, p) in chain.passes.iter().enumerate() {
+                        let t = lua.create_table()?;
+                        t.set("id", p.id.as_str())?;
+                        t.set("order", p.order)?;
+                        t.set("enabled", p.enabled)?;
+                        list.set(i + 1, t)?;
+                    }
+                }
+                Ok(list)
+            })?,
+        )?;
+        g.set(
+            "set_shader",
+            scope.create_function(|_, (id, on): (String, bool)| {
+                let mut w = shared.borrow_mut();
+                let Some(mut chain) = w.get_resource_mut::<crate::post::Chain>() else {
+                    return Ok(false);
+                };
+                match chain.pass_mut(&id) {
+                    Some(p) => {
+                        p.enabled = on;
+                        Ok(true)
+                    }
+                    None => {
+                        warn!("script: no shader pass '{id}'");
+                        Ok(false)
+                    }
+                }
+            })?,
+        )?;
+        g.set(
+            "set_shader_param",
+            scope.create_function(|_, (id, index, value): (String, usize, f32)| {
+                let mut w = shared.borrow_mut();
+                let Some(mut chain) = w.get_resource_mut::<crate::post::Chain>() else {
+                    return Ok(false);
+                };
+                match chain.pass_mut(&id) {
+                    Some(p) if (1..=16).contains(&index) => {
+                        p.params[index - 1] = value;
+                        Ok(true)
+                    }
+                    _ => Ok(false),
+                }
+            })?,
+        )?;
+        g.set(
             "particles",
             scope.create_function(|_, ()| {
                 let mut w = shared.borrow_mut();

@@ -307,6 +307,26 @@ pub struct FeatureDef {
 }
 def!(FeatureDef, "features.ron");
 
+/// `shaders.ron`: a post-process pass over the picture, in order. `file` is a WGSL fragment
+/// shader in the pack (see `mods/README.md` for its bindings); `source` is read from it
+/// when the pack loads.
+#[derive(Deserialize, Debug, Clone)]
+pub struct ShaderDef {
+    pub id: String,
+    pub file: String,
+    /// Passes run in ascending order; ties by id.
+    #[serde(default)]
+    pub order: i32,
+    #[serde(default = "yes")]
+    pub enabled: bool,
+    /// Sixteen numbers the shader reads as four `vec4`s; scripts can change them.
+    #[serde(default)]
+    pub params: Vec<f32>,
+    #[serde(skip)]
+    pub source: String,
+}
+def!(ShaderDef, "shaders.ron");
+
 fn any_height() -> (i32, i32) {
     (0, i32::MAX)
 }

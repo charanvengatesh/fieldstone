@@ -315,10 +315,9 @@ impl Cam {
         o + d * ((z - o.z) / d.z)
     }
 
-    /// Bevy's transform and projection for this camera on a `target`-sized picture. Until
-    /// the picture is its own render target, the window is the picture at `magnify` window
-    /// pixels per texel, which the orthographic scale takes in.
-    pub fn pose(&self, target: Vec2) -> (Transform, Projection) {
+    /// Bevy's transform and projection for this camera on a `target`-sized picture drawn
+    /// at `magnify` pixels per texel (1 when the picture is its own render target).
+    pub fn pose(&self, target: Vec2, magnify: f32) -> (Transform, Projection) {
         let eye = if self.perspective {
             self.focus + self.toward_eye() * self.perspective_distance(target.y)
         } else {
@@ -334,7 +333,7 @@ impl Cam {
             })
         } else {
             Projection::Orthographic(OrthographicProjection {
-                scale: 1.0 / (self.zoom() * self.magnify.max(1e-3)),
+                scale: 1.0 / (self.zoom() * magnify.max(1e-3)),
                 near: 0.1,
                 far: 2000.0,
                 ..OrthographicProjection::default_3d()

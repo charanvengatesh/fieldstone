@@ -58,6 +58,7 @@ pub fn load_all(app: &mut App) {
     w.get_resource_or_init::<Registry<WorldGenDef>>();
     w.get_resource_or_init::<Registry<StampDef>>();
     w.get_resource_or_init::<Registry<FeatureDef>>();
+    w.get_resource_or_init::<Registry<ShaderDef>>();
     for (dir, meta) in &packs {
         info!("loading pack '{}' from {}", meta.name, dir.display());
         if meta.format > PACK_FORMAT {
@@ -71,6 +72,7 @@ pub fn load_all(app: &mut App) {
         merge::<WorldGenDef>(w, dir);
         merge::<StampDef>(w, dir);
         merge::<FeatureDef>(w, dir);
+        merge_shaders(w, dir);
     }
     block_items(w);
     app.insert_resource(LoadedPacks(packs));
@@ -96,6 +98,30 @@ fn block_items(world: &mut World) {
     let mut items = world.resource_mut::<Registry<ItemDef>>();
     for item in made {
         items.insert(item);
+    }
+}
+
+/// Shader passes carry their WGSL source, read from the pack beside `shaders.ron`.
+fn merge_shaders(world: &mut World, dir: &Path) {
+    let path = dir.join(ShaderDef::FILE);
+    if !path.exists() {
+        return;
+    }
+    let Some(defs) = read_ron::<Vec<ShaderDef>>(&path) else {
+        return;
+    };
+    let mut reg = world.get_resource_or_init::<Registry<ShaderDef>>();
+    for mut d in defs {
+        let file = dir.join(&d.file);
+        match fs::read_to_string(&file) {
+            Ok(source) => d.source = source,
+            Err(e) => {
+                warn!("shader '{}': cannot read {}: {e}", d.id, file.display());
+                continue;
+            }
+        }
+        d.params.resize(16, 0.0);
+        reg.insert(d);
     }
 }
 

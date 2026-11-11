@@ -12,6 +12,7 @@ mod harness;
 mod interact;
 mod inventory;
 mod player;
+mod post;
 mod script;
 mod smoke;
 mod ui;
@@ -170,6 +171,7 @@ fn main() {
             bevy::pbr::MaterialPlugin::<world::mesh::FlatArt>::default(),
             bevy::pbr::MaterialPlugin::<world::mesh::SilhouetteArt>::default(),
             camera::CameraPlugin,
+            post::PostPlugin,
             debug::DebugPlugin,
             ui::UiPlugin,
         ))
