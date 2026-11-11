@@ -18,7 +18,9 @@ use crate::interact::Target;
 use crate::inventory::Inventory;
 use crate::player::{Player, figure_faces, figure_texture};
 use crate::world::iso::View;
-use crate::world::mesh::{Faces, Grid, LEVELS, Quality, chunk_faces, unpack_flags};
+use crate::world::mesh::{
+    Faces, Grid, LEVELS, Quality, SeeThrough, chunk_faces, see_through_target, unpack_flags,
+};
 use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
 use crate::world::{CHUNK, Focus, Map};
@@ -80,6 +82,8 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     let wg = world.resource::<WorldGen>();
     let tiles = world.get_resource::<Tiles>().ok_or("no tiles yet")?;
     let time = world.resource::<Time>().elapsed_secs();
+    let see_through = world.resource::<SeeThrough>().0;
+    let player_target = see_through_target(&view, pos.with_z(shown_z), see_through);
     let center = view.project(world.resource::<Focus>().0).truncate();
     let mut canvas = Canvas::new(1280, 800, scale, center, Color::srgb_u8(24, 28, 40));
     let quality = *world.resource::<Quality>();
@@ -88,10 +92,14 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
             map.get(p).unwrap_or_else(|| wg.block(p))
         });
         let origin = (*chunk * CHUNK).extend(0).as_vec3();
-        canvas.draw_blocks(origin, view, &faces, tiles, time);
+        canvas.draw_blocks(origin, view, &faces, tiles, time, player_target);
     }
     let at = view.project(pos.with_z(shown_z)) + Vec3::Z * 0.05;
-    canvas.draw(at, &figure_faces(facing, frame), &figure_texture());
+    canvas.draw(
+        at,
+        &figure_faces(facing, frame, view.tilt),
+        &figure_texture(),
+    );
     canvas.save(name)
 }
 
@@ -341,6 +349,9 @@ impl Canvas {
     /// slid by `time`. Keep the two in step.
     ///
     /// The faces are in world space relative to `origin`; `view` puts them on screen.
+    ///
+    /// `player` is the shader's see-through target (screen x, y, depth, radius) or zero
+    /// radius for none.
     pub fn draw_blocks(
         &mut self,
         origin: Vec3,
@@ -348,6 +359,7 @@ impl Canvas {
         faces: &Faces,
         tiles: &Tiles,
         time: f32,
+        player: Vec4,
     ) {
         let Some(tex) = tiles.image.data.as_ref() else {
             return;
@@ -355,7 +367,34 @@ impl Canvas {
         let size = tiles.size.as_vec2();
         let tile = TILE as f32;
         let place = |p: [f32; 3]| view.project(origin + Vec3::from(p));
+        let (scale, center, width, height) = (self.scale, self.center, self.width, self.height);
         self.raster(place, faces, |faces, i, w| {
+            // See-through, as the shader does it: the fragment's screen position and depth.
+            if player.w > 0.0 {
+                let pos = (0..3)
+                    .map(|k| place(faces.positions[i[k]]) * w[k])
+                    .sum::<Vec3>();
+                if pos.z > player.z + 1.3 {
+                    let d = (pos.truncate() - Vec2::new(player.x, player.y))
+                        / Vec2::new(player.w, player.w * 0.75);
+                    let r = d.length();
+                    if r < 1.0 {
+                        let cover = {
+                            let t = ((r - 1.0) / (0.3 - 1.0)).clamp(0.0, 1.0);
+                            t * t * (3.0 - 2.0 * t)
+                        };
+                        // Canvas pixel of this fragment, then the texel it belongs to.
+                        let px = Vec2::new(
+                            (pos.x - center.x) * scale + width as f32 / 2.0,
+                            height as f32 / 2.0 - (pos.y - center.y) * scale,
+                        );
+                        let texel = (px / scale.max(1.0)).floor().as_ivec2();
+                        if bayer(texel) < cover {
+                            return None;
+                        }
+                    }
+                }
+            }
             let uv_of = |k: usize| Vec2::from(faces.uvs[k]);
             let uv = uv_of(i[0]) * w[0] + uv_of(i[1]) * w[1] + uv_of(i[2]) * w[2];
             let px = uv * size;
@@ -503,6 +542,14 @@ impl Canvas {
     }
 }
 
+/// 4 x 4 ordered dither threshold in 0..1, as in the shader.
+fn bayer(t: IVec2) -> f32 {
+    const TABLE: [f32; 16] = [
+        0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0,
+    ];
+    (TABLE[(t.x.rem_euclid(4) + t.y.rem_euclid(4) * 4) as usize] + 0.5) / 16.0
+}
+
 /// A block drawn alone as a 32 x 32 cut-out, for item icons: the same faces, tiles and
 /// shading as in the world.
 pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
@@ -510,7 +557,7 @@ pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
         if p == IVec3::ZERO { block } else { 0 }
     });
     let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
-    canvas.draw_blocks(Vec3::ZERO, View::default(), &faces, tiles, 0.0);
+    canvas.draw_blocks(Vec3::ZERO, View::default(), &faces, tiles, 0.0, Vec4::ZERO);
     canvas.into_image(true)
 }
 

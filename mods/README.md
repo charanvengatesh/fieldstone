@@ -120,8 +120,10 @@ Functions you can call. They act immediately: a `set_block` is visible to the ne
 | `turn_view(degrees)` | turn smoothly from wherever the view is heading |
 | `set_view_angle(degrees)` | put the view at an angle at once |
 | `snap_view(step)` | head for the nearest multiple of `step` degrees (default 90) |
-| `zoom()`, `set_zoom(n)` | screen pixels per texel, 1 to 6 |
-| `get_setting(name)`, `set_setting(name, value)` | `shadows`, `occlusion`, `grid` (booleans), `mesh_budget_ms`, `view_margin` (numbers) |
+| `zoom()`, `set_zoom(n)`, `zoom_at(n, x, y)` | screen pixels per texel, 1 to 6; `zoom_at` keeps the point `x, y` texels from the middle still |
+| `tilt()`, `set_tilt(name)` | the tilt preset: `low`, `classic`, `high`, `top` |
+| `pan_view(dx, dy)`, `camera_pan()`, `camera_center()` | hold a pan (call every frame), read the pan, read where the camera looks, in texels |
+| `get_setting(name)`, `set_setting(name, value)` | `shadows`, `occlusion`, `grid`, `see_through`, `peek`, `dead_zone` (booleans), `mesh_budget_ms`, `view_margin` (numbers) |
 | `perf()` | a table: `fps`, `frame_ms`, `chunks`, `faces`, `mesh_ms`, `meshed` |
 | `set_hud(key, text)` | keep a line on screen, top right; empty text removes it |
 | `screenshot(name)`, `snapshot(name)`, `dump_state(name)`, `append_file(name, line)` | debug output under `debug/` |
@@ -151,7 +153,7 @@ end)
 | `near(a, b, tolerance)` | numeric closeness |
 | `press_key`, `release_key`, `press_mouse`, `release_mouse` | held from the next frame; names as in `settings.ron`, buttons `"left"`, `"right"`, `"middle"` |
 | `move_mouse(dx, dy)`, `scroll(lines)`, `twist(radians)` | pointer motion, wheel, trackpad rotation |
-| `aim_at(x, y, z)`, `clear_aim()` | point at a world position, as a player would with the pointer |
+| `aim_at(x, y, z)`, `aim_screen(x, y)`, `clear_aim()` | point at a world position, or at a screen offset from the middle in texels |
 | `teleport(x, y, z)` | move the player's feet |
 | `set_time_scale(s)` | run the game clock faster (hooks see a bigger `dt`) |
 | `simulate_frame_ms(ms)` | make `perf()` read as on a machine with that frame time; `nil` stops |
@@ -164,8 +166,8 @@ camera mod and the performance mod; copy one to start.
 ## The mods in this folder
 
 - `camera/` adds free orbit to the engine's quarter turns: Alt-drag, middle-drag or a
-  trackpad twist, settling on the nearest quarter view; R resets; Ctrl or Cmd + scroll
-  zooms; C toggles a compass. Its constants (drag speed, snap step) are at the top of the
+  trackpad twist, settling on the nearest quarter view; Space-drag pans; R resets; Ctrl or
+  Cmd + scroll zooms; C toggles a compass that also names the tilt. Its constants (drag speed, snap step) are at the top of the
   script.
 - `performance/` shows the numbers (F4) and adapts quality to the frame rate, or lets you
   set it (F6). Its levels and thresholds are a table at the top of the script.

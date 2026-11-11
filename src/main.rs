@@ -8,6 +8,7 @@ mod debug;
 mod harness;
 mod interact;
 mod inventory;
+mod look;
 mod player;
 mod script;
 mod smoke;
@@ -33,6 +34,8 @@ pub struct Options {
     pub angle: Option<f32>,
     /// `--test`: headless; run every `tests/*.lua` in the packs and exit with the result.
     pub test: bool,
+    /// `--tilt NAME`: start at a tilt preset.
+    pub tilt: Option<String>,
 }
 
 fn main() {
@@ -61,6 +64,7 @@ fn main() {
             .iter()
             .any(|a| a == "--headless-smoke" || a == "--snapshot" || a == "--test"),
         test: args.iter().any(|a| a == "--test"),
+        tilt: value("--tilt").cloned(),
         snapshot: value("--snapshot").cloned(),
         scale: value("--scale").and_then(|v| v.parse().ok()).unwrap_or(2.0),
         rot: value("--rot").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -118,7 +122,17 @@ fn main() {
             script::ScriptPlugin,
         ))
         .insert_resource(world::mesh::Grid(options.grid))
-        .add_systems(Update, core::save::save.after(interact::InteractSet));
+        .init_resource::<look::Look>()
+        .add_systems(
+            Update,
+            (
+                core::save::save.after(interact::InteractSet),
+                look::update
+                    .after(player::PlayerSet)
+                    .after(interact::InteractSet)
+                    .before(world::WorldSet),
+            ),
+        );
     if options.snapshot.is_some() {
         // Load what the 1280 x 800 picture will show, not what a window would.
         app.insert_resource(world::stream::Viewport {
@@ -205,11 +219,19 @@ fn setup_world(app: &mut App, options: &Options) {
         view.angle = degrees.to_radians();
         view.target = view.angle;
     }
+    if let Some(tilt) = options.tilt.as_deref().and_then(world::iso::Tilt::named) {
+        view.tilt = tilt;
+        view.target_tilt = tilt;
+    }
     let (start, pending) = match loaded {
         Some(l) => {
             info!("world seed {seed}, loaded {} edited chunks", l.chunks.len());
             map.parked = l.chunks;
             view = world::iso::View::quarter(l.rot);
+            if let Some(tilt) = world::iso::Tilt::named(&l.tilt) {
+                view.tilt = tilt;
+                view.target_tilt = tilt;
+            }
             (
                 l.player,
                 core::save::Pending {

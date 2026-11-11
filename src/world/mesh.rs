@@ -10,7 +10,7 @@
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::AsBindGroup;
+use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::sprite_render::{AlphaMode2d, Material2d};
 
 use super::tiles::{TILE, Tiles, atlas};
@@ -76,13 +76,24 @@ const INSET: f32 = 0.01;
 #[derive(Resource, Default)]
 pub struct Grid(pub bool);
 
-/// The block material: the tile atlas lit by vertex colour, with outlines, banded light
-/// and moving water done in `shaders/block.wgsl`.
+/// What the block shader reads each frame.
+#[derive(ShaderType, Clone, Copy, Debug)]
+pub struct BlockParams {
+    /// x: seconds, y and z: atlas size in texels, w: light bands.
+    pub params: Vec4,
+    /// The player on screen: x, y in texels, z depth, w the see-through radius in texels
+    /// (0 turns the see-through off).
+    pub player: Vec4,
+    /// x: screen pixels per texel, y, z, w: unused.
+    pub screen: Vec4,
+}
+
+/// The block material: the tile atlas lit by vertex colour, with outlines, banded light,
+/// moving water and the see-through dither around the player, in `shaders/block.wgsl`.
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
 pub struct BlockArt {
-    /// x: seconds, y and z: atlas size in texels, w: light bands.
     #[uniform(0)]
-    pub params: Vec4,
+    pub block: BlockParams,
     #[texture(1)]
     #[sampler(2)]
     pub atlas: Handle<Image>,
@@ -93,7 +104,21 @@ impl Material2d for BlockArt {
         "shaders/block.wgsl".into()
     }
     fn alpha_mode(&self) -> AlphaMode2d {
-        AlphaMode2d::Opaque
+        // Mask lets the shader discard the see-through dither; depth is still written.
+        AlphaMode2d::Mask(0.5)
+    }
+}
+
+/// Radius of the see-through window around the player, in texels, at its widest.
+pub const SEE_THROUGH_RADIUS: f32 = 26.0;
+
+/// Whether blocks in front of the player are dithered away.
+#[derive(Resource)]
+pub struct SeeThrough(pub bool);
+
+impl Default for SeeThrough {
+    fn default() -> Self {
+        Self(true)
     }
 }
 
@@ -111,23 +136,49 @@ pub fn setup(
     let (image, tiles) = atlas(&blocks, packs.as_deref());
     let params = Vec4::new(0.0, tiles.size.x as f32, tiles.size.y as f32, LEVELS);
     commands.insert_resource(BlockMaterial(materials.add(BlockArt {
-        params,
+        block: BlockParams {
+            params,
+            player: Vec4::ZERO,
+            screen: Vec4::new(3.0, 0.0, 0.0, 0.0),
+        },
         atlas: images.add(image),
     })));
     commands.insert_resource(tiles);
 }
 
-/// Feeds the clock to the shader for moving water.
+/// Feeds the shader the clock, the player's place on screen and the zoom, each frame.
 pub fn tick(
     time: Res<Time>,
+    view: Res<super::iso::View>,
+    see_through: Res<SeeThrough>,
+    settings: Res<crate::core::settings::Settings>,
     handle: Option<Res<BlockMaterial>>,
+    player: Option<Single<&crate::player::Player>>,
     mut materials: ResMut<Assets<BlockArt>>,
 ) {
-    if let Some(handle) = handle
-        && let Some(mut m) = materials.get_mut(&handle.0)
-    {
-        m.params.x = time.elapsed_secs();
+    let Some(handle) = handle else {
+        return;
+    };
+    if let Some(mut m) = materials.get_mut(&handle.0) {
+        m.block.params.x = time.elapsed_secs();
+        m.block.screen.x = settings.pixel_scale.clamp(1, 6) as f32;
+        m.block.player = match player {
+            Some(p) => see_through_target(&view, p.body.pos.with_z(p.shown_z), see_through.0),
+            None => Vec4::ZERO,
+        };
     }
+}
+
+/// The player's position for the see-through window: its screen x and y (a little above
+/// the feet), its depth, and the radius, or zero radius when off.
+pub fn see_through_target(view: &super::iso::View, feet: Vec3, on: bool) -> Vec4 {
+    let at = view.project(feet);
+    Vec4::new(
+        at.x,
+        at.y + 16.0,
+        at.z,
+        if on { SEE_THROUGH_RADIUS } else { 0.0 },
+    )
 }
 
 /// Packs a face's outline mask and its water flag into the vertex alpha.

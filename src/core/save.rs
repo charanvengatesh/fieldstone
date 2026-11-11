@@ -29,6 +29,9 @@ pub struct SaveFile {
     pub seed: u32,
     pub player: (f32, f32, f32),
     pub rot: u8,
+    /// Tilt preset name; older files have none and get the classic tilt.
+    #[serde(default)]
+    pub tilt: String,
     pub selected: usize,
     /// Slots as `(item id, count)`.
     pub inventory: Vec<Option<(String, u32)>>,
@@ -43,6 +46,7 @@ pub struct Loaded {
     pub seed: u32,
     pub player: Vec3,
     pub rot: u8,
+    pub tilt: String,
     pub selected: usize,
     pub inventory: Vec<Option<Stack>>,
     pub chunks: HashMap<IVec2, Blocks>,
@@ -88,6 +92,7 @@ pub fn pack<'a>(
     seed: u32,
     player: Vec3,
     rot: u8,
+    tilt: &str,
     inv: &Inventory,
     chunks: impl Iterator<Item = (IVec2, &'a Blocks)>,
     blocks: &Registry<BlockDef>,
@@ -112,6 +117,7 @@ pub fn pack<'a>(
         seed,
         player: (player.x, player.y, player.z),
         rot,
+        tilt: tilt.to_owned(),
         selected: inv.selected,
         inventory: inv
             .slots
@@ -153,6 +159,7 @@ pub fn unpack(
         seed: file.seed,
         player: Vec3::new(file.player.0, file.player.1, file.player.2),
         rot: file.rot % 4,
+        tilt: file.tilt.clone(),
         selected: file.selected,
         inventory: file
             .inventory
@@ -220,6 +227,7 @@ pub fn save(
         wg.seed,
         player.body.pos,
         view.rot(),
+        view.target_tilt.name(),
         inv,
         edited,
         &blocks,
@@ -289,6 +297,7 @@ mod tests {
             77,
             Vec3::new(1.5, -2.5, 9.0),
             2,
+            "high",
             &inv,
             [(IVec2::new(-1, 4), &chunk)].into_iter(),
             &blocks,
@@ -301,6 +310,7 @@ mod tests {
         let (blocks2, items2) = regs(&["dirt", "sand", "stone"]);
         let loaded = unpack(&file, &blocks2, &items2).unwrap();
         assert_eq!((loaded.seed, loaded.rot, loaded.selected), (77, 2, 3));
+        assert_eq!(loaded.tilt, "high");
         assert_eq!(loaded.player, Vec3::new(1.5, -2.5, 9.0));
         let got = &loaded.chunks[&IVec2::new(-1, 4)];
         assert_eq!(got[0], blocks2.idx("stone").unwrap());
@@ -326,6 +336,7 @@ mod tests {
             1,
             Vec3::ZERO,
             0,
+            "classic",
             &inv,
             [(IVec2::ZERO, &chunk)].into_iter(),
             &blocks,

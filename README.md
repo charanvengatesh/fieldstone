@@ -17,10 +17,12 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 | 1-0, two-finger scroll | Choose a hotbar slot |
 | Tab or I | Bag. Click a slot to swap it with the held slot, shift-click splits half, right-click one |
 | Q / E | Turn the view a quarter, smoothly |
+| T | Next tilt preset: low, classic, high, top |
+| Space + move the pointer | Pan away from the player; let go to drift back (`mods/camera`) |
 | Alt + drag, middle-drag, or trackpad twist | Orbit freely; letting go settles on the nearest quarter (`mods/camera`) |
 | R | Back to the starting view (`mods/camera`) |
 | Ctrl or Cmd + scroll | Zoom (`mods/camera`) |
-| Pinch, or - / = | Zoom in whole pixel steps |
+| Pinch, or - / = | Zoom, eased, toward the pointer |
 | G | Outline every block (the classic grid look) or only steps and material changes |
 | Esc | Pause: resume, save, save and quit |
 | F5 | Save to `saves/iso.ron`, loaded on the next start |
@@ -31,6 +33,9 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 Keys are rebindable in `settings.ron`, written next to the executable on first run.
 
 A one-block hole hides its own floor behind its near walls. To fill it, click the far wall.
+Blocks in front of the player dissolve into a dither so the player stays in view; the camera
+leans a little toward the pointer and waits for the player to leave a small box before it
+follows.
 
 ## Run
 
@@ -42,14 +47,14 @@ cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
 cargo run -- --test              # no window: run every tests/*.lua in the packs; non-zero on failure
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
-                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --grid
+                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --grid
 cargo build --release
 ```
 
 ## How it works
 
-- **Projection.** 2:1 dimetric about any angle; the four quarter turns are the classic
-  views. Nearness along the view is a linear function of position, so the projection is one
+- **Projection.** Dimetric about any angle and at four tilts; the quarter turns at the
+  classic tilt are the 2:1 views. Nearness along the view is a linear function of position, so the projection is one
   matrix. Chunk meshes are in world space with that matrix as their transform: every vertex
   lands on screen with its depth, the depth buffer sorts blocks and the player per pixel,
   and turning the view rebuilds nothing.
@@ -75,7 +80,8 @@ cargo build --release
 - `src/world/` `iso.rs` projection and picking, block storage, `noise.rs`, `worldgen.rs`,
   `stamp.rs`, `tiles.rs` pixel-art tiles, `mesh.rs` faces and light, `stream.rs`, `physics.rs`
 - `assets/shaders/block.wgsl` the block shader
-- `src/player.rs`, `src/interact.rs`, `src/inventory.rs`, `src/camera.rs`, `src/ui.rs`
+- `src/player.rs`, `src/interact.rs`, `src/inventory.rs`, `src/look.rs` where the camera
+  looks, `src/camera.rs`, `src/ui.rs`
 - `src/script.rs` Lua hooks and API
 - `src/debug.rs` screenshots, software snapshots, text dumps; `src/smoke.rs` the self-test;
   `src/harness.rs` injected input and fakes for Lua tests

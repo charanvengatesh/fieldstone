@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.9.0
+
+Camera: see through what hides you, tilt the view, look around, zoom to the pointer.
+
+### New
+- See-through: blocks between the camera and the player dissolve into a pixel dither, so
+  you are never lost behind a cliff or under a tree. The dither fits the figure and only
+  takes what is nearer than the player. Replaces the ghost overlay (and its second camera).
+  `set_setting("see_through", false)` turns it off.
+- Tilt presets: `T` cycles low, classic, high and top as a smooth motion. The projection's
+  own view direction defines depth at every tilt, so occlusion stays exact in between.
+  Saved with the game; `--tilt NAME` for snapshots; Lua `tilt()`, `set_tilt(name)`.
+- Look: the camera leaves the player alone inside a small dead zone, leans a little toward
+  the pointer, and can be panned by a script. `mods/camera` pans while Space is held and
+  the pointer moves; let go and it drifts home after a moment. Lua `pan_view`,
+  `camera_pan`, `camera_center`, `set_setting("peek" / "dead_zone", bool)`.
+- Zoom eases between levels and keeps the point under the pointer still (Ctrl or Cmd +
+  scroll, pinch, `-` / `=`). Lua `zoom_at(level, x, y)`, `aim_screen(x, y)`.
+- Harness scenarios for tilt, pan, peek and zoom-to-pointer; look logic has its own unit
+  tests.
+
+### Changed
+- The compass line also names the tilt.
+
 ## 0.8.1
 
 The debug mod becomes a test harness: scripts can play the game.

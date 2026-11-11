@@ -29,10 +29,11 @@ use crate::harness::{Fake, Injected};
 use crate::interact::{BlockBroken, BlockPlaced};
 use crate::interact::{Cursor, Target};
 use crate::inventory::{HOTBAR, Inventory, sort_slots};
+use crate::look::Look;
 use crate::player::Player;
 use crate::world::Map;
-use crate::world::iso::View;
-use crate::world::mesh::{Grid, Quality};
+use crate::world::iso::{Tilt, View};
+use crate::world::mesh::{Grid, Quality, SeeThrough};
 use crate::world::physics::Body;
 use crate::world::stream::{Perf, Streaming};
 
@@ -477,6 +478,69 @@ pub fn run(world: &mut World) {
                 .create_function(|_, ()| Ok(shared.borrow().resource::<Settings>().pixel_scale))?,
         )?;
         g.set(
+            "zoom_at",
+            scope.create_function(|_, (level, sx, sy): (f32, f32, f32)| {
+                let mut w = shared.borrow_mut();
+                let wanted = level.round().clamp(1.0, 6.0) as u32;
+                w.resource_mut::<Look>().zoom_about(Vec2::new(sx, sy));
+                if w.resource::<Settings>().pixel_scale != wanted {
+                    w.resource_mut::<Settings>().pixel_scale = wanted;
+                }
+                Ok(wanted)
+            })?,
+        )?;
+        g.set(
+            "tilt",
+            scope.create_function(|_, ()| {
+                Ok(shared.borrow().resource::<View>().target_tilt.name())
+            })?,
+        )?;
+        g.set(
+            "set_tilt",
+            scope.create_function(|_, name: String| {
+                let Some(tilt) = Tilt::named(&name) else {
+                    warn!("script: no tilt preset '{name}'");
+                    return Ok(false);
+                };
+                shared.borrow_mut().resource_mut::<View>().set_tilt(tilt);
+                Ok(true)
+            })?,
+        )?;
+        g.set(
+            "pan_view",
+            scope.create_function(|_, (dx, dy): (f32, f32)| {
+                shared
+                    .borrow_mut()
+                    .resource_mut::<Look>()
+                    .pan_by(Vec2::new(dx, dy));
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "camera_pan",
+            scope.create_function(|_, ()| {
+                let p = shared.borrow().resource::<Look>().pan;
+                Ok((p.x, p.y))
+            })?,
+        )?;
+        g.set(
+            "camera_center",
+            scope.create_function(|_, ()| {
+                let c = shared.borrow().resource::<Look>().center;
+                Ok((c.x, c.y))
+            })?,
+        )?;
+        g.set(
+            "aim_screen",
+            scope.create_function(|_, (sx, sy): (f32, f32)| {
+                let mut w = shared.borrow_mut();
+                let at = w.resource::<Look>().center + Vec2::new(sx, sy);
+                w.resource_mut::<Injected>().cursor = Some(at);
+                w.resource_mut::<Cursor>().0 = Some(at);
+                Ok(())
+            })?,
+        )?;
+        g.set(
             "set_zoom",
             scope.create_function(|_, scale: f32| {
                 let mut w = shared.borrow_mut();
@@ -497,6 +561,9 @@ pub fn run(world: &mut World) {
                     "shadows" => Some(mlua::Value::Boolean(quality.shadows)),
                     "occlusion" => Some(mlua::Value::Boolean(quality.occlusion)),
                     "grid" => Some(mlua::Value::Boolean(w.resource::<Grid>().0)),
+                    "see_through" => Some(mlua::Value::Boolean(w.resource::<SeeThrough>().0)),
+                    "peek" => Some(mlua::Value::Boolean(w.resource::<Look>().peek_on)),
+                    "dead_zone" => Some(mlua::Value::Boolean(w.resource::<Look>().dead_zone_on)),
                     "mesh_budget_ms" => Some(mlua::Value::Number(streaming.budget_ms as f64)),
                     "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
                     _ => None,
@@ -527,6 +594,18 @@ pub fn run(world: &mut World) {
                         if w.resource::<Grid>().0 != on {
                             w.resource_mut::<Grid>().0 = on;
                         }
+                        true
+                    }
+                    ("see_through", Some(on), _) => {
+                        w.resource_mut::<SeeThrough>().0 = on;
+                        true
+                    }
+                    ("peek", Some(on), _) => {
+                        w.resource_mut::<Look>().peek_on = on;
+                        true
+                    }
+                    ("dead_zone", Some(on), _) => {
+                        w.resource_mut::<Look>().dead_zone_on = on;
                         true
                     }
                     ("mesh_budget_ms", _, Some(ms)) => {
@@ -1028,6 +1107,8 @@ mod tests {
         world.init_resource::<Cursor>();
         world.init_resource::<Target>();
         world.init_resource::<Time<Virtual>>();
+        world.init_resource::<Look>();
+        world.init_resource::<SeeThrough>();
         world.spawn((Player::at(Vec3::new(1.5, 2.5, 3.0)), Inventory::default()));
         world.insert_non_send(Vm::new(
             scripts

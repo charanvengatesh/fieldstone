@@ -176,6 +176,10 @@ pub fn view_keys(
     if keys.just(&input, &keys.grid) {
         grid.0 = !grid.0;
     }
+    if keys.just(&input, &keys.tilt) {
+        let next = view.target_tilt.next();
+        view.set_tilt(next);
+    }
 }
 
 /// Moves the view toward the angle it was asked for.
@@ -345,6 +349,7 @@ mod tests {
             let view = View {
                 angle,
                 target: angle,
+                ..default()
             };
             let wanted = visible_chunks(view, focus, reach);
             let centre = view.project(focus).truncate();
@@ -369,6 +374,7 @@ mod tests {
         let view = View {
             angle: 0.7,
             target: 1.0,
+            ..default()
         };
         let near = visible_chunks(view, Vec3::new(-40.0, 100.0, 10.0), Vec2::new(300.0, 200.0));
         assert_eq!(near[0], IVec2::new(-3, 6));

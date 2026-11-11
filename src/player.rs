@@ -2,18 +2,16 @@
 //! quad whose vertices carry depth so blocks in front of it cover it correctly.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::RenderLayers;
 use bevy::image::ImageSampler;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use bevy::sprite::Anchor;
 use bevy::sprite_render::AlphaMode2d;
 
 use crate::core::settings::Keys;
 use crate::core::{BlockDef, Registry};
 use crate::inventory::Inventory;
-use crate::world::iso::{BLOCK_H, View};
+use crate::world::iso::{Tilt, View};
 use crate::world::mesh::{sunlit, tint};
 use crate::world::physics::{Body, step};
 use crate::world::{AIR, Focus, HEIGHT, Map};
@@ -27,8 +25,6 @@ pub const FRAMES: usize = 2;
 /// How far in front of its true depth the figure is drawn, so its feet never fight the
 /// ground they stand on.
 const DEPTH_BIAS: f32 = 0.05;
-/// The layer only the overlay camera draws.
-pub const OVERLAY_LAYER: usize = 1;
 
 #[derive(Component)]
 pub struct Player {
@@ -68,11 +64,6 @@ const SHADOW_RADIUS: f32 = 0.34;
 const SHADED: f32 = 0.66;
 /// Blocks walked per frame of the stride.
 const STEP: f32 = 0.42;
-
-/// A faint copy of the figure drawn over everything, so the player stays findable behind
-/// terrain.
-#[derive(Component)]
-pub struct Ghost;
 
 /// Whether a walker may not occupy `c`: a solid block, or air above something nothing may
 /// stand on (water), however high.
@@ -116,21 +107,13 @@ pub fn spawn(
         inventory.selected = p.selected.min(crate::inventory::HOTBAR - 1);
     }
     let image = images.add(figure_texture());
-    let (w, h) = (FIGURE.x as f32, FIGURE.y as f32);
-    // Feet at the origin; a point `y` texels up is `y / BLOCK_H` blocks nearer the viewer.
-    let top = h / BLOCK_H;
     let mesh = Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
     .with_inserted_attribute(
         Mesh::ATTRIBUTE_POSITION,
-        vec![
-            [-w / 2.0, 0.0, 0.0],
-            [w / 2.0, 0.0, 0.0],
-            [w / 2.0, h, top],
-            [-w / 2.0, h, top],
-        ],
+        figure_corners(1.0, Tilt::default()),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(0))
     .with_inserted_indices(Indices::U32(vec![0, 1, 2, 0, 2, 3]));
@@ -144,18 +127,6 @@ pub fn spawn(
             texture: Some(image.clone()),
             ..default()
         })),
-        Transform::default(),
-    ));
-    commands.spawn((
-        Ghost,
-        Sprite {
-            image,
-            color: Color::srgba(1.0, 1.0, 1.0, 0.3),
-            rect: Some(Rect::new(0.0, 0.0, w, h)),
-            ..default()
-        },
-        Anchor::BOTTOM_CENTER,
-        RenderLayers::layer(OVERLAY_LAYER),
         Transform::default(),
     ));
     // An eight-sided patch lying on the ground; its corners are set by `place`.
@@ -242,11 +213,7 @@ pub fn place(
         &Mesh2d,
         &MeshMaterial2d<ColorMaterial>,
     )>,
-    mut ghost: Single<(&mut Transform, &mut Sprite), (With<Ghost>, Without<Player>)>,
-    mut shadow: Single<
-        (&mut Transform, &Mesh2d),
-        (With<GroundShadow>, Without<Player>, Without<Ghost>),
-    >,
+    mut shadow: Single<(&mut Transform, &Mesh2d), (With<GroundShadow>, Without<Player>)>,
 ) {
     let (player, tf, mesh, material) = &mut *player;
     let pos = player.body.pos.with_z(player.shown_z);
@@ -254,9 +221,6 @@ pub fn place(
     at.z += DEPTH_BIAS;
     tf.translation = at;
     tf.scale = Vec3::new(player.facing, 1.0, 1.0);
-    let (ghost_tf, ghost_sprite) = &mut *ghost;
-    ghost_tf.translation = at;
-    ghost_tf.scale = tf.scale;
 
     // The stride frame.
     if shown.1 != player.frame {
@@ -264,9 +228,6 @@ pub fn place(
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
             m.insert_attribute(Mesh::ATTRIBUTE_UV_0, frame_uvs(player.frame));
         }
-        let (w, h) = (FIGURE.x as f32, FIGURE.y as f32);
-        let x = player.frame as f32 * w;
-        ghost_sprite.rect = Some(Rect::new(x, 0.0, x + w, h));
     }
 
     // Light: sampled at chest height, eased so walking under a tree fades.
@@ -297,7 +258,11 @@ pub fn place(
     let (shadow_tf, shadow_mesh) = &mut *shadow;
     shadow_tf.translation = view.project(pos.with_z(ground)) + Vec3::Z * 0.03;
     if shown.0 != Some(*view) {
+        let tilted = shown.0.is_none_or(|v| v.tilt != view.tilt);
         shown.0 = Some(*view);
+        if tilted && let Some(mut m) = meshes.get_mut(&mesh.0) {
+            m.insert_attribute(Mesh::ATTRIBUTE_POSITION, figure_corners(1.0, view.tilt));
+        }
         if let Some(mut m) = meshes.get_mut(&shadow_mesh.0) {
             let mut ring = vec![[0.0f32; 3]];
             for i in 0..8 {
@@ -310,18 +275,24 @@ pub fn place(
     }
 }
 
+/// The figure quad's corners in texels with depth: feet at the origin; a texel of height
+/// is `1 / block_h` blocks up, which is `rise / block_h` nearer the viewer at this tilt.
+pub fn figure_corners(facing: f32, tilt: Tilt) -> Vec<[f32; 3]> {
+    let (w, h) = (FIGURE.x as f32 * facing.signum(), FIGURE.y as f32);
+    let top = h / tilt.block_h * tilt.rise();
+    vec![
+        [-w / 2.0, 0.0, 0.0],
+        [w / 2.0, 0.0, 0.0],
+        [w / 2.0, h, top],
+        [-w / 2.0, h, top],
+    ]
+}
+
 /// The figure's quad as plain vertex data, for the software canvas: the same corners and
 /// depths as the mesh, mirrored when facing left.
-pub fn figure_faces(facing: f32, frame: usize) -> crate::world::mesh::Faces {
-    let (w, h) = (FIGURE.x as f32 * facing.signum(), FIGURE.y as f32);
-    let top = h / BLOCK_H;
+pub fn figure_faces(facing: f32, frame: usize, tilt: Tilt) -> crate::world::mesh::Faces {
     crate::world::mesh::Faces {
-        positions: vec![
-            [-w / 2.0, 0.0, 0.0],
-            [w / 2.0, 0.0, 0.0],
-            [w / 2.0, h, top],
-            [-w / 2.0, h, top],
-        ],
+        positions: figure_corners(facing, tilt),
         uvs: frame_uvs(frame),
         colors: vec![[1.0; 4]; 4],
         flips: vec![false],

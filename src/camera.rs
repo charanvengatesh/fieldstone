@@ -1,22 +1,16 @@
 //! The camera looks at [`Focus`] through the current [`View`]. Zoom is a whole number of
 //! screen pixels per texel so block edges stay crisp.
 
-use bevy::camera::visibility::RenderLayers;
 use bevy::input::gestures::PinchGesture;
 use bevy::prelude::*;
 
 use crate::core::settings::{Keys, Settings};
-use crate::world::Focus;
-use crate::world::iso::View;
+use crate::look::Look;
 use crate::world::stream::Viewport;
 
-/// Both cameras: the world camera and the overlay drawn on top of it.
+/// The world camera.
 #[derive(Component)]
 pub struct MainCamera;
-
-/// The second camera, which draws the overlay layer over the world.
-#[derive(Component)]
-pub struct Overlay;
 
 pub fn setup(settings: Res<Settings>, mut commands: Commands) {
     let projection = || {
@@ -28,56 +22,43 @@ pub fn setup(settings: Res<Settings>, mut commands: Commands) {
     // No multisampling: it softens texel edges and lets edge pixels sample the tile next
     // door in the atlas.
     commands.spawn((Camera2d, MainCamera, projection(), Msaa::Off));
-    // The overlay has its own depth buffer, so what it draws is never hidden by blocks.
-    commands.spawn((
-        Camera2d,
-        MainCamera,
-        Overlay,
-        projection(),
-        Msaa::Off,
-        Camera {
-            order: 1,
-            clear_color: ClearColorConfig::None,
-            ..default()
-        },
-        RenderLayers::layer(crate::player::OVERLAY_LAYER),
-    ));
 }
 
-/// Centres the camera on the focus. Its z is the focus depth, so the visible depth range
-/// (camera z plus or minus 1000) always surrounds what is on screen.
+/// Puts the camera where [`Look`] says, at the focus depth so the visible depth range
+/// (camera z plus or minus 1000) always surrounds what is on screen, snapped to whole
+/// screen pixels so texels never straddle them and shimmer.
 pub fn follow(
-    focus: Res<Focus>,
-    view: Res<View>,
+    look: Res<Look>,
     mut viewport: ResMut<Viewport>,
-    mut cams: Query<(&mut Transform, &Projection), With<MainCamera>>,
+    mut cams: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
-    for (mut tf, proj) in &mut cams {
-        let mut p = view.project(focus.0);
-        if let Projection::Orthographic(o) = proj {
-            // Snap to whole screen pixels so texels never straddle them and shimmer.
+    for (mut tf, mut proj) in &mut cams {
+        if let Projection::Orthographic(o) = &mut *proj {
+            if (o.scale - look.scale).abs() > 1e-6 {
+                o.scale = look.scale;
+            }
             let step = o.scale.max(1e-4);
-            p.x = (p.x / step).round() * step;
-            p.y = (p.y / step).round() * step;
-            // Tell the streamer how much world the screen shows.
             let half = o.area.half_size();
             if half.x > 1.0 && viewport.half != half {
                 viewport.half = half;
             }
+            tf.translation = Vec3::new(
+                (look.center.x / step).round() * step,
+                (look.center.y / step).round() * step,
+                look.depth,
+            );
         }
-        tf.translation = p;
     }
 }
 
 /// Pinch on a trackpad or `-` / `=`: whole pixel scales only, a pinch accumulates until it
-/// is worth a step.
+/// is worth a step. The camera eases to the new scale through [`Look`].
 pub fn zoom(
     mut pinches: MessageReader<PinchGesture>,
     input: Res<ButtonInput<KeyCode>>,
     keys: Res<Keys>,
     mut settings: ResMut<Settings>,
     mut pinch_acc: Local<f32>,
-    mut cams: Query<&mut Projection, With<MainCamera>>,
 ) {
     let mut delta = 0i32;
     for p in pinches.read() {
@@ -100,14 +81,6 @@ pub fn zoom(
     if delta != 0 {
         settings.pixel_scale = (settings.pixel_scale as i32 + delta).clamp(1, 6) as u32;
     }
-    // Whoever changed the setting (keys, pinch or a script), the cameras follow it.
-    if settings.is_changed() {
-        for mut proj in &mut cams {
-            if let Projection::Orthographic(o) = &mut *proj {
-                o.scale = 1.0 / settings.pixel_scale.clamp(1, 6) as f32;
-            }
-        }
-    }
 }
 
 pub struct CameraPlugin;
@@ -124,9 +97,10 @@ impl Plugin for CameraPlugin {
         .add_systems(Startup, setup)
         .add_systems(
             Update,
-            (zoom, follow)
-                .chain()
-                .after(crate::player::PlayerSet)
+            (
+                zoom.before(crate::look::update),
+                follow.after(crate::look::update),
+            )
                 .before(crate::world::WorldSet),
         );
     }

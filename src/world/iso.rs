@@ -1,7 +1,9 @@
-//! The isometric view. World space is a grid of unit blocks with z up; the screen is a 2:1
-//! dimetric projection looking along `(-1, -1, -1)`. Because that direction is exact, a
-//! point's distance toward the viewer is simply `x + y + z`, which every vertex carries as
-//! its depth so the depth buffer resolves all occlusion.
+//! The isometric view. World space is a grid of unit blocks with z up; the screen is a
+//! dimetric projection: floor diamonds `TILE_W` wide and `tile_h` tall, blocks `block_h`
+//! tall, about any turn. The projection's own view direction is `(1, 1, tile_h / block_h)`
+//! in view space, so a point's distance toward the viewer is `x + y + z * tile_h / block_h`,
+//! which every vertex carries as its depth so the depth buffer resolves all occlusion at
+//! any tilt. The classic 2:1 view has `tile_h = block_h = 16`, where depth is `x + y + z`.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -14,13 +16,112 @@ pub const TILE_H: f32 = 16.0;
 /// Texels a block rises on screen.
 pub const BLOCK_H: f32 = 16.0;
 
-/// Where the camera looks from: a turn about the vertical axis, in radians. A quarter turn
-/// is one of the four classic diagonal views. `angle` is what is drawn now; it eases toward
-/// `target`, so a turn is a motion rather than a cut.
-#[derive(Resource, Clone, Copy, Default, Debug, PartialEq)]
+/// How steeply the camera looks down: the height of a floor diamond and of a block on
+/// screen, in texels. Presets keep pixel art crisp; the motion between them passes through
+/// in-between values.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tilt {
+    pub tile_h: f32,
+    pub block_h: f32,
+}
+
+impl Tilt {
+    /// Presets by name: `low`, `classic`, `high`, `top`.
+    pub const PRESETS: [(&'static str, Tilt); 4] = [
+        (
+            "low",
+            Tilt {
+                tile_h: 12.0,
+                block_h: 18.0,
+            },
+        ),
+        (
+            "classic",
+            Tilt {
+                tile_h: TILE_H,
+                block_h: BLOCK_H,
+            },
+        ),
+        (
+            "high",
+            Tilt {
+                tile_h: 24.0,
+                block_h: 12.0,
+            },
+        ),
+        (
+            "top",
+            Tilt {
+                tile_h: 32.0,
+                block_h: 6.0,
+            },
+        ),
+    ];
+
+    pub fn named(name: &str) -> Option<Tilt> {
+        Self::PRESETS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, t)| *t)
+    }
+
+    /// The preset this tilt is, or the nearest one.
+    pub fn name(self) -> &'static str {
+        Self::PRESETS
+            .iter()
+            .min_by(|a, b| {
+                let da = (a.1.tile_h - self.tile_h).abs() + (a.1.block_h - self.block_h).abs();
+                let db = (b.1.tile_h - self.tile_h).abs() + (b.1.block_h - self.block_h).abs();
+                da.total_cmp(&db)
+            })
+            .map_or("classic", |(n, _)| n)
+    }
+
+    /// The preset after this one, round robin.
+    pub fn next(self) -> Tilt {
+        let i = Self::PRESETS
+            .iter()
+            .position(|(n, _)| *n == self.name())
+            .unwrap_or(1);
+        Self::PRESETS[(i + 1) % Self::PRESETS.len()].1
+    }
+
+    /// Depth gained per block of height: the projection's view direction rises this much.
+    pub fn rise(self) -> f32 {
+        self.tile_h / self.block_h
+    }
+}
+
+impl Default for Tilt {
+    fn default() -> Self {
+        Tilt {
+            tile_h: TILE_H,
+            block_h: BLOCK_H,
+        }
+    }
+}
+
+/// Where the camera looks from: a turn about the vertical axis, in radians, and a tilt.
+/// A quarter turn is one of the four classic diagonal views. `angle` and `tilt` are what
+/// is drawn now; they ease toward their targets, so a turn or a tilt is a motion rather
+/// than a cut.
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
 pub struct View {
     pub angle: f32,
     pub target: f32,
+    pub tilt: Tilt,
+    pub target_tilt: Tilt,
+}
+
+impl Default for View {
+    fn default() -> Self {
+        View {
+            angle: 0.0,
+            target: 0.0,
+            tilt: Tilt::default(),
+            target_tilt: Tilt::default(),
+        }
+    }
 }
 
 /// The block under a screen point and the face the view ray entered it through.
@@ -31,13 +132,19 @@ pub struct Hit {
 }
 
 impl View {
-    /// One of the four diagonal views, at rest.
+    /// One of the four diagonal views, at rest, at the classic tilt.
     pub fn quarter(rot: u8) -> View {
         let angle = (rot % 4) as f32 * FRAC_PI_2;
         View {
             angle,
             target: angle,
+            ..default()
         }
+    }
+
+    /// Asks for a tilt, as a motion.
+    pub fn set_tilt(&mut self, tilt: Tilt) {
+        self.target_tilt = tilt;
     }
 
     /// The quarter view this one is at or heading to.
@@ -45,9 +152,9 @@ impl View {
         (self.target / FRAC_PI_2).round().rem_euclid(4.0) as u8
     }
 
-    /// Whether the view is still moving toward its target.
+    /// Whether the view is still moving toward its target angle or tilt.
     pub fn turning(self) -> bool {
-        self.angle != self.target
+        self.angle != self.target || self.tilt != self.target_tilt
     }
 
     /// Asks for a turn by `radians` from wherever the view is heading.
@@ -60,14 +167,26 @@ impl View {
         self.target = (self.target / step).round() * step;
     }
 
-    /// Moves `angle` toward `target`; exact on arrival, and both stay within one turn.
+    /// Moves `angle` and `tilt` toward their targets; exact on arrival, and the angle
+    /// stays within one turn.
     pub fn ease(&mut self, dt: f32) {
+        let k = (dt * 12.0).min(1.0);
         let gap = self.target - self.angle;
         if gap.abs() < 0.002 {
             self.target = self.target.rem_euclid(TAU);
             self.angle = self.target;
         } else {
-            self.angle += gap * (dt * 12.0).min(1.0);
+            self.angle += gap * k;
+        }
+        let (dh, db) = (
+            self.target_tilt.tile_h - self.tilt.tile_h,
+            self.target_tilt.block_h - self.tilt.block_h,
+        );
+        if dh.abs() + db.abs() < 0.05 {
+            self.tilt = self.target_tilt;
+        } else {
+            self.tilt.tile_h += dh * k;
+            self.tilt.block_h += db * k;
         }
     }
 
@@ -104,8 +223,8 @@ impl View {
         let v = self.turn(p);
         Vec3::new(
             (v.x - v.y) * TILE_W / 2.0,
-            -(v.x + v.y) * TILE_H / 2.0 + v.z * BLOCK_H,
-            v.x + v.y + v.z,
+            -(v.x + v.y) * self.tilt.tile_h / 2.0 + v.z * self.tilt.block_h,
+            v.x + v.y + v.z * self.tilt.rise(),
         )
     }
 
@@ -122,13 +241,13 @@ impl View {
     /// The world point at height `z` that lands on `screen`.
     pub fn unproject(self, screen: Vec2, z: f32) -> Vec3 {
         let diff = screen.x / (TILE_W / 2.0);
-        let sum = (z * BLOCK_H - screen.y) / (TILE_H / 2.0);
+        let sum = (z * self.tilt.block_h - screen.y) / (self.tilt.tile_h / 2.0);
         self.unturn(Vec3::new((sum + diff) / 2.0, (sum - diff) / 2.0, z))
     }
 
     /// World direction from any point straight toward the viewer.
     pub fn toward_viewer(self) -> Vec3 {
-        self.unturn(Vec3::ONE)
+        self.unturn(Vec3::new(1.0, 1.0, self.tilt.rise()))
     }
 
     /// The two side faces of a block that face the camera most, as world normals:
@@ -218,6 +337,7 @@ mod tests {
             .chain([0.3, 1.0, 4.0].map(|angle| View {
                 angle,
                 target: angle,
+                ..default()
             }))
     }
 
@@ -318,9 +438,29 @@ mod tests {
         let mut free = View {
             angle: 2.9,
             target: 2.9,
+            ..default()
         };
         free.snap(FRAC_PI_2);
         assert_eq!(free.rot(), 2);
+    }
+
+    #[test]
+    fn tilts_cycle_and_ease() {
+        assert_eq!(Tilt::default().name(), "classic");
+        assert_eq!(Tilt::default().next().name(), "high");
+        assert_eq!(Tilt::named("top").unwrap().next().name(), "low");
+        assert_eq!(Tilt::named("nope"), None);
+        let mut view = View::default();
+        view.set_tilt(Tilt::named("top").unwrap());
+        assert!(view.turning());
+        for _ in 0..200 {
+            view.ease(1.0 / 60.0);
+        }
+        assert!(!view.turning());
+        assert_eq!(view.tilt, Tilt::named("top").unwrap());
+        // From the top the floor diamond is a square and a block hardly rises.
+        assert_eq!(view.project(Vec3::X).truncate(), Vec2::new(16.0, -16.0));
+        assert_eq!(view.project(Vec3::Z).truncate(), Vec2::new(0.0, 6.0));
     }
 
     #[test]

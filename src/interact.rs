@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use bevy::sprite_render::AlphaMode2d;
 use bevy::window::PrimaryWindow;
 
-use crate::camera::{MainCamera, Overlay};
+use crate::camera::MainCamera;
 use crate::core::settings::Keys;
 use crate::core::{BlockDef, ItemDef, PointerCaptured, Registry, UiHovered};
 use crate::inventory::{HOTBAR, Inventory};
@@ -56,7 +56,7 @@ pub struct Highlight;
 
 pub fn track_cursor(
     window: Single<&Window, With<PrimaryWindow>>,
-    cam: Single<(&Camera, &GlobalTransform), (With<MainCamera>, Without<Overlay>)>,
+    cam: Single<(&Camera, &GlobalTransform), With<MainCamera>>,
     mut cursor: ResMut<Cursor>,
 ) {
     let (camera, tf) = *cam;
