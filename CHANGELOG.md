@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.0.0-alpha.2
+
+The picture and the shader chain.
+
+### New
+- The world camera draws into a picture of `window / pixel_scale` texels (`src/post.rs`);
+  a compositor camera blows it up to the window with nearest sampling and hosts the UI at
+  the window's own resolution. Zoom steps the picture's size.
+- Pack shader passes: `shaders.ron` lists WGSL fragment shaders with an order and sixteen
+  numbers; each runs over the picture in turn through one material whose pipeline key is
+  the pass's shader. Bindings in `assets/shaders/blit.wgsl`. Lua `shader_passes()`,
+  `set_shader(id, on)`, `set_shader_param(id, i, value)`.
+- `mods/shaders`: `palette` (levels per channel with ordered dither), `outline` (ink where
+  brightness or hue jumps), `crt` (off by default); `F7` cycles presets.
+
 ## 1.0.0-alpha.1
 
 The picture is drawn by a 3D camera. Depth was hard to read in the fixed isometric

@@ -170,6 +170,7 @@ end)
 | `simulate_frame_ms(ms)` | make `perf()` read as on a machine with that frame time; `nil` stops |
 | `frame()`, `view_turning()`, `hud_text(key)`, `selected_slot()`, `is_grounded()`, `target()` | readouts; `target()` is a table `x, y, z, block, nx, ny, nz` or `nil` |
 | `particles()`, `player_heading()` | live particles; which way the figure is turned: `left`, `right`, `away`, `toward` |
+| `shader_passes()`, `set_shader(id, on)`, `set_shader_param(id, i, value)` | the picture's passes (`id`, `order`, `enabled`); turn one on or off; set one of its sixteen numbers (`i` 1 to 16). Empty headless |
 
 Injected input is indistinguishable from a player's to the engine and to other scripts,
 so a test can drive another mod's controls. `mods/debug/tests/` covers the engine, the
@@ -183,6 +184,9 @@ camera mod and the performance mod; copy one to start.
   script.
 - `performance/` shows the numbers (F4) and adapts quality to the frame rate, or lets you
   set it (F6). Its levels and thresholds are a table at the top of the script.
+- `shaders/` finishes the picture: a palette with ordered dither, an ink outline, a CRT
+  look, `F7` to cycle. Its README shows how to write a pass: a WGSL fragment shader listed
+  in `shaders.ron` with an order and sixteen numbers, run over the picture in turn.
 - `example-crystal/` is a complete small mod to copy: two blocks (an ore and a glowing
   crystal), one feature rule, one script.
 - `debug/` is a probe: F9 saves a window screenshot, a software snapshot and a text dump for

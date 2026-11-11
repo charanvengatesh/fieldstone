@@ -1,0 +1,8 @@
+// Pixel-art finishing passes over the picture: a palette with ordered dither, an ink
+// outline, and a CRT look. F7 cycles presets; see README.md. Set enabled: false to drop it.
+(
+    name: "shaders",
+    format: 2,
+    depends: ["base"],
+    scripts: ["scripts/shaders.lua"],
+)
