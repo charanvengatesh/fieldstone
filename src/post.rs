@@ -12,8 +12,8 @@ use bevy::image::ImageSampler;
 use bevy::mesh::MeshVertexBufferLayoutRef;
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError,
-    TextureFormat, TextureUsages,
+    AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError, TextureFormat,
+    TextureUsages,
 };
 use bevy::shader::Shader;
 use bevy::sprite_render::{Material2d, Material2dKey, Material2dPipeline, MeshMaterial2d};
@@ -98,6 +98,10 @@ pub struct Chain {
     /// The compositor's blit shader.
     blit: Handle<Shader>,
     dirty: bool,
+    /// Pictures made last frame for a new size, swapped in this frame once the GPU has
+    /// them (a camera pointed at an image the renderer has not seen yet draws into a
+    /// mismatched depth texture).
+    pending: Option<([Handle<Image>; 2], UVec2)>,
 }
 
 impl Chain {
@@ -122,7 +126,8 @@ fn picture_image(size: UVec2) -> Image {
         TextureFormat::Rgba8UnormSrgb,
         None,
     );
-    image.texture_descriptor.usage |= TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST;
+    image.texture_descriptor.usage |=
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST | TextureUsages::COPY_SRC;
     image.sampler = ImageSampler::nearest();
     image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     image
@@ -238,6 +243,7 @@ pub fn setup(
         passes,
         blit,
         dirty: true,
+        pending: None,
     });
 }
 
@@ -276,21 +282,32 @@ pub fn wire(
         (Option<&MeshMaterial2d<PostArt>>, Option<&mut Transform>),
         With<Compositor>,
     >,
+    mut world_cam: Query<
+        &mut RenderTarget,
+        (With<MainCamera>, Without<Stage>, Without<Compositor>),
+    >,
 ) {
     let size = picture_size(&window, settings.pixel_scale);
-    if size != chain.size {
-        for handle in &chain.images {
-            if let Some(mut image) = images.get_mut(handle) {
-                image.resize(Extent3d {
-                    width: size.x,
-                    height: size.y,
-                    depth_or_array_layers: 1,
-                });
+    if let Some((images, pending_size)) = chain.pending.take() {
+        if pending_size == size {
+            chain.images = images;
+            chain.size = size;
+            picture.size = size.as_vec2();
+            chain.dirty = true;
+            if let Ok(mut target) = world_cam.single_mut() {
+                *target = RenderTarget::Image(ImageRenderTarget::from(chain.images[0].clone()));
             }
         }
-        chain.size = size;
-        picture.size = size.as_vec2();
-        chain.dirty = true;
+    } else if size != chain.size {
+        // New pictures rather than a resize in place, and a frame early: every reader
+        // follows a new handle cleanly once the renderer holds the texture.
+        chain.pending = Some((
+            [
+                images.add(picture_image(size)),
+                images.add(picture_image(size)),
+            ],
+            size,
+        ));
     }
     // Time ticks for every enabled pass; only the handful of passes pay for it.
     let frame = Vec4::new(

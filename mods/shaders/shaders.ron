@@ -2,10 +2,8 @@
 // four numbers of `params` reach the shader as params[0].xyzw, the next four as params[1],
 // and so on; scripts change them with set_shader_param(id, index, value), index 1 to 16.
 [
-    // Levels per channel, dither strength (0 none, 1 full), unused, unused.
-    (id: "palette", file: "shaders/palette.wgsl", order: 10, enabled: true,  params: [8.0, 0.35]),
     // Edge threshold on luminance, ink darkness, unused, unused.
-    (id: "outline", file: "shaders/outline.wgsl", order: 20, enabled: true,  params: [0.30, 0.45]),
+    (id: "outline", file: "shaders/outline.wgsl", order: 20, enabled: false, params: [0.30, 0.45]),
     // Scanline darkness, vignette strength, curvature (0 flat), unused.
     (id: "crt",     file: "shaders/crt.wgsl",     order: 30, enabled: false, params: [0.25, 0.35, 0.0]),
 ]

@@ -1,22 +1,25 @@
--- Shader presets. F7 cycles: plain, palette, palette + outline, crt (all three).
+-- Shader presets. F7 cycles: plain, outline, crt. Plain is the default: the picture as
+-- the engine draws it.
 --
 -- The passes themselves are in shaders.ron and shaders/*.wgsl; this only turns them on
 -- and off. Add your own pass there and it joins the chain by order.
 
 local PRESETS = {
-    { name = "plain",             palette = false, outline = false, crt = false },
-    { name = "palette",           palette = true,  outline = false, crt = false },
-    { name = "palette + outline", palette = true,  outline = true,  crt = false },
-    { name = "crt",               palette = true,  outline = true,  crt = true },
+    { name = "plain",   outline = false, crt = false },
+    { name = "outline", outline = true,  crt = false },
+    { name = "crt",     outline = true,  crt = true },
 }
-local current = 3
+local current = 1
 
 local function apply()
     local p = PRESETS[current]
-    set_shader("palette", p.palette)
     set_shader("outline", p.outline)
     set_shader("crt", p.crt)
-    set_hud("shaders", "look: " .. p.name .. " (F7)")
+    if current == 1 then
+        set_hud("shaders", "")
+    else
+        set_hud("shaders", "look: " .. p.name .. " (F7)")
+    end
 end
 
 function on_script_loaded()

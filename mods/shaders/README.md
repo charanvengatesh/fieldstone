@@ -1,16 +1,15 @@
 # shaders
 
-Finishing passes over the picture, all pack content: the engine renders the world into a
+Optional finishing passes over the picture, all pack content: the engine renders the world into a
 small picture (one texel per `pixel_scale` window pixels), runs each pass in
 `shaders.ron` over it in order, and blows the result up to the window.
 
 | Pass | Default | What it does |
 |------|---------|--------------|
-| `palette` | on | snaps colours to a few levels per channel with an ordered dither |
-| `outline` | on | inks a texel where brightness or hue jumps against its neighbour |
+| `outline` | off | inks a texel where brightness or hue jumps against its neighbour |
 | `crt` | off | scanlines, a vignette, optional barrel curve |
 
-`F7` cycles plain, palette, palette + outline, crt.
+`F7` cycles plain (the default), outline, crt.
 
 ## Writing a pass
 

@@ -20,7 +20,7 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 | Q / E | Turn the view a quarter, smoothly |
 | T | Next pitch preset: low (20), classic (30), high (45), top (60 degrees) |
 | P | Perspective on or off (`mods/camera`) |
-| F7 | Cycle the look: plain, palette, palette + outline, crt (`mods/shaders`) |
+| F7 | Cycle the look: plain, outline, crt (`mods/shaders`, plain by default) |
 | Shift + move the pointer | Pan away from the player; let go to drift back (`mods/camera`) |
 | Alt + drag, middle-drag, or trackpad twist | Orbit freely: sideways turns, up and down pitches; letting go settles on the nearest quarter (`mods/camera`) |
 | R | Back to the starting view (`mods/camera`) |

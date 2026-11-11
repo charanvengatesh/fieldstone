@@ -1,5 +1,5 @@
-// Pixel-art finishing passes over the picture: a palette with ordered dither, an ink
-// outline, and a CRT look. F7 cycles presets; see README.md. Set enabled: false to drop it.
+// Optional finishing passes over the picture: an ink outline and a CRT look, both off
+// until F7 turns them on; see README.md. Set enabled: false to drop the mod.
 (
     name: "shaders",
     format: 2,

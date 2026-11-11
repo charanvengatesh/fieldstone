@@ -184,7 +184,7 @@ camera mod and the performance mod; copy one to start.
   script.
 - `performance/` shows the numbers (F4) and adapts quality to the frame rate, or lets you
   set it (F6). Its levels and thresholds are a table at the top of the script.
-- `shaders/` finishes the picture: a palette with ordered dither, an ink outline, a CRT
+- `shaders/` holds optional finishing passes, off by default: an ink outline and a CRT
   look, `F7` to cycle. Its README shows how to write a pass: a WGSL fragment shader listed
   in `shaders.ron` with an order and sixteen numbers, run over the picture in turn.
 - `example-crystal/` is a complete small mod to copy: two blocks (an ore and a glowing

@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.0.0
+
+The 3D camera and the shader chain, measured and settled. See the two alphas below for
+what changed; this release fixes the picture's resize and records the cost.
+
+### Changed
+- The dithered palette pass is gone; it made the picture worse. `mods/shaders` keeps the
+  outline and CRT passes, off by default, so the picture ships as the engine draws it.
+
+### Fixed
+- Changing the zoom (or the window) remade the picture in place, which made the renderer
+  copy a texture without `COPY_SRC` and draw into a depth texture a frame behind. New
+  pictures are made a frame early and swapped in once the renderer holds them.
+
+### Measured (Apple M3 Pro, 2560 x 1440, release build)
+- Binary 42.1 MB (0.9.8: 35.9 MB; `bevy_pbr`'s embedded shaders).
+- 8.3 ms a frame with 55 chunks loaded and two passes on, which is the display's 120 Hz
+  cap; the frame is not the limit.
+- Mesher per chunk unchanged.
+
 ## 1.0.0-alpha.2
 
 The picture and the shader chain.
@@ -12,8 +32,8 @@ The picture and the shader chain.
   numbers; each runs over the picture in turn through one material whose pipeline key is
   the pass's shader. Bindings in `assets/shaders/blit.wgsl`. Lua `shader_passes()`,
   `set_shader(id, on)`, `set_shader_param(id, i, value)`.
-- `mods/shaders`: `palette` (levels per channel with ordered dither), `outline` (ink where
-  brightness or hue jumps), `crt` (off by default); `F7` cycles presets.
+- `mods/shaders`: optional `outline` (ink where brightness or hue jumps) and `crt`
+  passes, both off by default; `F7` cycles plain, outline, crt.
 
 ## 1.0.0-alpha.1
 
