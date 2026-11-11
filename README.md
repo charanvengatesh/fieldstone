@@ -18,9 +18,10 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 | 1-0, two-finger scroll | Choose a hotbar slot |
 | Tab or I | Bag. Click a slot to swap it with the held slot, shift-click splits half, right-click one |
 | Q / E | Turn the view a quarter, smoothly |
-| T | Next tilt preset: low, classic, high, top |
+| T | Next pitch preset: low (20), classic (30), high (45), top (60 degrees) |
+| P | Perspective on or off (`mods/camera`) |
 | Shift + move the pointer | Pan away from the player; let go to drift back (`mods/camera`) |
-| Alt + drag, middle-drag, or trackpad twist | Orbit freely; letting go settles on the nearest quarter (`mods/camera`) |
+| Alt + drag, middle-drag, or trackpad twist | Orbit freely: sideways turns, up and down pitches; letting go settles on the nearest quarter (`mods/camera`) |
 | R | Back to the starting view (`mods/camera`) |
 | Ctrl or Cmd + scroll | Zoom (`mods/camera`) |
 | Pinch, or - / = | Zoom, eased, toward the pointer |
@@ -48,17 +49,17 @@ cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
 cargo run -- --test              # no window: run every tests/*.lua in the packs; non-zero on failure
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
-                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --time 0..1  --grid
+                                 #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --perspective  --time 0..1  --grid
 cargo build --release
 ```
 
 ## How it works
 
-- **Projection.** Dimetric about any angle and at four tilts; the quarter turns at the
-  classic tilt are the 2:1 views. Nearness along the view is a linear function of position, so the projection is one
-  matrix. Chunk meshes are in world space with that matrix as their transform: every vertex
-  lands on screen with its depth, the depth buffer sorts blocks and the player per pixel,
-  and turning the view rebuilds nothing.
+- **Camera.** A real 3D camera (`src/cam.rs`) over Bevy's 3D pipeline: orthographic by
+  default, perspective on a toggle, any yaw and pitch, with presets at the classic dimetric
+  angles (30 degrees of pitch gives 2:1 ground diamonds). Chunk meshes are in world space;
+  the depth buffer sorts blocks and the player per pixel, and turning the view rebuilds
+  nothing. The same matrices run on the CPU for picking, streaming and headless snapshots.
 - **World.** Chunks of 16 x 16 columns by 32 levels of block ids. Each block is a pure
   function of the seed and its position, so chunks generate in any order and a save stores
   only chunks that were edited. Only chunks that can appear on screen are loaded, and

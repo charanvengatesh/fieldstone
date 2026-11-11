@@ -1,18 +1,19 @@
 -- Camera control.
 --
---   Hold Alt (or the middle mouse button) and drag sideways   orbit freely
+--   Hold Alt (or the middle mouse button) and drag              orbit: sideways turns, up and down pitches
 --   Trackpad rotate gesture (two fingers, twist)               orbit freely
 --   Let go                                                     settle on the nearest quarter view
 --   Hold Shift and move the pointer                             pan away from the player; let go to drift back
 --   T                                                          next tilt preset (engine key)
 --   R                                                          back to the view the game started with
 --   Ctrl or Cmd + scroll                                       zoom
+--   P                                                          perspective on or off
 --   C                                                          show or hide the compass
 --
--- Turning costs nothing: chunk meshes are in world space and only their projection
--- changes, so nothing is rebuilt.
+-- Turning costs nothing: chunk meshes are in world space and only the camera moves.
 
 local DRAG_DEGREES_PER_PIXEL = 0.35   -- how fast a drag turns the view
+local DRAG_PITCH_PER_PIXEL = 0.25     -- how fast a vertical drag tips it
 local PAN_TEXELS_PER_PIXEL = 0.5      -- how far a Shift-drag pans
 local SNAP_DEGREES = 90               -- views the camera settles on; try 45 for eight views
 local GESTURE_REST = 0.25             -- seconds without a twist before the view settles
@@ -36,7 +37,7 @@ end
 
 function on_script_loaded()
     home = view_target()
-    log("camera: Alt-drag or twist to orbit, R resets, Ctrl/Cmd-scroll zooms, C toggles the compass")
+    log("camera: Alt-drag or twist to orbit (up and down pitches), R resets, Ctrl/Cmd-scroll zooms, P perspective, C compass")
 end
 
 function on_tick(dt)
@@ -47,9 +48,13 @@ function on_tick(dt)
             orbiting = true
             capture_pointer(true)
         end
-        local dx = mouse_delta()
+        local dx, dy = mouse_delta()
         if dx ~= 0 then
             set_view_angle(view_angle() + dx * DRAG_DEGREES_PER_PIXEL)
+        end
+        if dy ~= 0 then
+            -- Dragging up looks more from above.
+            set_pitch(pitch() - dy * DRAG_PITCH_PER_PIXEL)
         end
     elseif orbiting then
         orbiting = false
@@ -107,11 +112,15 @@ function on_tick(dt)
         zoom_scroll = 0
     end
 
+    if key_just_pressed("P") then
+        set_setting("perspective", not get_setting("perspective"))
+    end
     if key_just_pressed("C") then
         compass = not compass
     end
     if compass then
-        set_hud("camera", "looking " .. facing(view_angle()) .. ", " .. tilt() .. " tilt")
+        local how = get_setting("perspective") and "perspective" or "parallel"
+        set_hud("camera", string.format("looking %s, %s tilt (%.0f degrees), %s", facing(view_angle()), tilt(), pitch(), how))
     else
         set_hud("camera", "")
     end

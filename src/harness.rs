@@ -25,8 +25,12 @@ pub struct Injected {
     pub scroll: f32,
     /// Trackpad twist in radians.
     pub twist: f32,
-    /// Where the pointer is, in world texels, while a test holds it there.
+    /// Where the pointer is, in texels from the middle of the picture, while a test holds
+    /// it there.
     pub cursor: Option<Vec2>,
+    /// A world point the pointer is held on; projected afresh every frame, so the camera's
+    /// lean or a turn never slides the pointer off it.
+    pub aim: Option<Vec3>,
 }
 
 /// Measurements a test replaces: a frame time in milliseconds, as on a slow machine.
@@ -69,10 +73,15 @@ pub fn inject_messages(
 /// "just pressed" for exactly one frame, like a real key.
 pub fn inject_buttons(
     mut injected: ResMut<Injected>,
+    cam: Res<crate::cam::Cam>,
+    picture: Res<crate::world::stream::Picture>,
     mut keys: ResMut<ButtonInput<KeyCode>>,
     mut mouse: ResMut<ButtonInput<MouseButton>>,
     mut cursor: ResMut<Cursor>,
 ) {
+    if let Some(aim) = injected.aim {
+        injected.cursor = Some(cam.project(picture.size, aim).truncate());
+    }
     for k in injected.release.drain(..) {
         keys.release(k);
     }

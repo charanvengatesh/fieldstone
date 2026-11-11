@@ -604,7 +604,9 @@ pub fn run(world: &mut World) {
             scope.create_function(|_, (sx, sy): (f32, f32)| {
                 let mut w = shared.borrow_mut();
                 let at = Vec2::new(sx, sy);
-                w.resource_mut::<Injected>().cursor = Some(at);
+                let mut injected = w.resource_mut::<Injected>();
+                injected.cursor = Some(at);
+                injected.aim = None;
                 w.resource_mut::<Cursor>().0 = Some(at);
                 Ok(())
             })?,
@@ -808,7 +810,9 @@ pub fn run(world: &mut World) {
                     .resource::<Cam>()
                     .project(w.resource::<Picture>().size, Vec3::new(x, y, z))
                     .truncate();
-                w.resource_mut::<Injected>().cursor = Some(at);
+                let mut injected = w.resource_mut::<Injected>();
+                injected.cursor = Some(at);
+                injected.aim = Some(Vec3::new(x, y, z));
                 w.resource_mut::<Cursor>().0 = Some(at);
                 Ok(())
             })?,
@@ -817,7 +821,9 @@ pub fn run(world: &mut World) {
             "clear_aim",
             scope.create_function(|_, ()| {
                 let mut w = shared.borrow_mut();
-                w.resource_mut::<Injected>().cursor = None;
+                let mut injected = w.resource_mut::<Injected>();
+                injected.cursor = None;
+                injected.aim = None;
                 w.resource_mut::<Cursor>().0 = None;
                 Ok(())
             })?,

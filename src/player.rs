@@ -97,13 +97,12 @@ pub const SILHOUETTE: Vec4 = Vec4::new(0.55, 0.65, 0.95, 0.55);
 #[derive(Component)]
 pub struct SilhouetteQuad;
 
-/// How far toward the eye the silhouette sits: past the model's own depth span at this
-/// pitch, so its far faces never show through its near ones, while a block two cells in
-/// front still covers it. Moving along the view axis changes nothing on an orthographic
-/// picture but the depth.
-pub fn silhouette_lift(cam: &Cam) -> f32 {
-    let (sp, cp) = cam.pitch.sin_cos();
-    0.9 * cp + (figure::HEIGHT + 0.05) * sp + 0.1
+/// How far toward the eye the silhouette sits: half the model's thickness and a hair, so
+/// the figure's own near faces (its back faces are culled) do not bring it out, while a
+/// block in the very next cell does. Moving along the view axis changes nothing on an
+/// orthographic picture but the depth.
+pub fn silhouette_lift(_cam: &Cam) -> f32 {
+    0.42
 }
 
 /// The silhouette's transform for a figure at `figure`.

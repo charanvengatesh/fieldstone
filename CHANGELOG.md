@@ -1,5 +1,38 @@
 # Changelog
 
+## 1.0.0-alpha.1
+
+The picture is drawn by a 3D camera. Depth was hard to read in the fixed isometric
+projection, so the world now goes through Bevy's 3D pipeline with an orthographic camera
+(perspective on a toggle) while keeping the baked lighting and the pixel look.
+
+### Changed
+- `src/cam.rs` owns the camera: yaw, pitch (presets `low` 20, `classic` 30, `high` 45,
+  `top` 60 degrees; 30 is the true dimetric angle for 2:1 diamonds), a world-point focus,
+  and the follow logic from `look.rs` (dead zone, lean, pan, zoom to the pointer, all in
+  texels on the picture). `Cam::project` and `Cam::ray` are the only projection code; the
+  picker (`world::pick`), the streamer, the harness and the software canvas use them, so
+  headless snapshots still show what the GPU shows.
+- Chunks, the figure, its silhouette, particles, the highlight and the ground shadow are
+  ordinary `Mesh3d`s with plain transforms. Materials are `bevy_pbr::Material`s: unlit,
+  two-sided, no shadow maps or prepass; shaders bind at group 3 and read Bevy's globals at
+  group 0 binding 11. `iso.rs`, `look.rs`, `Projected` and `apply_view` are gone.
+- The silhouette culls its back faces and sits 0.42 blocks toward the eye, so a block in
+  the next cell brings it out and the figure never silhouettes itself.
+- Haze is measured along the view axis from the camera's focus.
+- `mods/camera`: a vertical Alt-drag pitches the camera; `P` toggles perspective; the
+  compass names the pitch and the projection.
+- Lua: `pitch()`, `set_pitch(degrees)`, `set_setting("perspective", bool)`;
+  `camera_center()` returns the focus in world blocks; `view_angle()` is normalised to
+  0..360. The save file keeps yaw, pitch and the projection (old files still load).
+- `--perspective` for snapshots. `Picture` (the render target size in texels) replaces
+  `Viewport`.
+- Cargo feature `bevy_pbr` (no LUTs, no post-process, no glTF).
+
+### Known
+- The picture is still the window at `pixel_scale` window pixels per texel; the pixel
+  render target and the shader chain come in alpha.2.
+
 ## 0.9.8
 
 Depth cues, since "further back" and "higher up" land on the same pixel in this projection.

@@ -241,10 +241,14 @@ impl Cam {
         crate::world::pick(origin, dir, 2.0 * EYE_DISTANCE + 200.0, solid)
     }
 
-    /// A texel offset along the picture's axes as a world displacement.
+    /// A texel offset along the picture's axes as a displacement on the ground plane (the
+    /// focus never leaves the player's height): sideways along the picture's right, up the
+    /// picture along the ground away from the eye, stretched by the pitch.
     pub fn slide(&self, texels: Vec2) -> Vec3 {
-        let (right, up) = self.axes();
-        (right * texels.x + up * texels.y) / self.zoom()
+        let (right, _) = self.axes();
+        let away = -self.toward_eye().truncate().normalize_or_zero().extend(0.0);
+        let stretch = 1.0 / self.pitch.sin().max(0.1);
+        (right * texels.x + away * texels.y * stretch) / self.zoom()
     }
 
     /// Where the camera looks: the anchor plus the lean and the pan.
@@ -311,7 +315,9 @@ impl Cam {
         o + d * ((z - o.z) / d.z)
     }
 
-    /// Bevy's transform and projection for this camera on a `target`-sized picture.
+    /// Bevy's transform and projection for this camera on a `target`-sized picture. Until
+    /// the picture is its own render target, the window is the picture at `magnify` window
+    /// pixels per texel, which the orthographic scale takes in.
     pub fn pose(&self, target: Vec2) -> (Transform, Projection) {
         let eye = if self.perspective {
             self.focus + self.toward_eye() * self.perspective_distance(target.y)
@@ -328,7 +334,7 @@ impl Cam {
             })
         } else {
             Projection::Orthographic(OrthographicProjection {
-                scale: 1.0 / self.zoom(),
+                scale: 1.0 / (self.zoom() * self.magnify.max(1e-3)),
                 near: 0.1,
                 far: 2000.0,
                 ..OrthographicProjection::default_3d()

@@ -285,7 +285,9 @@ impl Material for SilhouetteArt {
         _layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        unlit(descriptor);
+        // Back faces are culled, unlike the other materials: the model's far side would
+        // otherwise show through its near side as a false silhouette.
+        descriptor.primitive.cull_mode = Some(bevy::render::render_resource::Face::Back);
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_compare = Some(CompareFunction::Less);
         }

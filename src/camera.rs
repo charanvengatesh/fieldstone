@@ -2,8 +2,7 @@
 //! computes for the current picture size. Zoom steps the magnification setting; the pinch
 //! and `-` / `=` land here.
 
-use bevy::camera::visibility::NoFrustumCulling;
-use bevy::core_pipeline::tonemapping::Tonemapping;
+use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::gestures::PinchGesture;
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -26,7 +25,7 @@ pub fn setup(mut commands: Commands) {
         Projection::Orthographic(OrthographicProjection::default_3d()),
         Msaa::Off,
         Tonemapping::None,
-        NoFrustumCulling,
+        DebandDither::Disabled,
     ));
 }
 

@@ -589,6 +589,11 @@ impl Canvas {
                 if area.abs() < 1e-6 {
                     continue;
                 }
+                // The silhouette culls back faces (pixel rows run downward, so a face
+                // wound counter-clockwise seen from outside has negative area here).
+                if mode == Mode::Behind && area > 0.0 {
+                    continue;
+                }
                 let lo = p[0].min(p[1]).min(p[2]).floor().max(Vec2::ZERO);
                 let hi = p[0]
                     .max(p[1])
@@ -719,10 +724,10 @@ mod tests {
         // transform moves it toward or away from the eye.
         let quad = |color: [f32; 4]| Faces {
             positions: vec![
-                [-0.25, 0.25, -0.25],
                 [0.25, -0.25, -0.25],
-                [0.25, -0.25, 0.25],
+                [-0.25, 0.25, -0.25],
                 [-0.25, 0.25, 0.25],
+                [0.25, -0.25, 0.25],
             ],
             uvs: vec![[0.0; 2]; 4],
             colors: vec![color; 4],
@@ -750,7 +755,8 @@ mod tests {
             Mode::Opaque,
         );
         // The red quad is nearer, so drawing green afterwards changes nothing.
-        assert_eq!(canvas.color[8 * 16 + 8], [1.0, 0.0, 0.0]);
+        let close = |a: [f32; 3], b: [f32; 3]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
+        assert!(close(canvas.color[8 * 16 + 8], [1.0, 0.0, 0.0]));
         assert_eq!(canvas.color[0], [0.0, 0.0, 0.0]);
         canvas.draw_model(
             &at(9.0),
@@ -760,7 +766,7 @@ mod tests {
             white,
             Mode::Opaque,
         );
-        assert_eq!(canvas.color[8 * 16 + 8], [0.0, 0.0, 1.0]);
+        assert!(close(canvas.color[8 * 16 + 8], [0.0, 0.0, 1.0]));
         // A silhouette draws only where something nearer already is: behind the blue
         // quad it tints; out in the open, over the empty background, it does not.
         let tint = Vec4::new(1.0, 1.0, 1.0, 0.5);
