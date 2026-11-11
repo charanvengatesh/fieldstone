@@ -220,7 +220,9 @@ fn cell(x: f64, y: f64, z: f64) -> IVec3 {
 /// Scripts count the view angle from the classic quarter, as the 2D engine did; the
 /// camera's yaw counts from +x.
 fn lua_degrees(yaw: f32) -> f32 {
-    let d = (yaw - std::f32::consts::FRAC_PI_4).to_degrees().rem_euclid(360.0);
+    let d = (yaw - std::f32::consts::FRAC_PI_4)
+        .to_degrees()
+        .rem_euclid(360.0);
     if d > 359.999 { 0.0 } else { d }
 }
 
