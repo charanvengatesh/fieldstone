@@ -31,5 +31,8 @@ self-test and writes `debug/NAME.png`.
 `tests/*.lua` in this folder are the engine's own scenarios, run headlessly by
 `cargo run -- --test` (and by CI): injected keys and scrolling, the camera mod's orbit,
 twist, reset and zoom, the performance mod's overlay, hand levels and adaptive behaviour on a
-pretend slow machine, breaking and placing, streaming after a teleport, walls and steps. The
-functions they use are listed in `mods/README.md` under Testing a mod.
+pretend slow machine, breaking and placing, streaming after a teleport, walls, steps and
+jumps, light, props, the figure. `00_arena.lua` runs first and flattens a 13 x 13 pad around
+the spawn, so the others walk on level ground whatever the seed; a scenario that wants wild
+terrain teleports away from it. The functions they use are listed in `mods/README.md` under
+Testing a mod.

@@ -21,12 +21,17 @@ use crate::player::{Player, Projected};
 use crate::world::iso::View;
 use crate::world::light;
 use crate::world::mesh::{
-    Faces, Grid, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose, unpack_flags,
+    Faces, Grid, HAZE_STRENGTH, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose,
+    haze_at, hazed, unpack_flags,
 };
 
 /// Time-of-day inputs the block drawing needs.
 pub struct Lighting {
     pub day: Daylight,
+    /// Projected depth of the camera's focus, where the haze starts.
+    pub focus_depth: f32,
+    /// Haze colour and strength, as the shader's uniform.
+    pub haze: Vec4,
 }
 use crate::world::tiles::{TILE, Tiles};
 use crate::world::worldgen::WorldGen;
@@ -112,6 +117,8 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     let quality = *world.resource::<Quality>();
     let lighting = Lighting {
         day: daylight(clock.frac()),
+        focus_depth: view.project(world.resource::<Focus>().0).z.round(),
+        haze: sky.extend(HAZE_STRENGTH),
     };
     let mut waters = Vec::new();
     for chunk in map.chunks.keys() {
@@ -493,7 +500,7 @@ impl Canvas {
                 channels += Vec3::new(c[0], c[1], c[2]) * wc[k];
             }
             channels = channels.max(Vec3::ZERO);
-            let (mask, water, top, submerged) = unpack_flags(faces.colors[i[0]][3]);
+            let (mask, water, top, submerged, drop) = unpack_flags(faces.colors[i[0]][3]);
             let mut light = compose(channels, &lighting.day);
             let brightness = light.max_element();
             if brightness > 1e-4 {
@@ -520,16 +527,30 @@ impl Canvas {
                 || (mask & 2 != 0 && local.x > tile - 1.5)
                 || (mask & 4 != 0 && local.y > tile - 1.5)
                 || (mask & 8 != 0 && local.x < 0.5);
+            // Haze by projected depth behind the focus.
+            let depth = (0..3)
+                .map(|k| place(faces.positions[i[k]]).z * w[k])
+                .sum::<f32>();
+            let haze = haze_at(depth, lighting.focus_depth);
             if water {
                 // Foam along a shore instead of ink; the surface lets the bed show through.
                 if edge && top {
                     c = c.lerp(light * 0.9, 0.7);
                 }
+                c = hazed(c, lighting.haze, haze);
                 return Some([c.x, c.y, c.z, if top { WATER_ALPHA } else { 0.85 }]);
             }
-            if edge {
+            // A drop edge is inked two texels deep and darker than a seam.
+            let drop_edge = (drop & 1 != 0 && local.y < 1.5)
+                || (drop & 2 != 0 && local.x > tile - 2.5)
+                || (drop & 4 != 0 && local.y > tile - 2.5)
+                || (drop & 8 != 0 && local.x < 1.5);
+            if drop_edge {
+                c *= Vec3::new(0.38, 0.38, 0.46);
+            } else if edge {
                 c *= Vec3::new(0.50, 0.50, 0.58);
             }
+            c = hazed(c, lighting.haze, haze);
             Some([c.x, c.y, c.z, 1.0])
         });
     }
@@ -662,7 +683,11 @@ pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
         |p| if p == IVec3::ZERO { block } else { 0 },
     );
     let mut canvas = Canvas::new(32, 32, 1.0, Vec2::ZERO, Color::NONE);
-    let noon = Lighting { day: daylight(0.5) };
+    let noon = Lighting {
+        day: daylight(0.5),
+        focus_depth: 0.0,
+        haze: Vec4::ZERO,
+    };
     canvas.draw_blocks(Vec3::ZERO, View::default(), &faces.solid, tiles, 0.0, &noon);
     canvas.draw_water(Vec3::ZERO, View::default(), &faces.water, tiles, 0.0, &noon);
     canvas.into_image(true)

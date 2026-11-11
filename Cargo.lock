@@ -2149,7 +2149,7 @@ dependencies = [
 
 [[package]]
 name = "fieldstone"
-version = "0.9.7"
+version = "0.9.8"
 dependencies = [
  "bevy",
  "mlua",

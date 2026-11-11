@@ -23,13 +23,24 @@ struct Globals {
 struct BlockParams {
     // y and z: atlas size in texels, w: light bands
     params: vec4<f32>,
-    // x: daylight 0..1, y: time of day 0..1
+    // x: daylight 0..1, y: time of day 0..1, z: the camera's focus depth
     day: vec4<f32>,
     // sunlight colour now
     sun_color: vec4<f32>,
     // light left in shade and at night
     ambient_color: vec4<f32>,
+    // rgb: the colour of distance (the sky), w: its full strength
+    haze: vec4<f32>,
 };
+
+// Depth behind the focus over which the haze reaches full strength; keep in step with
+// HAZE_REACH in src/world/mesh.rs.
+const HAZE_REACH: f32 = 28.0;
+
+// How much haze a fragment at projected depth `depth` gets.
+fn haze_at(depth: f32) -> f32 {
+    return clamp((block.day.z - depth) / HAZE_REACH, 0.0, 1.0);
+}
 
 @group(2) @binding(0) var<uniform> block: BlockParams;
 @group(2) @binding(1) var atlas: texture_2d<f32>;
@@ -102,7 +113,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     channels = max(channels, vec3<f32>(0.0));
 
-    let flags = i32(round(in.color.a * 128.0));
+    let flags = i32(round(in.color.a * 2048.0));
     let mask = flags % 16;
     let water = (flags / 16) % 2 == 1;
     let top = (flags / 32) % 2 == 1;
@@ -137,5 +148,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (edge && top) {
         color = mix(color, light * 0.9, 0.7);
     }
+    color = mix(color, block.haze.rgb, haze_at(in.world_position.z) * block.haze.w);
     return vec4<f32>(color, select(0.85, WATER_ALPHA, top));
 }

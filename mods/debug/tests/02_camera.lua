@@ -4,6 +4,13 @@ local function settled()
     return not view_turning()
 end
 
+local function top_of(x, y)
+    for z = 31, 0, -1 do
+        if get_block(x, y, z) ~= "air" then return z end
+    end
+    return nil
+end
+
 local function on_a_quarter()
     local a = view_angle() % 90
     return a < 0.5 or a > 89.5
@@ -151,21 +158,30 @@ end)
 test("zooming toward the pointer keeps the block under it", function()
     local z = zoom()
     set_setting("peek", false)
-    -- A stone of our own two cells over and one up, with the air above it cleared, so
+    -- A stone of our own, two cells toward the viewer and above everything near it, so
     -- the pointer finds it whatever the terrain around the spawn looks like.
     local px, py, pz = player_pos()
-    local bx, by, bz = math.floor(px) + 2, math.floor(py), math.floor(pz) + 1
-    -- Nothing above or beside it up to tree height, whichever way the view faces.
+    local cx, cy = math.floor(px), math.floor(py)
+    local bx, by, best = cx, cy, math.huge
+    for _, d in ipairs({ { 2, 0 }, { 0, 2 }, { -2, 0 }, { 0, -2 }, { 2, 2 }, { -2, -2 }, { 2, -2 }, { -2, 2 } }) do
+        -- The cell that lands lowest on screen is the nearest to the viewer.
+        local _, y = screen_of(cx + d[1] + 0.5, cy + d[2] + 0.5, pz)
+        if y < best then bx, by, best = cx + d[1], cy + d[2], y end
+    end
+    local highest = math.floor(pz)
+    for dx = -2, 2 do
+        for dy = -2, 2 do
+            local top = top_of(bx + dx, by + dy)
+            if top then highest = math.max(highest, top) end
+        end
+    end
+    local bz = math.min(highest + 1, math.floor(pz) + 3)
     local cleared = {}
-    for dx = -1, 1 do
-        for dy = -1, 1 do
-            for h = bz, bz + 7 do
-                local b = get_block(bx + dx, by + dy, h)
-                if b ~= "air" then
-                    cleared[#cleared + 1] = { bx + dx, by + dy, h, b }
-                    set_block(bx + dx, by + dy, h, "air")
-                end
-            end
+    for h = bz, bz + 2 do
+        local b = get_block(bx, by, h)
+        if b ~= "air" then
+            cleared[#cleared + 1] = { bx, by, h, b }
+            set_block(bx, by, h, "air")
         end
     end
     set_block(bx, by, bz, "stone")

@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.9.8
+
+Depth cues, since "further back" and "higher up" land on the same pixel in this projection.
+
+### Changed
+- Shadows: the sun sits lower (a block of shadow per block of height, was two thirds)
+  and a cast shadow takes 52 percent of the light (was 40). Boxed-in corners are darker
+  (`OCCLUSION` 0.42 at the tightest), so walls meet the ground with a contact band.
+- Height grading: 4 percent brighter per block of height (was 2.5), so terraces read
+  apart.
+- Drop edges: where a top face's edge gives onto clear air the ink is two texels deep and
+  darker than a seam between materials (`pack_flags` carries a drop mask; flags are now
+  scaled by 2048).
+- Haze: beyond the camera's focus, blocks fade toward the sky colour, full at 28 depth
+  units (`HAZE_REACH`, `HAZE_STRENGTH` 0.22). The focus depth rides in the block uniform
+  in whole blocks, so it is written a few times a second while walking and never at rest.
+- Harness: `00_arena.lua` flattens a pad around the spawn before the scenarios run; the
+  zoom-to-pointer scenario builds its stone toward the viewer, above the terrain.
+
 ## 0.9.7
 
 ### New

@@ -26,16 +26,17 @@ pub const TOP_SHADE: f32 = 1.0;
 const SIDE_SHADE: f32 = 0.70;
 const SIDE_SWING: f32 = 0.20;
 /// Brightness by how open a corner is: 0 is boxed in by two neighbours, 3 is clear.
-pub const OCCLUSION: [f32; 4] = [0.52, 0.70, 0.86, 1.0];
+pub const OCCLUSION: [f32; 4] = [0.42, 0.62, 0.84, 1.0];
 /// Share of light a cast shadow removes.
-pub const SHADOW: f32 = 0.40;
+pub const SHADOW: f32 = 0.52;
 /// Brightness added per block of height, so terraces read apart even where no side shows.
-const RISE: f32 = 0.025;
+const RISE: f32 = 0.04;
 /// The height that gets plain brightness.
 const MID: f32 = 12.0;
 /// Direction to the sun, fixed in the world. It rises one block per unit, so shadows are
-/// 0.67 blocks long per block of height.
-pub const SUN: Vec3 = Vec3::new(-0.6, 0.3, 1.0);
+/// a block long per block of height: long enough that a thing above the ground always
+/// shows its shadow below it.
+pub const SUN: Vec3 = Vec3::new(-0.9, 0.45, 1.0);
 
 /// Which lighting effects the mesher computes. Turning one off makes meshing cheaper.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,7 +65,7 @@ pub fn face_shade(normal: IVec3) -> f32 {
 /// How many blocks of height a shadow ray climbs before giving up.
 const SHADOW_REACH: i32 = 8;
 /// Horizontal distance a block's shadow or occlusion can reach, for marking meshes dirty.
-pub const LIGHT_REACH: i32 = 6;
+pub const LIGHT_REACH: i32 = 9;
 /// Colour of light in full shade and in full sun.
 const SHADE_TINT: Vec3 = Vec3::new(0.80, 0.88, 1.08);
 const SUN_TINT: Vec3 = Vec3::new(1.06, 1.0, 0.90);
@@ -83,12 +84,31 @@ pub struct Grid(pub bool);
 pub struct BlockParams {
     /// x: unused, y and z: atlas size in texels, w: light bands.
     pub params: Vec4,
-    /// x: daylight 0..1, y: time of day 0..1, z, w: unused.
+    /// x: daylight 0..1, y: time of day 0..1, z: the camera's focus depth, w: unused.
     pub day: Vec4,
     /// Colour of sunlight now.
     pub sun_color: Vec4,
     /// Colour of the light left in shade and at night.
     pub ambient_color: Vec4,
+    /// Haze: rgb the colour of distance (the sky), w its full strength.
+    pub haze: Vec4,
+}
+
+/// Depth behind the camera's focus over which the haze reaches full strength, in depth
+/// units (blocks of ground toward the back of the screen).
+pub const HAZE_REACH: f32 = 28.0;
+/// Share of the sky colour mixed in at full haze.
+pub const HAZE_STRENGTH: f32 = 0.22;
+
+/// How much of the haze a point at projected depth `depth` gets when the focus is at
+/// `focus_depth`: nothing at or in front of the focus, full `HAZE_REACH` behind it.
+pub fn haze_at(depth: f32, focus_depth: f32) -> f32 {
+    ((focus_depth - depth) / HAZE_REACH).clamp(0.0, 1.0)
+}
+
+/// Mixes `color` toward the haze colour by `amount` of its strength.
+pub fn hazed(color: Vec3, haze: Vec4, amount: f32) -> Vec3 {
+    color.lerp(haze.truncate(), amount * haze.w)
 }
 
 /// The block material: the tile atlas lit by vertex colour, with outlines, banded light,
@@ -159,6 +179,7 @@ pub fn setup(
         day: Vec4::new(1.0, 0.5, 0.0, 0.0),
         sun_color: Vec4::ONE,
         ambient_color: Vec4::ONE,
+        haze: Vec4::new(0.36, 0.60, 0.92, HAZE_STRENGTH),
     };
     let atlas = images.add(image);
     commands.insert_resource(BlockMaterial(materials.add(BlockArt {
@@ -178,6 +199,7 @@ pub fn setup(
 /// the long stretches where nothing changes.
 pub fn tick(
     clock: Res<GameTime>,
+    look: Res<crate::look::Look>,
     handle: Option<Res<BlockMaterial>>,
     water: Option<Res<WaterMaterial>>,
     mut materials: ResMut<Assets<BlockArt>>,
@@ -190,16 +212,21 @@ pub fn tick(
         return;
     };
     let day = daylight(clock.frac());
+    let sky = crate::core::time::sky_color(clock.frac());
+    // The focus depth moves in whole blocks, so walking writes the material a few times
+    // a second and standing still never does.
     let wanted = BlockParams {
         params: current.params,
-        day: Vec4::new(quantize(day.level), clock.frac(), 0.0, 0.0),
+        day: Vec4::new(quantize(day.level), clock.frac(), look.depth.round(), 0.0),
         sun_color: day.sun.map(quantize).extend(1.0),
         ambient_color: day.ambient.map(quantize).extend(1.0),
+        haze: sky.map(quantize).extend(HAZE_STRENGTH),
     };
     let same = |a: Vec4, b: Vec4| (a - b).abs().max_element() < 1e-6;
     if same(wanted.day.with_y(0.0), current.day.with_y(0.0))
         && same(wanted.sun_color, current.sun_color)
         && same(wanted.ambient_color, current.ambient_color)
+        && same(wanted.haze, current.haze)
     {
         return;
     }
@@ -216,16 +243,24 @@ fn quantize(v: f32) -> f32 {
     (v * 255.0).round() / 255.0
 }
 
-/// Packs a face's outline mask, its water flag, whether it faces up and whether it lies
-/// under water into the vertex alpha.
-pub fn pack_flags(mask: u32, water: bool, top: bool, submerged: bool) -> f32 {
-    (mask + 16 * water as u32 + 32 * top as u32 + 64 * submerged as u32) as f32 / 128.0
+/// Packs a face's outline mask, its water flag, whether it faces up, whether it lies under
+/// water, and which of its edges are drops (the ground falls away past them, inked
+/// heavier) into the vertex alpha.
+pub fn pack_flags(mask: u32, water: bool, top: bool, submerged: bool, drop: u32) -> f32 {
+    (mask + 16 * water as u32 + 32 * top as u32 + 64 * submerged as u32 + 128 * (drop & 15)) as f32
+        / 2048.0
 }
 
-/// The inverse of [`pack_flags`]: `(outline mask, water, top, submerged)`.
-pub fn unpack_flags(alpha: f32) -> (u32, bool, bool, bool) {
-    let v = (alpha * 128.0).round() as u32;
-    (v % 16, (v / 16) % 2 == 1, (v / 32) % 2 == 1, v >= 64)
+/// The inverse of [`pack_flags`]: `(outline mask, water, top, submerged, drop mask)`.
+pub fn unpack_flags(alpha: f32) -> (u32, bool, bool, bool, u32) {
+    let v = (alpha * 2048.0).round() as u32;
+    (
+        v % 16,
+        (v / 16) % 2 == 1,
+        (v / 32) % 2 == 1,
+        (v / 64) % 2 == 1,
+        (v / 128) % 16,
+    )
 }
 
 /// How the ground under water is tinted: bluer and a little darker.
@@ -365,6 +400,8 @@ struct Quad {
     corners: [Vec3; 4],
     /// Outline mask by tile edge, after turning.
     mask: u32,
+    /// Edges of a top face past which the ground falls away, by tile edge.
+    drop: u32,
     tile: u32,
     rot: u32,
     flip: bool,
@@ -437,6 +474,7 @@ pub fn chunk_faces(
                             normal: IVec3::Z,
                             corners: [a, c, c + Vec3::Z, a + Vec3::Z],
                             mask: 0,
+                            drop: 0,
                             tile: 1,
                             rot: 0,
                             flip: false,
@@ -452,14 +490,21 @@ pub fn chunk_faces(
                         continue;
                     }
                     let mut mask = 0u32;
+                    let mut drop = 0u32;
                     for (bit, e) in edges.iter().enumerate() {
                         // The same face on the neighbouring block continues this surface
                         // only when that block is of the same family and is also exposed.
                         let q = p + *e;
+                        let beside = block(q);
                         let continues =
-                            family(block(q)) == family(id) && shows(block(q), block(q + normal));
+                            family(beside) == family(id) && shows(beside, block(q + normal));
                         if grid || !continues {
                             mask |= 1 << bit;
+                        }
+                        // Past a top face's edge into clear air the ground falls away: the
+                        // strongest edge there is, inked heavier than a seam.
+                        if normal == IVec3::Z && clear(beside) && !water(beside) {
+                            drop |= 1 << bit;
                         }
                     }
                     // Tops turn by quarters and sides mirror, so one tile does not repeat
@@ -478,6 +523,7 @@ pub fn chunk_faces(
                         normal,
                         corners: corners(local, normal),
                         mask: tile_mask(mask, rot, flip),
+                        drop: tile_mask(drop, rot, flip),
                         tile,
                         rot,
                         flip,
@@ -502,6 +548,7 @@ pub fn chunk_faces(
             is_water,
             q.normal == IVec3::Z && !q.cross,
             q.submerged,
+            q.drop,
         );
         let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
         let shade = if q.cross {
@@ -666,10 +713,12 @@ mod tests {
             for water in [false, true] {
                 for top in [false, true] {
                     for under in [false, true] {
-                        assert_eq!(
-                            unpack_flags(pack_flags(mask, water, top, under)),
-                            (mask, water, top, under)
-                        );
+                        for drop in [0, 5, 15] {
+                            assert_eq!(
+                                unpack_flags(pack_flags(mask, water, top, under, drop)),
+                                (mask, water, top, under, drop)
+                            );
+                        }
                     }
                 }
             }
@@ -1025,7 +1074,7 @@ mod tests {
             // Bottom two corners at z 0, top two at z 1, running corner to corner of cell.
             assert!(pos[0].z == 0.0 && pos[1].z == 0.0 && pos[2].z == 1.0 && pos[3].z == 1.0);
             assert!((pos[1].truncate() - pos[0].truncate()).length() > 1.4);
-            let (mask, water, top, _) = unpack_flags(f.colors[q * 4][3]);
+            let (mask, water, top, _, _) = unpack_flags(f.colors[q * 4][3]);
             assert_eq!((mask, water, top), (0, false, false));
         }
         // From the side tile: its uv row is the second tile of the block.
