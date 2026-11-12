@@ -78,7 +78,8 @@ test("a vertical Alt-drag pitches the camera and P toggles perspective", functio
     -- The player stays on screen whatever the pitch.
     local px, py, pz = player_pos()
     local sx, sy = screen_of(px, py, pz)
-    expect(math.abs(sx) < 40 and math.abs(sy) < 40, string.format("the player is near the middle (%.0f, %.0f)", sx, sy))
+    -- Within the dead zone (20 texels at magnification 3) of the middle.
+    expect(math.abs(sx) < 80 and math.abs(sy) < 60, string.format("the player is near the middle (%.0f, %.0f)", sx, sy))
     set_pitch(was)
     expect(get_setting("perspective") == false, "parallel by default")
     press_key("P")

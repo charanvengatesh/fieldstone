@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.0.1
+
+### Changed
+- The picture is drawn at the window's own resolution again; `pixel_scale` is the
+  magnification, as it was before 1.0. A new `picture_scale` setting (default 1, up to 4)
+  draws the whole picture coarser for anyone who wants the chunky look.
+- With no shader pass on and `picture_scale` 1, the world camera draws straight to the
+  window: no picture, no copy. The chain switches itself on the moment a pass is enabled.
+  (Where a pass lives, base or mod, makes no difference to its cost.)
+- The camera's dead zone and lean scale with the magnification, so they feel the same at
+  every zoom.
+
 ## 1.0.0
 
 The 3D camera and the shader chain, measured and settled. See the two alphas below for

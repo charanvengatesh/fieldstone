@@ -102,6 +102,8 @@ pub struct Chain {
     /// them (a camera pointed at an image the renderer has not seen yet draws into a
     /// mismatched depth texture).
     pending: Option<([Handle<Image>; 2], UVec2)>,
+    /// Whether the world camera draws straight to the window (no pass, full resolution).
+    direct: bool,
 }
 
 impl Chain {
@@ -147,7 +149,7 @@ pub fn setup(
     world_cam: Single<Entity, With<MainCamera>>,
     mut commands: Commands,
 ) {
-    let size = picture_size(&window, settings.pixel_scale);
+    let size = picture_size(&window, settings.picture_scale);
     picture.size = size.as_vec2();
     let a = images.add(picture_image(size));
     let b = images.add(picture_image(size));
@@ -216,7 +218,8 @@ pub fn setup(
         Camera2d,
         Camera {
             order: 100,
-            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            // Over the world camera's picture or over the world itself: never clears.
+            clear_color: ClearColorConfig::None,
             ..default()
         },
         Msaa::Off,
@@ -244,12 +247,14 @@ pub fn setup(
         blit,
         dirty: true,
         pending: None,
+        direct: false,
     });
 }
 
-/// Texels across and down the picture: the window's physical pixels over the pixel scale.
-fn picture_size(window: &Window, pixel_scale: u32) -> UVec2 {
-    let scale = pixel_scale.clamp(1, 6);
+/// Pixels across and down the picture: the window's physical pixels over the picture
+/// scale.
+fn picture_size(window: &Window, picture_scale: u32) -> UVec2 {
+    let scale = picture_scale.clamp(1, 4);
     UVec2::new(
         (window.physical_width() / scale).max(1),
         (window.physical_height() / scale).max(1),
@@ -286,15 +291,18 @@ pub fn wire(
         &mut RenderTarget,
         (With<MainCamera>, Without<Stage>, Without<Compositor>),
     >,
+    mut quad_vis: Query<&mut Visibility, (With<Compositor>, With<Mesh2d>)>,
 ) {
-    let size = picture_size(&window, settings.pixel_scale);
+    let size = picture_size(&window, settings.picture_scale);
     if let Some((images, pending_size)) = chain.pending.take() {
         if pending_size == size {
             chain.images = images;
             chain.size = size;
             picture.size = size.as_vec2();
             chain.dirty = true;
-            if let Ok(mut target) = world_cam.single_mut() {
+            if !chain.direct
+                && let Ok(mut target) = world_cam.single_mut()
+            {
                 *target = RenderTarget::Image(ImageRenderTarget::from(chain.images[0].clone()));
             }
         }
@@ -309,10 +317,32 @@ pub fn wire(
             size,
         ));
     }
+    // With no pass on and the picture at the window's resolution, the chain is a copy
+    // for nothing: the world camera draws straight to the window and the compositor's
+    // quad steps aside (its camera stays, for the UI).
+    let direct = settings.picture_scale.clamp(1, 4) == 1 && !chain.passes.iter().any(|p| p.enabled);
+    if direct != chain.direct {
+        chain.direct = direct;
+        chain.dirty = true;
+        if let Ok(mut target) = world_cam.single_mut() {
+            *target = if direct {
+                RenderTarget::Window(Default::default())
+            } else {
+                RenderTarget::Image(ImageRenderTarget::from(chain.images[0].clone()))
+            };
+        }
+        for mut vis in &mut quad_vis {
+            *vis = if direct {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            };
+        }
+    }
     // Time ticks for every enabled pass; only the handful of passes pay for it.
     let frame = Vec4::new(
         time.elapsed_secs(),
-        settings.pixel_scale.clamp(1, 6) as f32,
+        settings.picture_scale.clamp(1, 4) as f32,
         size.x as f32,
         size.y as f32,
     );

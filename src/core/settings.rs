@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Resource, Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Settings {
-    /// Screen pixels per texel, 1..=6.
+    /// Screen pixels per texel, 1..=6: the magnification.
     pub pixel_scale: u32,
+    /// Screen pixels per picture pixel, 1..=4: 1 draws the picture at the window's own
+    /// resolution; more makes the whole picture chunky.
+    pub picture_scale: u32,
     pub keys: BindingNames,
 }
 
@@ -65,6 +68,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             pixel_scale: 3,
+            picture_scale: 1,
             keys: BindingNames::default(),
         }
     }

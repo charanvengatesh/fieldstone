@@ -405,12 +405,14 @@ pub fn follow(
     }
 
     // Dead zone: the anchor only moves when the player leaves the box around it, measured
-    // on the picture.
+    // on the picture, in texels of the magnified picture.
+    let m = cam.magnify / settings.picture_scale.clamp(1, 4) as f32;
     if cam.dead_zone_on {
         let d = (cam.project(target, focus.0) - cam.project(target, cam.settled)).truncate();
+        let zone = DEAD_ZONE * m;
         let excess = Vec2::new(
-            (d.x.abs() - DEAD_ZONE.x).max(0.0) * d.x.signum(),
-            (d.y.abs() - DEAD_ZONE.y).max(0.0) * d.y.signum(),
+            (d.x.abs() - zone.x).max(0.0) * d.x.signum(),
+            (d.y.abs() - zone.y).max(0.0) * d.y.signum(),
         );
         if excess != Vec2::ZERO {
             let slide = cam.slide(excess);
@@ -422,7 +424,9 @@ pub fn follow(
 
     // Peek toward the pointer, unless a script has the pointer.
     let want_peek = match cursor.0 {
-        Some(o) if cam.peek_on && !captured.0 => (o * PEEK_SHARE).clamp(-PEEK_MAX, PEEK_MAX),
+        Some(o) if cam.peek_on && !captured.0 => {
+            (o * PEEK_SHARE).clamp(-PEEK_MAX * m, PEEK_MAX * m)
+        }
         _ => Vec2::ZERO,
     };
     cam.peek = ease2(cam.peek, want_peek, dt, 8.0);
@@ -563,10 +567,12 @@ mod tests {
         w.resource_mut::<Focus>().0 += Vec3::new(0.3, 0.0, 0.0);
         run(&mut w, 30);
         assert_eq!(w.resource::<Cam>().focus, start);
-        w.resource_mut::<Focus>().0 += Vec3::new(5.0, 0.0, 0.0);
+        // Ten blocks is not (the box is 20 texels at magnification 3: just over a
+        // block's worth of ground).
+        w.resource_mut::<Focus>().0 += Vec3::new(10.0, 0.0, 0.0);
         run(&mut w, 120);
         let moved = w.resource::<Cam>().focus - start;
-        assert!(moved.x > 2.5, "{moved}");
+        assert!(moved.x > 3.0, "{moved}");
     }
 
     #[test]

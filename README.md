@@ -33,7 +33,9 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 | F4 / F6 | Performance line; quality level by hand (`mods/performance`) |
 | F9 | Debug capture (with `mods/debug` enabled): pictures and a text dump under `debug/` |
 
-Keys are rebindable in `settings.ron`, written next to the executable on first run.
+Keys are rebindable in `settings.ron`, written next to the executable on first run; it also
+holds `pixel_scale` (the zoom, 1 to 6) and `picture_scale` (1 draws at the window's
+resolution; 2 to 4 make the whole picture chunky).
 
 A one-block hole hides its own floor behind its near walls. To fill it, click the far wall.
 When blocks hide the player, a pale silhouette shows through them; the camera leans a

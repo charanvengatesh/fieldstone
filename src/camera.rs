@@ -34,6 +34,7 @@ pub fn setup(mut commands: Commands) {
 pub fn follow(
     cam: Res<Cam>,
     picture: Res<Picture>,
+    settings: Res<Settings>,
     mut cams: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
     let (right, up) = cam.axes();
@@ -42,8 +43,9 @@ pub fn follow(
     let nudge = (right * snap.x + up * snap.y) / cam.zoom();
     let mut snapped = *cam;
     snapped.focus -= nudge;
-    // The picture is its own render target: one texel is one of its pixels.
-    let (transform, projection) = snapped.pose(picture.size, 1.0);
+    // Picture pixels per texel: the magnification over the picture's own coarseness.
+    let magnify = cam.magnify / settings.picture_scale.clamp(1, 4) as f32;
+    let (transform, projection) = snapped.pose(picture.size, magnify);
     for (mut tf, mut proj) in &mut cams {
         if *tf != transform {
             *tf = transform;
@@ -62,7 +64,7 @@ pub fn track_cursor(
     cursor.0 = window.cursor_position().map(|p| {
         let centre = Vec2::new(window.width(), window.height()) / 2.0;
         let d = (p - centre) * window.scale_factor();
-        Vec2::new(d.x, -d.y) / settings.pixel_scale.clamp(1, 6) as f32
+        Vec2::new(d.x, -d.y) / settings.picture_scale.clamp(1, 4) as f32
     });
 }
 
