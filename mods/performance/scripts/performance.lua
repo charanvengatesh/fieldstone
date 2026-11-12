@@ -9,10 +9,10 @@
 -- frame rate stays low and climbs back when it stays high.
 
 local LEVELS = {
-    { name = "full",    shadows = true,  occlusion = true,  margin = 96, budget = 2.0 },
-    { name = "lean",    shadows = true,  occlusion = true,  margin = 48, budget = 1.5 },
-    { name = "fast",    shadows = false, occlusion = true,  margin = 32, budget = 1.0 },
-    { name = "fastest", shadows = false, occlusion = false, margin = 16, budget = 0.75 },
+    { name = "full",    shadows = true,  occlusion = true,  margin = 96, budget = 2.0,  horizon = 48 },
+    { name = "lean",    shadows = true,  occlusion = true,  margin = 48, budget = 1.5,  horizon = 40 },
+    { name = "fast",    shadows = false, occlusion = true,  margin = 32, budget = 1.0,  horizon = 32 },
+    { name = "fastest", shadows = false, occlusion = false, margin = 16, budget = 0.75, horizon = 24 },
 }
 local LOW_FPS = 42          -- below this for LOW_SECONDS, step down
 local HIGH_FPS = 56         -- above this for HIGH_SECONDS, step up
@@ -35,6 +35,7 @@ local function apply(n, why)
     set_setting("occlusion", q.occlusion)
     set_setting("view_margin", q.margin)
     set_setting("mesh_budget_ms", q.budget)
+    set_setting("horizon", q.horizon)
     if why then
         show_text("performance: " .. q.name .. " quality (" .. why .. ")", 3)
         log("performance: level " .. level .. " " .. q.name .. " (" .. why .. ")")

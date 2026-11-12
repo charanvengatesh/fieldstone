@@ -43,6 +43,8 @@ pub struct Options {
     pub time: Option<f32>,
     /// `--perspective`: a mild perspective instead of the parallel projection.
     pub perspective: bool,
+    /// `--horizon BLOCKS`: the fog horizon (blocks behind the focus), for snapshots.
+    pub horizon: Option<f32>,
 }
 
 fn main() {
@@ -74,6 +76,7 @@ fn main() {
         tilt: value("--tilt").cloned(),
         time: value("--time").and_then(|v| v.parse().ok()),
         perspective: args.iter().any(|a| a == "--perspective"),
+        horizon: value("--horizon").and_then(|v| v.parse().ok()),
         snapshot: value("--snapshot").cloned(),
         scale: value("--scale").and_then(|v| v.parse().ok()).unwrap_or(2.0),
         rot: value("--rot").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -151,6 +154,13 @@ fn main() {
         // Load what the 1280 x 800 picture will show, not what a window would.
         app.insert_resource(world::stream::Picture {
             size: Vec2::new(1280.0, 800.0) / options.scale.max(0.25),
+        });
+    }
+    if let Some(horizon) = options.horizon {
+        app.insert_resource(world::stream::Streaming {
+            horizon: horizon.clamp(8.0, 200.0),
+            horizon_pinned: true,
+            ..default()
         });
     }
     if options.test {

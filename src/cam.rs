@@ -221,7 +221,7 @@ impl Cam {
         texel: Vec2,
         solid: impl Fn(IVec3) -> bool,
     ) -> Option<crate::world::Hit> {
-        let (origin, dir) = self.ray(target, texel);
+        let (origin, dir) = self.lens(target).ray(texel);
         crate::world::pick(origin, dir, 2.0 * EYE_DISTANCE + 200.0, solid)
     }
 
@@ -270,33 +270,37 @@ impl Cam {
         }
     }
 
+    /// The camera's matrices for a `target`-sized picture, built once and reused for
+    /// every point of a frame. The streamer and the picker project thousands of points;
+    /// through [`Cam::project`] each would rebuild the matrices.
+    pub fn lens(&self, target: Vec2) -> Lens {
+        let view = self.view_matrix(target);
+        let proj = self.projection_matrix(target);
+        Lens {
+            view,
+            clip: proj * view,
+            inverse: (proj * view).inverse(),
+            target,
+            toward_eye: self.toward_eye(),
+            focus: self.focus,
+        }
+    }
+
     /// A world point as texels from the middle of a `target`-sized picture (x right, y up)
     /// and its view depth, greater nearer the eye.
     pub fn project(&self, target: Vec2, p: Vec3) -> Vec3 {
-        let view = self.view_matrix(target);
-        let clip = self.projection_matrix(target) * view * p.extend(1.0);
-        let ndc = clip.truncate() / clip.w;
-        let depth = (view * p.extend(1.0)).z;
-        Vec3::new(ndc.x * target.x / 2.0, ndc.y * target.y / 2.0, depth)
+        self.lens(target).project(p)
     }
 
     /// The ray through a texel of the picture: origin and unit direction, away from the eye.
     pub fn ray(&self, target: Vec2, texel: Vec2) -> (Vec3, Vec3) {
-        let inverse = (self.projection_matrix(target) * self.view_matrix(target)).inverse();
-        let ndc = Vec2::new(texel.x / target.x * 2.0, texel.y / target.y * 2.0);
-        let near = inverse * Vec4::new(ndc.x, ndc.y, 0.0, 1.0);
-        let far = inverse * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
-        let (near, far) = (near.truncate() / near.w, far.truncate() / far.w);
-        (near, (far - near).normalize())
+        self.lens(target).ray(texel)
     }
 
     /// The world point at height `z` under a texel.
+    #[cfg(test)]
     pub fn unproject(&self, target: Vec2, texel: Vec2, z: f32) -> Vec3 {
-        let (o, d) = self.ray(target, texel);
-        if d.z.abs() < 1e-6 {
-            return o.with_z(z);
-        }
-        o + d * ((z - o.z) / d.z)
+        self.lens(target).unproject(texel, z)
     }
 
     /// Bevy's transform and projection for this camera on a `target`-sized picture drawn
@@ -336,6 +340,56 @@ impl Cam {
     /// the real pointer.
     pub fn zoom_about(&mut self, offset: Vec2) {
         self.zoom_about = Some(offset);
+    }
+}
+
+/// A camera's matrices for one picture size, frozen for a frame.
+#[derive(Clone, Copy, Debug)]
+pub struct Lens {
+    view: Mat4,
+    clip: Mat4,
+    inverse: Mat4,
+    pub target: Vec2,
+    pub toward_eye: Vec3,
+    pub focus: Vec3,
+}
+
+impl Lens {
+    /// A world point as texels from the middle (x right, y up) and its view depth, greater
+    /// nearer the eye.
+    pub fn project(&self, p: Vec3) -> Vec3 {
+        let clip = self.clip * p.extend(1.0);
+        let ndc = clip.truncate() / clip.w;
+        let depth = (self.view * p.extend(1.0)).z;
+        Vec3::new(
+            ndc.x * self.target.x / 2.0,
+            ndc.y * self.target.y / 2.0,
+            depth,
+        )
+    }
+
+    /// The ray through a texel: origin and unit direction, away from the eye.
+    pub fn ray(&self, texel: Vec2) -> (Vec3, Vec3) {
+        let ndc = Vec2::new(texel.x / self.target.x * 2.0, texel.y / self.target.y * 2.0);
+        let near = self.inverse * Vec4::new(ndc.x, ndc.y, 0.0, 1.0);
+        let far = self.inverse * Vec4::new(ndc.x, ndc.y, 1.0, 1.0);
+        let (near, far) = (near.truncate() / near.w, far.truncate() / far.w);
+        (near, (far - near).normalize())
+    }
+
+    /// The world point at height `z` under a texel.
+    pub fn unproject(&self, texel: Vec2, z: f32) -> Vec3 {
+        let (o, d) = self.ray(texel);
+        if d.z.abs() < 1e-6 {
+            return o.with_z(z);
+        }
+        o + d * ((z - o.z) / d.z)
+    }
+
+    /// How far behind the focus a world point lies along the view axis, in blocks;
+    /// negative in front of it.
+    pub fn behind(&self, p: Vec3) -> f32 {
+        (self.focus - p).dot(self.toward_eye)
     }
 }
 

@@ -98,25 +98,32 @@ pub struct BlockParams {
     pub sun_color: Vec4,
     /// Colour of the light left in shade and at night.
     pub ambient_color: Vec4,
-    /// Haze: rgb the colour of distance (the sky), w its full strength.
+    /// Fog: rgb the colour of distance (the sky), w the horizon in blocks behind the focus.
     pub haze: Vec4,
 }
 
-/// Depth behind the camera's focus over which the haze reaches full strength, in depth
-/// units (blocks of ground toward the back of the screen).
-pub const HAZE_REACH: f32 = 28.0;
-/// Share of the sky colour mixed in at full haze.
+/// Share of the sky colour the light haze reaches by `HAZE_KNEE` of the way to the
+/// horizon; from there the fog thickens to the whole sky colour at the horizon, where
+/// streaming stops, so the far edge of the world never shows.
 pub const HAZE_STRENGTH: f32 = 0.22;
+const HAZE_KNEE: f32 = 0.6;
 
-/// How much of the haze a world point gets: nothing at or in front of the focus plane,
-/// full `HAZE_REACH` blocks behind it along the view axis.
-pub fn haze_at(p: Vec3, focus: Vec3, toward_eye: Vec3) -> f32 {
-    ((focus - p).dot(toward_eye) / HAZE_REACH).clamp(0.0, 1.0)
+fn smooth(lo: f32, hi: f32, v: f32) -> f32 {
+    let t = ((v - lo) / (hi - lo)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
-/// Mixes `color` toward the haze colour by `amount` of its strength.
-pub fn hazed(color: Vec3, haze: Vec4, amount: f32) -> Vec3 {
-    color.lerp(haze.truncate(), amount * haze.w)
+/// How much of the sky colour a world point takes: a light haze growing to
+/// `HAZE_STRENGTH` over the first part of the way behind the focus along the view axis,
+/// then fog to 1 at `horizon` blocks. Nothing at or in front of the focus.
+pub fn haze_at(p: Vec3, focus: Vec3, toward_eye: Vec3, horizon: f32) -> f32 {
+    let t = ((focus - p).dot(toward_eye) / horizon.max(1.0)).clamp(0.0, 1.0);
+    HAZE_STRENGTH * smooth(0.0, HAZE_KNEE, t) + (1.0 - HAZE_STRENGTH) * smooth(HAZE_KNEE, 1.0, t)
+}
+
+/// Mixes `color` toward the sky colour by `amount`.
+pub fn hazed(color: Vec3, sky: Vec3, amount: f32) -> Vec3 {
+    color.lerp(sky, amount)
 }
 
 /// Every material here is unlit and two-sided: no shadow maps, no prepass, no backface
@@ -324,7 +331,7 @@ pub fn setup(
         toward_eye: Vec4::new(0.0, 0.0, 1.0, 0.0),
         sun_color: Vec4::ONE,
         ambient_color: Vec4::ONE,
-        haze: Vec4::new(0.36, 0.60, 0.92, HAZE_STRENGTH),
+        haze: Vec4::new(0.36, 0.60, 0.92, 40.0),
     };
     let atlas = images.add(image);
     commands.insert_resource(BlockMaterial(materials.add(BlockArt {
@@ -345,6 +352,7 @@ pub fn setup(
 pub fn tick(
     clock: Res<GameTime>,
     cam: Res<crate::cam::Cam>,
+    streaming: Res<super::stream::Streaming>,
     handle: Option<Res<BlockMaterial>>,
     water: Option<Res<WaterMaterial>>,
     mut materials: ResMut<Assets<BlockArt>>,
@@ -370,7 +378,7 @@ pub fn tick(
             .extend(0.0),
         sun_color: day.sun.map(quantize).extend(1.0),
         ambient_color: day.ambient.map(quantize).extend(1.0),
-        haze: sky.map(quantize).extend(HAZE_STRENGTH),
+        haze: sky.map(quantize).extend(streaming.horizon.round()),
     };
     let same = |a: Vec4, b: Vec4| (a - b).abs().max_element() < 1e-6;
     if same(wanted.day.with_y(0.0), current.day.with_y(0.0))
@@ -1159,6 +1167,14 @@ mod tests {
         // The uniform only moves in visible steps.
         assert_eq!(quantize(0.5), 128.0 / 255.0);
         assert_eq!(quantize(0.50001), quantize(0.5));
+        // Fog: nothing at the focus, the light haze part way, the whole sky at the horizon.
+        let (focus, eye) = (Vec3::ZERO, Vec3::new(0.0, 0.0, 1.0));
+        let at = |d: f32| haze_at(Vec3::new(0.0, 0.0, -d), focus, eye, 40.0);
+        assert_eq!(at(0.0), 0.0);
+        assert!((at(24.0) - HAZE_STRENGTH).abs() < 1e-4, "{}", at(24.0));
+        assert!(at(32.0) > HAZE_STRENGTH && at(32.0) < 1.0);
+        assert_eq!(at(40.0), 1.0);
+        assert_eq!(at(60.0), 1.0);
     }
 
     #[test]

@@ -219,6 +219,7 @@ impl Plugin for WorldPlugin {
             .init_resource::<mesh::Grid>()
             .init_resource::<mesh::Quality>()
             .init_resource::<stream::Picture>()
+            .init_resource::<stream::Visible>()
             .init_resource::<stream::Streaming>()
             .init_resource::<stream::Perf>()
             .add_systems(Startup, mesh::setup)

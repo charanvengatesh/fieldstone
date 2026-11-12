@@ -638,6 +638,7 @@ pub fn run(world: &mut World) {
                     "perspective" => Some(mlua::Value::Boolean(w.resource::<Cam>().perspective)),
                     "mesh_budget_ms" => Some(mlua::Value::Number(streaming.budget_ms as f64)),
                     "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
+                    "horizon" => Some(mlua::Value::Number(streaming.horizon as f64)),
                     _ => None,
                 })
             })?,
@@ -686,6 +687,13 @@ pub fn run(world: &mut World) {
                     }
                     ("mesh_budget_ms", _, Some(ms)) => {
                         w.resource_mut::<Streaming>().budget_ms = (ms as f32).clamp(0.5, 16.0);
+                        true
+                    }
+                    ("horizon", _, Some(blocks)) => {
+                        let mut streaming = w.resource_mut::<Streaming>();
+                        if !streaming.horizon_pinned {
+                            streaming.horizon = (blocks as f32).clamp(8.0, 200.0);
+                        }
                         true
                     }
                     ("view_margin", _, Some(texels)) => {

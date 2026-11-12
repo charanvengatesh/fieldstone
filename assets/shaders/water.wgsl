@@ -32,17 +32,19 @@ struct BlockParams {
     sun_color: vec4<f32>,
     // light left in shade and at night
     ambient_color: vec4<f32>,
-    // rgb: the colour of distance (the sky), w: its full strength
+    // rgb: the colour of distance (the sky), w: the horizon in blocks behind the focus
     haze: vec4<f32>,
 };
 
-// Depth behind the focus over which the haze reaches full strength; keep in step with
-// HAZE_REACH in src/world/mesh.rs.
-const HAZE_REACH: f32 = 28.0;
+// The light haze reaches HAZE_STRENGTH of the sky colour by HAZE_KNEE of the way to the
+// horizon (block.haze.w, blocks behind the focus), then fog thickens to the whole sky
+// colour at the horizon, where streaming stops. Keep in step with src/world/mesh.rs.
+const HAZE_STRENGTH: f32 = 0.22;
+const HAZE_KNEE: f32 = 0.6;
 
-// How much haze a world point gets: its view depth past the focus plane over HAZE_REACH.
 fn haze_at(world: vec3<f32>) -> f32 {
-    return clamp(dot(block.focus.xyz - world, block.toward_eye.xyz) / HAZE_REACH, 0.0, 1.0);
+    let t = clamp(dot(block.focus.xyz - world, block.toward_eye.xyz) / max(block.haze.w, 1.0), 0.0, 1.0);
+    return HAZE_STRENGTH * smoothstep(0.0, HAZE_KNEE, t) + (1.0 - HAZE_STRENGTH) * smoothstep(HAZE_KNEE, 1.0, t);
 }
 
 @group(3) @binding(0) var<uniform> block: BlockParams;
@@ -152,6 +154,6 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     if (edge && top) {
         color = mix(color, light * 0.9, 0.7);
     }
-    color = mix(color, block.haze.rgb, haze_at(in.world_position.xyz) * block.haze.w);
+    color = mix(color, block.haze.rgb, haze_at(in.world_position.xyz));
     return vec4<f32>(color, select(0.85, WATER_ALPHA, top));
 }

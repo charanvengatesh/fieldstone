@@ -21,8 +21,8 @@ use crate::inventory::Inventory;
 use crate::player::Player;
 use crate::world::light;
 use crate::world::mesh::{
-    Faces, Grid, HAZE_STRENGTH, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose,
-    haze_at, hazed, unpack_flags,
+    Faces, Grid, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose, haze_at, hazed,
+    unpack_flags,
 };
 use crate::world::stream::Picture;
 
@@ -32,7 +32,7 @@ pub struct Lighting {
     /// The camera's focus and the direction from it to the eye, where the haze starts.
     pub focus: Vec3,
     pub toward_eye: Vec3,
-    /// Haze colour and strength, as the shader's uniform.
+    /// The sky colour fog goes to, and the horizon in blocks behind the focus.
     pub haze: Vec4,
 }
 use crate::world::tiles::{TILE, Tiles};
@@ -121,7 +121,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
         day: daylight(clock.frac()),
         focus: cam.focus.round(),
         toward_eye: cam.toward_eye(),
-        haze: sky.extend(HAZE_STRENGTH),
+        haze: sky.extend(world.resource::<crate::world::stream::Streaming>().horizon),
     };
     let mut waters = Vec::new();
     for chunk in map.chunks.keys() {
@@ -534,13 +534,13 @@ impl Canvas {
                 .map(|k| Vec3::from(faces.positions[i[k]]) * w[k])
                 .sum::<Vec3>()
                 + origin;
-            let haze = haze_at(world, lighting.focus, lighting.toward_eye);
+            let haze = haze_at(world, lighting.focus, lighting.toward_eye, lighting.haze.w);
             if water {
                 // Foam along a shore instead of ink; the surface lets the bed show through.
                 if edge && top {
                     c = c.lerp(light * 0.9, 0.7);
                 }
-                c = hazed(c, lighting.haze, haze);
+                c = hazed(c, lighting.haze.truncate(), haze);
                 return Some([c.x, c.y, c.z, if top { WATER_ALPHA } else { 0.85 }]);
             }
             // A drop edge is inked two texels deep and darker than a seam.
@@ -553,7 +553,7 @@ impl Canvas {
             } else if edge {
                 c *= Vec3::new(0.50, 0.50, 0.58);
             }
-            c = hazed(c, lighting.haze, haze);
+            c = hazed(c, lighting.haze.truncate(), haze);
             Some([c.x, c.y, c.z, 1.0])
         });
     }
@@ -695,7 +695,7 @@ pub fn block_icon(block: u16, tiles: &Tiles) -> Image {
         day: daylight(0.5),
         focus: Vec3::ZERO,
         toward_eye: Vec3::Z,
-        haze: Vec4::ZERO,
+        haze: Vec4::new(0.0, 0.0, 0.0, 1.0e9),
     };
     // Looked at from the classic quarter, the block's middle in the middle of the icon.
     let mut cam = Cam::quarter(0);
