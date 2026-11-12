@@ -51,15 +51,66 @@ fn haze_at(world: vec3<f32>) -> f32 {
 @group(3) @binding(1) var atlas: texture_2d<f32>;
 @group(3) @binding(2) var atlas_sampler: sampler;
 
-// What block_vertex.wgsl hands over: the world position, the atlas uv, the light channels
-// (sun, block light, ambient) and the face's flags (flag_bits in src/world/mesh.rs).
+// What block_vertex.wgsl hands over: the world position, face-local cell coordinates,
+// the light channels (sun, block light, ambient), the face's flags (flag_bits in
+// src/world/mesh.rs) and its tile, face number and extent in cells.
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
-    @location(1) uv: vec2<f32>,
+    @location(1) face_local: vec2<f32>,
     @location(2) light: vec3<f32>,
     @location(3) @interpolate(flat) flags: u32,
+    @location(4) @interpolate(flat) info: vec4<u32>,
 };
+
+const COLS: u32 = 16u;
+
+// src/core/mod.rs hash01, bit for bit: pure u32 arithmetic.
+fn hash01(seed: u32, x: i32, y: i32, salt: u32) -> f32 {
+    var h = seed ^ 0x9E3779B9u;
+    var vs = array<u32, 3>(bitcast<u32>(x), bitcast<u32>(y), salt);
+    for (var i = 0; i < 3; i++) {
+        h ^= (vs[i] + 0x7F4A7C15u) * 0x8532EBF5u;
+        h = (h ^ (h >> 15u)) * 0x2C1B3C6Du;
+        h ^= h >> 12u;
+    }
+    return f32(h >> 8u) / 16777216.0;
+}
+
+fn face_normal(face: u32) -> vec3<f32> {
+    switch face {
+        case 1u: { return vec3<f32>(1.0, 0.0, 0.0); }
+        case 2u: { return vec3<f32>(0.0, 1.0, 0.0); }
+        case 3u: { return vec3<f32>(-1.0, 0.0, 0.0); }
+        case 4u: { return vec3<f32>(0.0, -1.0, 0.0); }
+        default: { return vec3<f32>(0.0, 0.0, 1.0); }
+    }
+}
+
+// The atlas texel a geometric texel samples for a tile turned rot quarter turns or
+// mirrored (mesh.rs rotate_texel).
+fn rotate_texel(g: vec2<f32>, rot: u32, flip: bool) -> vec2<f32> {
+    let n = TILE - 1.0;
+    if (flip) { return vec2<f32>(n - g.x, g.y); }
+    switch rot {
+        case 1u: { return vec2<f32>(n - g.y, g.x); }
+        case 2u: { return vec2<f32>(n - g.x, n - g.y); }
+        case 3u: { return vec2<f32>(g.y, n - g.x); }
+        default: { return g; }
+    }
+}
+
+// The edge bits that apply to one cell of a quad: a quad's edges land on its border cells
+// only; the grid inks every cell border (mesh.rs border_edges).
+fn border_edges(mask: i32, cell: vec2<f32>, extent: vec2<f32>, grid: bool) -> i32 {
+    if (grid) { return 15; }
+    var m = mask & 15;
+    if (cell.y > 0.5) { m &= ~1; }
+    if (cell.x < extent.x - 1.5) { m &= ~2; }
+    if (cell.y < extent.y - 1.5) { m &= ~4; }
+    if (cell.x > 0.5) { m &= ~8; }
+    return m;
+}
 
 const TILE: f32 = 16.0;
 const SHADE_TINT: vec3<f32> = vec3<f32>(0.80, 0.88, 1.08);
@@ -95,35 +146,39 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     let t = globals.time;
 
     // Derivatives first: they must be taken in uniform control flow.
-    let uv_dx = dpdx(in.uv);
-    let uv_dy = dpdy(in.uv);
+    let fl_dx = dpdx(in.face_local);
+    let fl_dy = dpdy(in.face_local);
     let light_dx = dpdx(in.light);
     let light_dy = dpdy(in.light);
 
-    let px = in.uv * size;
-    let texel = floor(px);
-    let cell = floor(texel / TILE) * TILE;
-    let local = texel - cell;
+    let tile_index = in.info.x;
+    let face = in.info.y;
+    let extent = vec2<f32>(f32(in.info.z), f32(in.info.w));
+    let fl = clamp(in.face_local, vec2<f32>(0.0), extent - vec2<f32>(1e-4));
+    let cellf = floor(fl);
+    // The geometric texel within the cell.
+    let local = clamp(floor((fl - cellf) * TILE), vec2<f32>(0.0), vec2<f32>(TILE - 1.0));
 
     // Light channels at the texel's centre: step from this pixel to the centre in screen
-    // space using the inverse of the uv derivative matrix.
+    // space using the inverse of the face-local derivative matrix.
     var channels = in.light;
-    let to_centre = (texel + vec2<f32>(0.5) - px) / size;
-    let det = uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x;
+    let to_centre = cellf + (local + vec2<f32>(0.5)) / TILE - in.face_local;
+    let det = fl_dx.x * fl_dy.y - fl_dx.y * fl_dy.x;
     if (abs(det) > 1e-14) {
         let d = vec2<f32>(
-            (to_centre.x * uv_dy.y - to_centre.y * uv_dy.x) / det,
-            (uv_dx.x * to_centre.y - uv_dx.y * to_centre.x) / det,
+            (to_centre.x * fl_dy.y - to_centre.y * fl_dy.x) / det,
+            (fl_dx.x * to_centre.y - fl_dx.y * to_centre.x) / det,
         );
         channels = channels + light_dx * d.x + light_dy * d.y;
     }
     channels = max(channels, vec3<f32>(0.0));
 
     let flags = i32(in.flags);
-    let mask = flags % 16;
+    let grid = (flags / 2048) % 2 == 1;
+    let mask = border_edges(flags % 16, cellf, extent, grid);
     let water = (flags / 16) % 2 == 1;
     let submerged = (flags / 64) % 2 == 1;
-    let drop = (flags / 128) % 16;
+    let drop = border_edges((flags / 128) % 16, cellf, extent, false);
 
     var light = compose(channels);
 
@@ -134,17 +189,31 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         light = light * (banded / brightness);
     }
 
+    // Which way this block's tile is turned (mesh.rs tile_turn): tops by quarters, sides
+    // mirrored, from a hash of the block; water and cross props not at all.
+    let block_cell = floor(in.world_position.xyz - 0.5 * face_normal(face));
+    var rot = 0u;
+    var flip = false;
+    if (!water && face != 5u) {
+        let pick = hash01(0x5EEDu, i32(block_cell.x) + i32(block_cell.z) * 131, i32(block_cell.y), tile_index % 2u);
+        if (face == 0u) {
+            rot = u32(pick * 4.0) % 4u;
+        } else {
+            flip = pick < 0.5;
+        }
+    }
+    var sample_at = rotate_texel(local, rot, flip);
     // Water: each row of the tile slides back and forth a texel, and the odd texel glints.
-    var sample_at = local;
     var glint = 0.0;
     if (water) {
-        let slide = floor(sin(t * 1.3 + local.y * 0.9) * 1.5 + 0.5);
-        sample_at.x = (local.x + slide + TILE) % TILE;
+        let slide = floor(sin(t * 1.3 + sample_at.y * 0.9) * 1.5 + 0.5);
+        sample_at.x = (sample_at.x + slide + TILE) % TILE;
         let spot = floor(in.world_position.xy) + vec2<f32>(floor(t * 2.0) * 17.0, 0.0);
         glint = step(0.997, hash(spot)) * 0.26;
     }
 
-    let uv = (cell + sample_at + vec2<f32>(0.5)) / size;
+    let tile_origin = vec2<f32>(f32((tile_index % COLS) * 16u), f32((tile_index / COLS) * 16u));
+    let uv = (tile_origin + sample_at + vec2<f32>(0.5)) / size;
     let texel_color = textureSampleLevel(atlas, atlas_sampler, uv, 0.0);
     // Holes in cutout tiles: leaves, glass, props.
     if (texel_color.a < 0.5) {

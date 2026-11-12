@@ -34,18 +34,6 @@ struct Mesh {
 
 @group(2) @binding(0) var<storage> mesh: array<Mesh>;
 
-struct BlockParams {
-    params: vec4<f32>,
-    day: vec4<f32>,
-    focus: vec4<f32>,
-    toward_eye: vec4<f32>,
-    sun_color: vec4<f32>,
-    ambient_color: vec4<f32>,
-    haze: vec4<f32>,
-};
-
-@group(3) @binding(0) var<uniform> block: BlockParams;
-
 struct Vertex {
     @builtin(instance_index) instance: u32,
     @location(0) data: vec3<u32>,
@@ -54,15 +42,13 @@ struct Vertex {
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
-    @location(1) uv: vec2<f32>,
+    // Face-local cell coordinates: corner times extent.
+    @location(1) face_local: vec2<f32>,
     @location(2) light: vec3<f32>,
     @location(3) @interpolate(flat) flags: u32,
+    // tile index, face (0 top, 1 +x, 2 +y, 3 -x, 4 -y, 5 cross), cells wide, cells high
+    @location(4) @interpolate(flat) info: vec4<u32>,
 };
-
-const TILE: f32 = 16.0;
-const COLS: u32 = 16u;
-// How far, in texels, uvs stay inside their tile so sampling never bleeds (mesh.rs INSET).
-const INSET: f32 = 0.01;
 
 @vertex
 fn vertex(v: Vertex) -> VertexOutput {
@@ -70,7 +56,9 @@ fn vertex(v: Vertex) -> VertexOutput {
     let w1 = v.data.y;
     let w2 = v.data.z;
     let local = vec3<f32>(f32(w0 & 31u), f32((w0 >> 5u) & 31u), f32((w0 >> 10u) & 63u));
+    let face = (w0 >> 16u) & 7u;
     let corner = vec2<f32>(f32((w0 >> 19u) & 1u), f32((w0 >> 20u) & 1u));
+    let extent = vec2<u32>(((w0 >> 21u) & 31u) + 1u, ((w0 >> 26u) & 31u) + 1u);
     let tile = w1 & 4095u;
     let sun = f32((w1 >> 12u) & 1023u) / 256.0;
     let lamp = f32((w1 >> 22u) & 63u) / 63.0;
@@ -82,15 +70,12 @@ fn vertex(v: Vertex) -> VertexOutput {
     let world_from_local = transpose(mat4x4<f32>(m[0], m[1], m[2], vec4<f32>(0.0, 0.0, 0.0, 1.0)));
     let world = world_from_local * vec4<f32>(local, 1.0);
 
-    let origin = vec2<f32>(f32((tile % COLS) * 16u), f32((tile / COLS) * 16u));
-    let size = block.params.yz;
-    let uv = (origin + vec2<f32>(INSET) + corner * (TILE - 2.0 * INSET)) / size;
-
     var out: VertexOutput;
     out.position = view.clip_from_world * world;
     out.world_position = world;
-    out.uv = uv;
+    out.face_local = corner * vec2<f32>(extent);
     out.light = vec3<f32>(sun, lamp, ambient);
     out.flags = w2 & 4095u;
+    out.info = vec4<u32>(tile, face, extent.x, extent.y);
     return out;
 }

@@ -74,8 +74,6 @@ const SHADE_TINT: Vec3 = Vec3::new(0.80, 0.88, 1.08);
 const SUN_TINT: Vec3 = Vec3::new(1.06, 1.0, 0.90);
 /// Number of bands the shader quantises light into.
 pub const LEVELS: f32 = 10.0;
-/// How far, in texels, UVs stay inside their tile so sampling never bleeds.
-const INSET: f32 = 0.01;
 
 /// Draw every block edge (the classic grid look) instead of only steps and block changes.
 #[derive(Resource, Default)]
@@ -421,16 +419,96 @@ fn quantize(v: f32) -> f32 {
     (v * 255.0).round() / 255.0
 }
 
-/// A face's outline mask, its water flag, whether it faces up, whether it lies under
-/// water, and which of its edges are drops (the ground falls away past them, inked
-/// heavier), as the bits the shader reads.
-pub fn flag_bits(mask: u32, water: bool, top: bool, submerged: bool, drop: u32) -> u32 {
-    (mask & 15) + 16 * water as u32 + 32 * top as u32 + 64 * submerged as u32 + 128 * (drop & 15)
+/// A face's outline mask (by geometric edge: bit 0 the `v = 0` edge, 1 `u = 1`, 2 `v = 1`,
+/// 3 `u = 0`), its water flag, whether it faces up, whether it lies under water, which of
+/// its edges are drops (the ground falls away past them, inked heavier) and whether every
+/// cell border is inked (the grid), as the bits the shader reads.
+pub fn flag_bits(mask: u32, water: bool, top: bool, submerged: bool, drop: u32, grid: bool) -> u32 {
+    (mask & 15)
+        + 16 * water as u32
+        + 32 * top as u32
+        + 64 * submerged as u32
+        + 128 * (drop & 15)
+        + 2048 * grid as u32
 }
 
 /// [`flag_bits`] as the vertex alpha of the CPU-side [`Faces`] (the canvas reads it).
-pub fn pack_flags(mask: u32, water: bool, top: bool, submerged: bool, drop: u32) -> f32 {
-    flag_bits(mask, water, top, submerged, drop) as f32 / 2048.0
+pub fn pack_flags(
+    mask: u32,
+    water: bool,
+    top: bool,
+    submerged: bool,
+    drop: u32,
+    grid: bool,
+) -> f32 {
+    flag_bits(mask, water, top, submerged, drop, grid) as f32 / 4096.0
+}
+
+/// The inverse of [`pack_flags`]: `(outline mask, water, top, submerged, drop mask, grid)`.
+pub fn unpack_flags(alpha: f32) -> (u32, bool, bool, bool, u32, bool) {
+    let v = (alpha * 4096.0).round() as u32;
+    (
+        v % 16,
+        (v / 16) % 2 == 1,
+        (v / 32) % 2 == 1,
+        (v / 64) % 2 == 1,
+        (v / 128) % 16,
+        (v / 2048) % 2 == 1,
+    )
+}
+
+/// How a block's tile is turned so one tile does not repeat as an obvious grid: tops turn
+/// by quarters, sides mirror, water (whose waves must line up) and cross props neither.
+/// `p` is the block, `kind` 0 for the top tile and 1 for the side. Returns
+/// `(quarter turns, mirrored)`. The shaders compute the same from the fragment's cell.
+pub fn tile_turn(p: IVec3, kind: u32, top: bool, water: bool, cross: bool) -> (u32, bool) {
+    if water || cross {
+        return (0, false);
+    }
+    let pick = hash01(0x5EED, p.x.wrapping_add(p.z.wrapping_mul(131)), p.y, kind);
+    if top {
+        ((pick * 4.0) as u32 % 4, false)
+    } else {
+        (0, pick < 0.5)
+    }
+}
+
+/// The atlas texel a geometric texel of a face samples, for a tile turned `rot` quarter
+/// turns or mirrored: the mapping the old per-corner uv assignment made, per texel.
+pub fn rotate_texel(g: IVec2, rot: u32, flip: bool) -> IVec2 {
+    let n = TILE as i32 - 1;
+    if flip {
+        IVec2::new(n - g.x, g.y)
+    } else {
+        match rot % 4 {
+            1 => IVec2::new(n - g.y, g.x),
+            2 => IVec2::new(n - g.x, n - g.y),
+            3 => IVec2::new(g.y, n - g.x),
+            _ => g,
+        }
+    }
+}
+
+/// The edge bits that apply to cell `cell` of a quad `extent` cells wide and high: the
+/// quad's edges land on its border cells only, and the grid inks every cell border.
+pub fn border_edges(mask: u32, cell: IVec2, extent: IVec2, grid: bool) -> u32 {
+    if grid {
+        return 15;
+    }
+    let mut m = mask & 15;
+    if cell.y > 0 {
+        m &= !1;
+    }
+    if cell.x < extent.x - 1 {
+        m &= !2;
+    }
+    if cell.y < extent.y - 1 {
+        m &= !4;
+    }
+    if cell.x > 0 {
+        m &= !8;
+    }
+    m
 }
 
 /// The one vertex attribute of a chunk mesh: three words holding the local position,
@@ -530,18 +608,6 @@ pub fn face_index(normal: IVec3, cross: bool) -> u32 {
     }
 }
 
-/// The inverse of [`pack_flags`]: `(outline mask, water, top, submerged, drop mask)`.
-pub fn unpack_flags(alpha: f32) -> (u32, bool, bool, bool, u32) {
-    let v = (alpha * 2048.0).round() as u32;
-    (
-        v % 16,
-        (v / 16) % 2 == 1,
-        (v / 32) % 2 == 1,
-        (v / 64) % 2 == 1,
-        (v / 128) % 16,
-    )
-}
-
 /// How the ground under water is tinted: bluer and a little darker.
 pub const SUBMERGED: Vec3 = Vec3::new(0.50, 0.68, 0.92);
 /// Opacity of the water surface.
@@ -560,32 +626,9 @@ pub fn compose(channels: Vec3, day: &Daylight) -> Vec3 {
     sun + ambient + torch
 }
 
-/// Re-expresses an outline mask given per geometric edge as a mask per tile edge, for a
-/// tile turned `rot` quarter turns or mirrored. Bit 0 is the `v = 0` row, bit 1 the `u = 1`
-/// column, bit 2 the `v = 1` row, bit 3 the `u = 0` column.
-pub fn tile_mask(mask: u32, rot: u32, flip: bool) -> u32 {
-    (0..4)
-        .filter(|i| mask & (1 << i) != 0)
-        .map(|i| {
-            let edge = if flip {
-                [0, 3, 2, 1][i as usize]
-            } else {
-                (i + rot) % 4
-            };
-            1 << edge
-        })
-        .sum()
-}
-
-/// Tile coordinates 0..1 of corner `i` for a tile turned `rot` quarter turns or mirrored.
-fn tile_corner(i: usize, rot: u32, flip: bool) -> Vec2 {
-    const BASE: [Vec2; 4] = [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y];
-    if flip {
-        let c = BASE[i];
-        Vec2::new(1.0 - c.x, c.y)
-    } else {
-        BASE[(i + rot as usize) % 4]
-    }
+/// Geometric corner `i` of a face as `(u, v)` in 0..1: 0 is `(0, 0)`, then round the edges.
+pub fn corner_uv(i: usize) -> Vec2 {
+    [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y][i % 4]
 }
 
 /// Light colour for a brightness: cool when dim, warm when bright.
@@ -595,12 +638,25 @@ pub fn tint(light: f32) -> [f32; 3] {
     (SHADE_TINT.lerp(SUN_TINT, t) * light).to_array()
 }
 
+/// What the canvas needs per quad beyond its vertices, as the packed vertex carries it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuadMeta {
+    /// Atlas tile index: `block * 2 + kind`.
+    pub tile: u32,
+    /// 0 top, 1 +x, 2 +y, 3 -x, 4 -y, 5 cross.
+    pub face: u8,
+    /// Cells wide and high.
+    pub extent: (u8, u8),
+}
+
 /// Vertex data for one chunk.
 #[derive(Default, Clone)]
 pub struct Faces {
     /// Block units relative to the chunk origin.
     pub positions: Vec<[f32; 3]>,
-    /// Atlas coordinates 0..1.
+    /// For chunk faces, face-local cell coordinates (`corner * extent`): the shaders and
+    /// the canvas find the tile texel, its turn and its edges from them. For meshes drawn
+    /// with the plain materials, atlas coordinates 0..1.
     pub uvs: Vec<[f32; 2]>,
     /// Light channels: sun, block light, ambient; [`pack_flags`] in alpha. See [`compose`].
     pub colors: Vec<[f32; 4]>,
@@ -609,6 +665,8 @@ pub struct Faces {
     /// The same vertices packed for the chunk materials ([`pack_vertex`]); empty for
     /// meshes drawn with the plain materials (the figure, particles).
     pub packed: Vec<[u32; 3]>,
+    /// Per quad, for chunk faces.
+    pub meta: Vec<QuadMeta>,
 }
 
 impl Faces {
@@ -714,13 +772,11 @@ struct Quad {
     /// looks up from its own cell.
     normal: IVec3,
     corners: [Vec3; 4],
-    /// Outline mask by tile edge, after turning.
+    /// Outline mask by geometric edge.
     mask: u32,
-    /// Edges of a top face past which the ground falls away, by tile edge.
+    /// Edges of a top face past which the ground falls away, by geometric edge.
     drop: u32,
     tile: u32,
-    rot: u32,
-    flip: bool,
     /// A solid face against water: tinted under the surface.
     submerged: bool,
     cross: bool,
@@ -792,8 +848,6 @@ pub fn chunk_faces(
                             mask: 0,
                             drop: 0,
                             tile: 1,
-                            rot: 0,
-                            flip: false,
                             submerged: false,
                             cross: true,
                         });
@@ -814,7 +868,7 @@ pub fn chunk_faces(
                         let beside = block(q);
                         let continues =
                             family(beside) == family(id) && shows(beside, block(q + normal));
-                        if grid || !continues {
+                        if !continues {
                             mask |= 1 << bit;
                         }
                         // Past a top face's edge into clear air the ground falls away: the
@@ -823,26 +877,15 @@ pub fn chunk_faces(
                             drop |= 1 << bit;
                         }
                     }
-                    // Tops turn by quarters and sides mirror, so one tile does not repeat
-                    // as an obvious grid.
-                    let pick = hash01(0x5EED, p.x.wrapping_add(p.z * 131), p.y, tile);
-                    let (rot, flip) = if water(id) {
-                        // Waves must line up from block to block.
-                        (0, false)
-                    } else if tile == 0 {
-                        ((pick * 4.0) as u32 % 4, false)
-                    } else {
-                        (0, pick < 0.5)
-                    };
+                    // The tile's turn (tops by quarters, sides mirrored) is the shader's
+                    // business now: it hashes the block cell, see `tile_turn`.
                     quads.push(Quad {
                         p,
                         normal,
                         corners: corners(local, normal),
-                        mask: tile_mask(mask, rot, flip),
-                        drop: tile_mask(drop, rot, flip),
+                        mask,
+                        drop,
                         tile,
-                        rot,
-                        flip,
                         submerged: !water(id) && water(next),
                         cross: false,
                     });
@@ -859,22 +902,16 @@ pub fn chunk_faces(
         } else {
             &mut out.solid
         };
-        let bits = flag_bits(
-            q.mask,
-            is_water,
-            q.normal == IVec3::Z && !q.cross,
-            q.submerged,
-            q.drop,
-        );
-        let flags = pack_flags(
-            q.mask,
-            is_water,
-            q.normal == IVec3::Z && !q.cross,
-            q.submerged,
-            q.drop,
-        );
+        let top = q.normal == IVec3::Z && !q.cross;
+        let bits = flag_bits(q.mask, is_water, top, q.submerged, q.drop, grid);
+        let flags = pack_flags(q.mask, is_water, top, q.submerged, q.drop, grid);
         let face = face_index(q.normal, q.cross);
         let tile_index = id as u32 * 2 + q.tile;
+        target.meta.push(QuadMeta {
+            tile: tile_index,
+            face: face as u8,
+            extent: (1, 1),
+        });
         let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
         let shade = if q.cross {
             // Upright, but a little under full top light so it sits in its cell.
@@ -887,7 +924,6 @@ pub fn chunk_faces(
         let local = q.p - origin;
         let block_centre = local.as_vec3() + Vec3::splat(0.5);
         let lift = 1.0 + (local.z as f32 - MID) * RISE;
-        let tile_origin = tiles.origin(id, q.tile);
         let mut lights = [0.0f32; 4];
         for (i, corner) in q.corners.iter().enumerate() {
             // The two neighbours beside this corner and the one diagonal to it, all in
@@ -932,11 +968,9 @@ pub fn chunk_faces(
             let sun = ambient * if shade_cast { 1.0 - SHADOW } else { 1.0 };
             let light = quantize_light(Vec3::new(sun.max(glow), lamp.max(glow), ambient));
             lights[i] = light.x;
-            let tc = tile_corner(i, q.rot, q.flip);
-            let uv = (tile_origin + Vec2::splat(INSET) + tc * (TILE as f32 - 2.0 * INSET))
-                / tiles.size.as_vec2();
+            let tc = corner_uv(i);
             target.positions.push(corner.to_array());
-            target.uvs.push(uv.to_array());
+            target.uvs.push(tc.to_array());
             target.colors.push([light.x, light.y, light.z, flags]);
             target.packed.push(pack_vertex(
                 corner.round().as_ivec3(),
@@ -1046,21 +1080,81 @@ mod tests {
                 for top in [false, true] {
                     for under in [false, true] {
                         for drop in [0, 5, 15] {
-                            assert_eq!(
-                                unpack_flags(pack_flags(mask, water, top, under, drop)),
-                                (mask, water, top, under, drop)
-                            );
+                            for grid in [false, true] {
+                                assert_eq!(
+                                    unpack_flags(pack_flags(mask, water, top, under, drop, grid)),
+                                    (mask, water, top, under, drop, grid)
+                                );
+                            }
                         }
                     }
                 }
             }
         }
-        // A quarter turn moves each edge one place on; a mirror swaps left and right.
-        assert_eq!(tile_mask(0b0001, 1, false), 0b0010);
-        assert_eq!(tile_mask(0b1000, 1, false), 0b0001);
-        assert_eq!(tile_mask(0b0010, 0, true), 0b1000);
-        assert_eq!(tile_mask(0b0101, 0, true), 0b0101);
-        assert_eq!(tile_mask(0b1111, 3, false), 0b1111);
+    }
+
+    #[test]
+    fn texels_turn_the_way_the_corners_used_to() {
+        // Geometric corner i used to take tile corner (i + rot) % 4, or its mirror; the
+        // per-texel map must send the corner texels the same way.
+        let corner_texel = |i: usize| (corner_uv(i) * (TILE as f32 - 1.0)).as_ivec2();
+        for rot in 0..4 {
+            for i in 0..4 {
+                assert_eq!(
+                    rotate_texel(corner_texel(i), rot, false),
+                    corner_texel((i + rot as usize) % 4)
+                );
+            }
+        }
+        for i in 0..4 {
+            let c = corner_uv(i);
+            let mirrored = (Vec2::new(1.0 - c.x, c.y) * (TILE as f32 - 1.0)).as_ivec2();
+            assert_eq!(rotate_texel(corner_texel(i), 0, true), mirrored);
+        }
+        // Every texel lands on a distinct texel.
+        let mut seen = std::collections::HashSet::new();
+        for y in 0..TILE as i32 {
+            for x in 0..TILE as i32 {
+                assert!(seen.insert(rotate_texel(IVec2::new(x, y), 1, false)));
+            }
+        }
+    }
+
+    #[test]
+    fn edges_land_on_a_quads_border_cells() {
+        let e = IVec2::new(3, 2);
+        assert_eq!(border_edges(15, IVec2::new(0, 0), e, false), 0b1001);
+        assert_eq!(border_edges(15, IVec2::new(2, 1), e, false), 0b0110);
+        assert_eq!(border_edges(15, IVec2::new(1, 0), e, false), 0b0001);
+        assert_eq!(
+            border_edges(15, IVec2::new(1, 1), IVec2::new(3, 3), false),
+            0
+        );
+        assert_eq!(
+            border_edges(0, IVec2::new(1, 1), IVec2::new(3, 3), true),
+            15
+        );
+        assert_eq!(border_edges(15, IVec2::ZERO, IVec2::ONE, false), 15);
+    }
+
+    #[test]
+    fn tiles_turn_by_the_block_and_water_stays_put() {
+        let p = IVec3::new(3, -2, 7);
+        assert_eq!(tile_turn(p, 0, true, true, false), (0, false));
+        assert_eq!(tile_turn(p, 1, false, false, true), (0, false));
+        let (rot, flip) = tile_turn(p, 0, true, false, false);
+        assert!(rot < 4 && !flip);
+        let (rot, _) = tile_turn(p, 1, false, false, false);
+        assert_eq!(rot, 0);
+        // Deterministic, and the two neighbours usually differ.
+        assert_eq!(
+            tile_turn(p, 0, true, false, false),
+            tile_turn(p, 0, true, false, false)
+        );
+        let turns: std::collections::HashSet<u32> = (0..16)
+            .map(|x| tile_turn(IVec3::new(x, 0, 0), 0, true, false, false).0)
+            .collect();
+        assert!(turns.len() > 1);
     }
 
     #[test]
@@ -1085,12 +1179,17 @@ mod tests {
         assert!(masks(&f).iter().all(|m| *m == 0));
         let first = f.colors[0];
         assert!(f.colors.iter().all(|c| *c == first));
-        // Every corner samples inside block 1's top tile.
-        let o = t.origin(1, 0) / t.size.as_vec2();
-        let span = TILE as f32 / t.size.as_vec2();
-        assert!(f.uvs.iter().all(|uv| {
-            uv[0] > o.x && uv[0] < o.x + span.x && uv[1] > o.y && uv[1] < o.y + span.y
-        }));
+        // Every quad is block 1's top tile, one cell, with corners at the cell's corners.
+        assert!(
+            f.meta
+                .iter()
+                .all(|m| m.tile == 2 && m.face == 0 && m.extent == (1, 1))
+        );
+        assert!(
+            f.uvs
+                .iter()
+                .all(|uv| (uv[0] == 0.0 || uv[0] == 1.0) && (uv[1] == 0.0 || uv[1] == 1.0))
+        );
         let g = chunk_faces(
             IVec2::ZERO,
             true,
@@ -1100,7 +1199,10 @@ mod tests {
             floor,
         )
         .solid;
-        assert!(masks(&g).iter().all(|m| *m == 15));
+        assert!(
+            g.colors.iter().all(|c| unpack_flags(c[3]).5),
+            "the grid bit is set"
+        );
     }
 
     #[test]
@@ -1325,7 +1427,7 @@ mod tests {
                 [light.x, light.y, light.z],
                 [f.colors[i][0], f.colors[i][1], f.colors[i][2]]
             );
-            assert_eq!(flags as f32 / 2048.0, f.colors[i][3]);
+            assert_eq!(flags as f32 / 4096.0, f.colors[i][3]);
         }
     }
 
@@ -1496,12 +1598,10 @@ mod tests {
             // Bottom two corners at z 0, top two at z 1, running corner to corner of cell.
             assert!(pos[0].z == 0.0 && pos[1].z == 0.0 && pos[2].z == 1.0 && pos[3].z == 1.0);
             assert!((pos[1].truncate() - pos[0].truncate()).length() > 1.4);
-            let (mask, water, top, _, _) = unpack_flags(f.colors[q * 4][3]);
+            let (mask, water, top, _, _, _) = unpack_flags(f.colors[q * 4][3]);
             assert_eq!((mask, water, top), (0, false, false));
         }
-        // From the side tile: its uv row is the second tile of the block.
-        let t = tiles();
-        let origin = t.origin(6, 1) / t.size.as_vec2();
-        assert!((f.uvs[0][0] - origin.x).abs() < 0.01 && (f.uvs[0][1] - origin.y).abs() < 0.01);
+        // From the side tile: the second tile of the block, as a cross face.
+        assert!(f.meta.iter().all(|m| m.tile == 6 * 2 + 1 && m.face == 5));
     }
 }

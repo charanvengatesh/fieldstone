@@ -21,8 +21,8 @@ use crate::inventory::Inventory;
 use crate::player::Player;
 use crate::world::light;
 use crate::world::mesh::{
-    Faces, Grid, LEVELS, Quality, SUBMERGED, WATER_ALPHA, chunk_faces, compose, haze_at, hazed,
-    unpack_flags,
+    Faces, Grid, LEVELS, Quality, SUBMERGED, WATER_ALPHA, border_edges, chunk_faces, compose,
+    haze_at, hazed, rotate_texel, tile_turn, unpack_flags,
 };
 use crate::world::stream::Picture;
 
@@ -87,6 +87,17 @@ pub fn screenshot(world: &mut World, name: &str) {
         None => Screenshot::primary_window(),
     };
     world.spawn(shot).observe(save_to_disk(path));
+}
+
+/// The outward normal of a packed face number (0 top, 1 +x, 2 +y, 3 -x, 4 -y, 5 cross).
+fn face_normal(face: u32) -> Vec3 {
+    match face {
+        1 => Vec3::X,
+        2 => Vec3::Y,
+        3 => Vec3::NEG_X,
+        4 => Vec3::NEG_Y,
+        _ => Vec3::Z,
+    }
 }
 
 /// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
@@ -507,17 +518,24 @@ impl Canvas {
             Mode::Opaque
         };
         self.raster_mode(place, faces, mode, |faces, i, w| {
-            let uv_of = |k: usize| Vec2::from(faces.uvs[k]);
-            let uv = uv_of(i[0]) * w[0] + uv_of(i[1]) * w[1] + uv_of(i[2]) * w[2];
-            let px = uv * size;
-            let texel = px.floor().clamp(Vec2::ZERO, size - Vec2::ONE);
-            let cell = (texel / tile).floor() * tile;
-            let local = texel - cell;
+            // Face-local cell coordinates, as the shaders get them.
+            let fl_of = |k: usize| Vec2::from(faces.uvs[k]);
+            let meta = faces.meta.get(i[0] / 4).copied().unwrap_or_default();
+            let extent = IVec2::new(meta.extent.0 as i32, meta.extent.1 as i32);
+            let fl = fl_of(i[0]) * w[0] + fl_of(i[1]) * w[1] + fl_of(i[2]) * w[2];
+            let fl = fl.clamp(Vec2::ZERO, extent.as_vec2() - Vec2::splat(1e-4));
+            let cellf = fl.floor();
+            let cell = cellf.as_ivec2();
+            // The geometric texel within the cell.
+            let g = ((fl - cellf) * tile)
+                .floor()
+                .as_ivec2()
+                .clamp(IVec2::ZERO, IVec2::splat(TILE as i32 - 1));
             // Light at the texel's centre: the weights that land on it in this triangle.
-            let (e1, e2) = (uv_of(i[1]) - uv_of(i[0]), uv_of(i[2]) - uv_of(i[0]));
+            let (e1, e2) = (fl_of(i[1]) - fl_of(i[0]), fl_of(i[2]) - fl_of(i[0]));
             let det = e1.perp_dot(e2);
             let wc = if det.abs() > 1e-14 {
-                let d = (texel + Vec2::splat(0.5)) / size - uv_of(i[0]);
+                let d = cellf + (g.as_vec2() + Vec2::splat(0.5)) / tile - fl_of(i[0]);
                 let (a, b) = (d.perp_dot(e2) / det, e1.perp_dot(d) / det);
                 [1.0 - a - b, a, b]
             } else {
@@ -529,19 +547,29 @@ impl Canvas {
                 channels += Vec3::new(c[0], c[1], c[2]) * wc[k];
             }
             channels = channels.max(Vec3::ZERO);
-            let (mask, water, top, submerged, drop) = unpack_flags(faces.colors[i[0]][3]);
+            let (mask, water, top, submerged, drop, grid) = unpack_flags(faces.colors[i[0]][3]);
             let mut light = compose(channels, &lighting.day);
             let brightness = light.max_element();
             if brightness > 1e-4 {
                 let banded = (brightness * LEVELS).round().max(1.0) / LEVELS;
                 light *= banded / brightness;
             }
-            let mut sample = local;
+            // The world point, for the haze and for which block the texel belongs to.
+            let world = (0..3)
+                .map(|k| Vec3::from(faces.positions[i[k]]) * w[k])
+                .sum::<Vec3>()
+                + origin;
+            let face = meta.face as u32;
+            let normal = face_normal(face);
+            let block = (world - normal * 0.5).floor().as_ivec3();
+            let (rot, flip) = tile_turn(block, meta.tile % 2, face == 0, water, face == 5);
+            let mut sample = rotate_texel(g, rot, flip).as_vec2();
             if water {
-                let slide = ((time * 1.3 + local.y * 0.9).sin() * 1.5 + 0.5).floor();
-                sample.x = (local.x + slide + tile).rem_euclid(tile);
+                let slide = ((time * 1.3 + sample.y * 0.9).sin() * 1.5 + 0.5).floor();
+                sample.x = (sample.x + slide + tile).rem_euclid(tile);
             }
-            let at = cell + sample;
+            let tile_origin = tiles.origin((meta.tile / 2) as u16, meta.tile % 2);
+            let at = (tile_origin + sample).clamp(Vec2::ZERO, size - Vec2::ONE);
             let t = ((at.y as usize) * tiles.size.x as usize + at.x as usize) * 4;
             if tex[t + 3] < 128 {
                 // A hole in a cutout tile.
@@ -552,15 +580,14 @@ impl Canvas {
             if submerged {
                 c *= SUBMERGED;
             }
+            // Outlines on the quad's border cells, by geometric edge.
+            let local = g.as_vec2();
+            let mask = border_edges(mask, cell, extent, grid);
+            let drop = border_edges(drop, cell, extent, false);
             let edge = (mask & 1 != 0 && local.y < 0.5)
                 || (mask & 2 != 0 && local.x > tile - 1.5)
                 || (mask & 4 != 0 && local.y > tile - 1.5)
                 || (mask & 8 != 0 && local.x < 0.5);
-            // Haze by view depth behind the focus.
-            let world = (0..3)
-                .map(|k| Vec3::from(faces.positions[i[k]]) * w[k])
-                .sum::<Vec3>()
-                + origin;
             let haze = haze_at(world, lighting.focus, lighting.toward_eye, lighting.haze.w);
             if water {
                 // Foam along a shore instead of ink; the surface lets the bed show through.
@@ -744,6 +771,55 @@ impl Plugin for DebugPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `CANVAS_REF=name cargo test canvas_reference -- --ignored`: draws a fixed world
+    /// from a fixed camera with the canvas into `debug/canvas_ref_<name>.png`, for a
+    /// pixel-exact comparison across changes to the mesher or the shaders' CPU mirror.
+    #[test]
+    #[ignore]
+    fn canvas_reference() {
+        use crate::world::light;
+        use crate::world::mesh::{Quality, chunk_faces};
+        use crate::world::tiles::atlas;
+        use crate::world::worldgen::tests::base_gen;
+        use crate::world::{CHUNK, Chunk, Map};
+        let (wg, blocks) = base_gen(42);
+        let tiles = atlas(&blocks, None).1;
+        let mut map = Map::default();
+        for cy in -2..2 {
+            for cx in -2..2 {
+                let pos = IVec2::new(cx, cy);
+                map.chunks.insert(pos, Chunk::new(wg.chunk(pos), false));
+            }
+        }
+        let name = std::env::var("CANVAS_REF").unwrap_or_else(|_| "ref".into());
+        let mut cam = Cam::quarter(0);
+        let top = map.top(3, 5).unwrap_or(12) as f32;
+        cam.focus = Vec3::new(3.5, 5.5, top + 1.0);
+        let size = Vec2::new(480.0, 300.0);
+        let mut canvas = Canvas::new(960, 600, 2.0, Vec2::ZERO, Color::srgb(0.36, 0.60, 0.92));
+        let lighting = Lighting {
+            day: daylight(0.5),
+            focus: cam.focus,
+            toward_eye: cam.toward_eye(),
+            haze: Vec4::new(0.55, 0.7, 0.9, 40.0),
+        };
+        for pos in map.chunks.keys().copied().collect::<Vec<_>>() {
+            let faces = chunk_faces(
+                pos,
+                false,
+                Quality::default(),
+                &tiles,
+                &light::Grid::empty(),
+                |p| map.get(p).unwrap_or_else(|| wg.block(p)),
+            );
+            let origin = (pos * CHUNK).extend(0).as_vec3();
+            canvas.draw_blocks(origin, &cam, size, &faces.solid, &tiles, 0.0, &lighting);
+            canvas.draw_water(origin, &cam, size, &faces.water, &tiles, 0.0, &lighting);
+        }
+        let path = canvas.save(&format!("canvas_ref_{name}")).unwrap();
+        println!("wrote {}", path.display());
+    }
 
     #[test]
     fn canvas_keeps_the_nearer_of_two_quads() {
