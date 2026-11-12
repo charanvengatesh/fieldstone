@@ -73,6 +73,7 @@ impl Plugin for CorePlugin {
             .init_resource::<UiHovered>()
             .init_resource::<Toast>()
             .init_resource::<SaveRequest>()
+            .init_resource::<save::Saving>()
             .init_resource::<Hud>()
             .init_resource::<PointerCaptured>()
             .init_resource::<time::GameTime>()

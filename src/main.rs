@@ -148,7 +148,9 @@ fn main() {
         .add_systems(
             Update,
             (
-                core::save::save.after(interact::InteractSet),
+                (core::save::save, core::save::finish)
+                    .chain()
+                    .after(interact::InteractSet),
                 cam::follow
                     .after(player::PlayerSet)
                     .after(interact::InteractSet)
@@ -261,7 +263,11 @@ fn setup_world(app: &mut App, options: &Options) {
     let (start, pending) = match loaded {
         Some(l) => {
             info!("world seed {seed}, loaded {} edited chunks", l.chunks.len());
-            map.parked = l.chunks;
+            map.parked = l
+                .chunks
+                .iter()
+                .map(|(p, b)| (*p, world::Parked::pack(b)))
+                .collect();
             cam = cam::Cam::quarter(l.rot);
             if let Some(yaw) = l.yaw {
                 cam.yaw = yaw;

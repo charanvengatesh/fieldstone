@@ -117,6 +117,33 @@ pub fn pick(origin: Vec3, dir: Vec3, reach: f32, solid: impl Fn(IVec3) -> bool) 
     None
 }
 
+/// An edited chunk that is not loaded, kept as runs (a few kilobytes instead of sixteen),
+/// so a long session's edits do not pile up at full size.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Parked(Vec<(u16, u32)>);
+
+impl Parked {
+    pub fn pack(blocks: &Blocks) -> Self {
+        Self(crate::core::save::encode(&blocks[..], |b| b))
+    }
+
+    pub fn unpack(&self) -> Blocks {
+        crate::core::save::decode(&self.0, |b| b).expect("a parked chunk is whole")
+    }
+
+    /// One cell, scanning the runs: for the odd look at an unloaded chunk.
+    pub fn at(&self, i: usize) -> u16 {
+        let mut n = 0;
+        for (v, run) in &self.0 {
+            n += *run as usize;
+            if i < n {
+                return *v;
+            }
+        }
+        AIR
+    }
+}
+
 /// Loaded chunks, the entity drawing each, and edited chunks that are currently unloaded.
 #[derive(Resource, Default)]
 pub struct Map {
@@ -124,7 +151,7 @@ pub struct Map {
     pub entities: HashMap<IVec2, Entity>,
     /// The entity drawing each chunk's water, where it has any.
     pub waters: HashMap<IVec2, Entity>,
-    pub parked: HashMap<IVec2, Blocks>,
+    pub parked: HashMap<IVec2, Parked>,
 }
 
 /// A chunk's blocks and its eight neighbours', copied out of the map so a build can run off
@@ -140,12 +167,11 @@ impl Nearby {
         for dy in -1..=1 {
             for dx in -1..=1 {
                 let c = pos + IVec2::new(dx, dy);
-                let blocks = map
-                    .chunks
-                    .get(&c)
-                    .map(|ch| &ch.blocks)
-                    .or_else(|| map.parked.get(&c));
-                cells[((dy + 1) * 3 + dx + 1) as usize] = blocks.cloned();
+                let blocks = match map.chunks.get(&c) {
+                    Some(ch) => Some(ch.blocks.clone()),
+                    None => map.parked.get(&c).map(Parked::unpack),
+                };
+                cells[((dy + 1) * 3 + dx + 1) as usize] = blocks;
             }
         }
         Self { pos, cells }
@@ -191,7 +217,7 @@ impl Map {
         let c = chunk_of(p);
         match self.chunks.get(&c) {
             Some(chunk) => Some(chunk.blocks[index(p)]),
-            None => self.parked.get(&c).map(|b| b[index(p)]),
+            None => self.parked.get(&c).map(|b| b.at(index(p))),
         }
     }
 

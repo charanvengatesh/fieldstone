@@ -14,7 +14,7 @@ use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
 use super::mesh::{BlockMaterial, ChunkFaces, Faces, Grid, Quality, WaterMaterial, chunk_faces};
 use super::tiles::Tiles;
 use super::worldgen::WorldGen;
-use super::{Blocks, CHUNK, Chunk, Focus, HEIGHT, Map, Nearby, chunk_of, light};
+use super::{Blocks, CHUNK, Chunk, Focus, HEIGHT, Map, Nearby, Parked, chunk_of, light};
 use crate::cam::{Cam, Lens};
 
 /// The picture's size in texels: the render target the camera draws into.
@@ -427,7 +427,7 @@ pub fn stream(
     for pos in far {
         let chunk = map.chunks.remove(&pos).expect("listed above");
         if chunk.modified {
-            map.parked.insert(pos, chunk.blocks);
+            map.parked.insert(pos, Parked::pack(&chunk.blocks));
         }
         if let Some(e) = map.entities.remove(&pos) {
             commands.entity(e).despawn();
@@ -446,8 +446,8 @@ pub fn stream(
         .filter(|p| !map.chunks.contains_key(p) && !builds.inflight.contains_key(p))
         .collect();
     for pos in missing {
-        if let Some(blocks) = map.parked.remove(&pos) {
-            map.chunks.insert(pos, Chunk::new(blocks, true));
+        if let Some(parked) = map.parked.remove(&pos) {
+            map.chunks.insert(pos, Chunk::new(parked.unpack(), true));
             continue;
         }
         if builds.inflight.len() >= streaming.builds.max(1) {
@@ -825,6 +825,21 @@ mod build_timing {
         }
         println!(
             "main thread: {:.2} ms per chunk",
+            started.elapsed().as_secs_f32() * 1000.0 / 16.0
+        );
+        // The same chunks with no neighbour loaded: every border cell is the generator's.
+        let started = Instant::now();
+        for cy in -2..2 {
+            for cx in -2..2 {
+                let pos = IVec2::new(cx, cy);
+                let mut lone = Map::default();
+                lone.chunks.insert(pos, Chunk::new(wg.chunk(pos), false));
+                let nearby = Nearby::of(&lone, pos);
+                std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality).0);
+            }
+        }
+        println!(
+            "no neighbours: {:.2} ms per chunk",
             started.elapsed().as_secs_f32() * 1000.0 / 16.0
         );
         let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);

@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use bevy::tasks::{IoTaskPool, Task, block_on, poll_once};
 use serde::{Deserialize, Serialize};
 
 use super::settings::Keys;
@@ -220,7 +221,17 @@ pub fn load(path: &Path, blocks: &Registry<BlockDef>, items: &Registry<ItemDef>)
     }
 }
 
-/// Writes the save when the save key is pressed or the pause menu asks, then exits if asked.
+/// The write in flight, if any: the file is packed on the main thread (it reads the
+/// map), then serialised and written on the IO pool, so a big save does not hold a frame.
+#[derive(Resource, Default)]
+pub struct Saving {
+    task: Option<Task<Result<(usize, PathBuf), String>>>,
+    /// Quit once the write lands.
+    quit: bool,
+}
+
+/// Starts a save when the save key is pressed or the pause menu asks.
+#[allow(clippy::too_many_arguments)]
 pub fn save(
     input: Res<ButtonInput<KeyCode>>,
     keys: Res<Keys>,
@@ -233,20 +244,28 @@ pub fn save(
     items: Res<Registry<ItemDef>>,
     player: Single<(&Player, &Inventory)>,
     mut request: ResMut<SaveRequest>,
-    mut toast: ResMut<Toast>,
-    mut exit: MessageWriter<AppExit>,
+    mut saving: ResMut<Saving>,
 ) {
     if !keys.just(&input, &keys.save) && !request.save {
         return;
     }
+    if saving.task.is_some() {
+        // One at a time; the request stands until the write in flight lands.
+        request.save = true;
+        return;
+    }
     request.save = false;
+    if request.quit {
+        saving.quit = true;
+    }
     let (player, inv) = *player;
+    let parked: Vec<(IVec2, Blocks)> = map.parked.iter().map(|(p, b)| (*p, b.unpack())).collect();
     let edited = map
         .chunks
         .iter()
         .filter(|(_, c)| c.modified)
         .map(|(p, c)| (*p, &c.blocks))
-        .chain(map.parked.iter().map(|(p, b)| (*p, b)));
+        .chain(parked.iter().map(|(p, b)| (*p, b)));
     let file = pack(
         wg.seed,
         player.body.pos,
@@ -257,25 +276,43 @@ pub fn save(
         &blocks,
         &items,
     );
-    let written = ron::ser::to_string(&file)
-        .map_err(|e| e.to_string())
-        .and_then(|text| {
-            if let Some(dir) = path.0.parent() {
-                let _ = fs::create_dir_all(dir);
-            }
-            fs::write(&path.0, text).map_err(|e| e.to_string())
-        });
-    match written {
-        Ok(()) => {
-            info!("saved {} chunks to {}", file.chunks.len(), path.0.display());
+    let path = path.0.clone();
+    saving.task = Some(IoTaskPool::get().spawn(async move {
+        let chunks = file.chunks.len();
+        let text = ron::ser::to_string(&file).map_err(|e| e.to_string())?;
+        if let Some(dir) = path.parent() {
+            let _ = fs::create_dir_all(dir);
+        }
+        fs::write(&path, text).map_err(|e| e.to_string())?;
+        Ok((chunks, path))
+    }));
+}
+
+/// Reports a finished write, and exits if the save was the way out.
+pub fn finish(
+    mut saving: ResMut<Saving>,
+    mut toast: ResMut<Toast>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    let Some(task) = saving.task.as_mut() else {
+        return;
+    };
+    if !task.is_finished() {
+        return;
+    }
+    let task = saving.task.take().expect("checked above");
+    match block_on(poll_once(task)) {
+        Some(Ok((chunks, path))) => {
+            info!("saved {chunks} chunks to {}", path.display());
             toast.show("Saved.", 2.0);
         }
-        Err(e) => {
-            error!("could not save to {}: {e}", path.0.display());
+        Some(Err(e)) => {
+            error!("could not save: {e}");
             toast.show("Could not save; see the log.", 4.0);
         }
+        None => {}
     }
-    if request.quit {
+    if saving.quit {
         exit.write(AppExit::Success);
     }
 }

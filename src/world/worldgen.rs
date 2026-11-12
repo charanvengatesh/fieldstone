@@ -7,12 +7,20 @@ use bevy::prelude::*;
 
 use super::noise::{fbm2, value3};
 use super::stamp::Stamp;
+use std::sync::{Arc, Mutex};
+
+use bevy::platform::collections::HashMap;
+
 use super::{AIR, Blocks, CHUNK, HEIGHT, empty_blocks, index};
 use crate::core::{BlockDef, FeatureDef, HeightDef, Registry, Rule, StampDef, WorldGenDef, hash01};
 
 #[derive(Resource, Clone)]
 pub struct WorldGen {
     pub seed: u32,
+    /// Columns answered one block at a time (`block`, for cells outside loaded chunks)
+    /// and surface heights, remembered: shared by every clone, so the mesh tasks and the
+    /// main thread fill one cache. Cleared when it grows past `CACHE_CAP`.
+    cache: Arc<Mutex<Cache>>,
     height: HeightDef,
     sea: i32,
     sea_block: u16,
@@ -24,6 +32,15 @@ pub struct WorldGen {
     veins: Vec<Vein>,
     scatters: Vec<Scatter>,
     spawn_on: Vec<u16>,
+}
+
+/// Entries either cache may hold before it starts over.
+const CACHE_CAP: usize = 65_536;
+
+#[derive(Default)]
+struct Cache {
+    heights: HashMap<IVec2, i32>,
+    columns: HashMap<IVec2, Arc<[u16; HEIGHT as usize]>>,
 }
 
 /// A `Replace` rule, resolved.
@@ -120,7 +137,45 @@ impl WorldGen {
             veins,
             scatters,
             spawn_on: def.spawn_on.iter().map(|id| b(id)).collect(),
+            cache: Arc::new(Mutex::new(Cache::default())),
         }
+    }
+
+    /// The surface height of a column, from the cache when it has been asked before.
+    fn surface_cached(&self, at: IVec2) -> i32 {
+        if let Some(h) = self.cache.lock().unwrap().heights.get(&at) {
+            return *h;
+        }
+        let h = self.surface(at.x, at.y);
+        let mut cache = self.cache.lock().unwrap();
+        if cache.heights.len() >= CACHE_CAP {
+            cache.heights.clear();
+        }
+        cache.heights.insert(at, h);
+        h
+    }
+
+    /// Every block of one column, stamps included, as `block` would answer them.
+    fn column(&self, at: IVec2) -> Arc<[u16; HEIGHT as usize]> {
+        if let Some(c) = self.cache.lock().unwrap().columns.get(&at) {
+            return c.clone();
+        }
+        let surface = self.surface_cached(at);
+        let mut col = [AIR; HEIGHT as usize];
+        for (z, cell) in col.iter_mut().enumerate() {
+            let p = at.extend(z as i32);
+            *cell = match self.ground(p, surface) {
+                AIR => self.stamped(p).unwrap_or(AIR),
+                block => block,
+            };
+        }
+        let col: Arc<[u16; HEIGHT as usize]> = Arc::new(col);
+        let mut cache = self.cache.lock().unwrap();
+        if cache.columns.len() >= CACHE_CAP {
+            cache.columns.clear();
+        }
+        cache.columns.insert(at, col.clone());
+        col
     }
 
     /// Height of the top ground block of a column, before flooding.
@@ -186,7 +241,7 @@ impl WorldGen {
                 return None;
             }
         }
-        let surface = self.surface(at.x, at.y);
+        let surface = self.surface_cached(at);
         // Dry land only, and only on the surfaces the rule names.
         (surface >= self.sea && s.on.contains(&self.column_block(surface, surface)))
             .then_some(surface)
@@ -209,8 +264,20 @@ impl WorldGen {
         })
     }
 
-    /// The generated block at any position.
+    /// The generated block at any position. Whole columns are worked out and remembered,
+    /// since a caller that asks for one cell (the mesher at the edge of the loaded world)
+    /// asks for its neighbours next.
     pub fn block(&self, p: IVec3) -> u16 {
+        if !(0..HEIGHT).contains(&p.z) {
+            return AIR;
+        }
+        self.column(p.truncate())[p.z as usize]
+    }
+
+    /// The generated block at any position, worked out from scratch: what `block` must
+    /// agree with.
+    #[cfg(test)]
+    pub fn block_uncached(&self, p: IVec3) -> u16 {
         if !(0..HEIGHT).contains(&p.z) {
             return AIR;
         }
@@ -226,7 +293,7 @@ impl WorldGen {
         for y in 0..CHUNK {
             for x in 0..CHUNK {
                 let (wx, wy) = (origin.x + x, origin.y + y);
-                let surface = self.surface(wx, wy);
+                let surface = self.surface_cached(IVec2::new(wx, wy));
                 for z in 0..HEIGHT {
                     blocks[index(IVec3::new(x, y, z))] =
                         self.ground(IVec3::new(wx, wy, z), surface);
@@ -357,6 +424,19 @@ pub mod tests {
         let pos = IVec2::new(-3, 5);
         assert_eq!(a.chunk(pos)[..], b.chunk(pos)[..]);
         assert_ne!(a.chunk(pos)[..], c.chunk(pos)[..]);
+    }
+
+    #[test]
+    fn cached_columns_agree_with_fresh_blocks() {
+        let (wg, _) = base_gen(42);
+        for (x, y) in [(0, 0), (17, -3), (-40, 25), (3, 3)] {
+            for z in 0..HEIGHT {
+                let p = IVec3::new(x, y, z);
+                assert_eq!(wg.block(p), wg.block_uncached(p), "{p}");
+                // Twice: the second answer comes from the cache.
+                assert_eq!(wg.block(p), wg.block_uncached(p), "{p}");
+            }
+        }
     }
 
     #[test]
