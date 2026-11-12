@@ -343,7 +343,13 @@ pub fn setup(
     mut waters: ResMut<Assets<WaterArt>>,
     mut commands: Commands,
 ) {
+    let started = std::time::Instant::now();
     let (image, tiles) = atlas(&blocks, packs.as_deref());
+    info!(
+        "startup: atlas {} blocks in {:.0} ms",
+        tiles.blocks,
+        started.elapsed().as_secs_f32() * 1000.0
+    );
     let params = Vec4::new(0.0, tiles.size.x as f32, tiles.size.y as f32, LEVELS);
     let block = BlockParams {
         params,
@@ -354,6 +360,9 @@ pub fn setup(
         ambient_color: Vec4::ONE,
         haze: Vec4::new(0.36, 0.60, 0.92, 40.0),
     };
+    // The GPU's copy; the CPU keeps its own in `Tiles.image` for icons and snapshots.
+    let mut image = image;
+    image.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let atlas = images.add(image);
     commands.insert_resource(BlockMaterial(materials.add(BlockArt {
         block,

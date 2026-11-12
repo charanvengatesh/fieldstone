@@ -172,6 +172,7 @@ fn build_icons(
     mut images: ResMut<Assets<Image>>,
     mut commands: Commands,
 ) {
+    let started = std::time::Instant::now();
     let plain = images.add(cube_icon());
     let icons = items
         .iter()
@@ -189,6 +190,10 @@ fn build_icons(
         )
         .collect();
     commands.insert_resource(Icons(icons));
+    info!(
+        "startup: icons in {:.0} ms",
+        started.elapsed().as_secs_f32() * 1000.0
+    );
 }
 
 fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>) {

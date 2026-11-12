@@ -50,9 +50,10 @@ cargo run -- --new               # ignore the save and start a fresh world
 cargo run -- --seed 42           # fix the world seed
 cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
-cargo run -- --test [NAME]       # no window: run the packs' tests/*.lua (whose file name contains NAME); non-zero on failure
+cargo run -- --test [NAME]       # no window: run the packs' tests/*.lua (whose file name contains NAME) flat out on a fixed 16 ms step; non-zero on failure
 cargo run -- --bench             # --test bench: a glide, turns, a zoom and a save; prints one BENCH line, fails on a spike
 cargo run --release --features profile   # Tracy spans for every system and the chunk build tasks
+CANVAS_REF=name cargo test canvas_reference -- --ignored   # a fixed world through the software canvas, debug/canvas_ref_name.png, for pixel comparisons
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
                                  #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --perspective  --time 0..1  --grid
 cargo build --release

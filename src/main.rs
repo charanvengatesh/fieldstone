@@ -92,10 +92,19 @@ fn main() {
     };
     let mut app = App::new();
     if options.headless {
+        // The harness runs flat out on a fixed 16 ms step: every test counts frames, and a
+        // frame is then as long as its work. The smoke and snapshots keep the real pace.
+        let step = std::time::Duration::from_millis(16);
+        let pace = if options.test.is_some() {
+            std::time::Duration::ZERO
+        } else {
+            step
+        };
+        if options.test.is_some() {
+            app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(step));
+        }
         app.add_plugins((
-            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(
-                std::time::Duration::from_millis(16),
-            )),
+            MinimalPlugins.set(bevy::app::ScheduleRunnerPlugin::run_loop(pace)),
             bevy::log::LogPlugin::default(),
             AssetPlugin::default(),
             bevy::input::InputPlugin,
@@ -128,8 +137,14 @@ fn main() {
                 }),
         );
     }
+    let started = std::time::Instant::now();
     core::packs::load_all(&mut app);
+    let packs_ms = started.elapsed().as_secs_f32() * 1000.0;
     setup_world(&mut app, &options);
+    let world_ms = started.elapsed().as_secs_f32() * 1000.0 - packs_ms;
+    info!("startup: packs {packs_ms:.0} ms, world {world_ms:.0} ms");
+    app.insert_resource(StartupClock(started))
+        .add_systems(Last, first_frame);
     let settings = core::settings::load();
     app.insert_resource(core::settings::Keys::from_names(&settings.keys))
         .insert_resource(settings)
@@ -204,6 +219,21 @@ fn main() {
 }
 
 /// Builds the generator from `worldgen.ron` and either the save file or a fresh seed.
+/// When the process started, for the time-to-first-frame line.
+#[derive(Resource)]
+struct StartupClock(std::time::Instant);
+
+/// Logs the time to the first frame, once.
+fn first_frame(clock: Option<Res<StartupClock>>, mut commands: Commands) {
+    if let Some(clock) = clock {
+        info!(
+            "startup: first frame {:.0} ms after start",
+            clock.0.elapsed().as_secs_f32() * 1000.0
+        );
+        commands.remove_resource::<StartupClock>();
+    }
+}
+
 fn setup_world(app: &mut App, options: &Options) {
     // The scripted run keeps its own file so it never touches a real save.
     let path = if options.headless {

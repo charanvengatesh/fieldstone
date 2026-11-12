@@ -1,5 +1,63 @@
 # Changelog
 
+## 1.2.0
+
+The engine made fast: less work on the main thread, a third of the mesh bytes, a
+profiler one flag away, and a harness that runs in seconds. Nothing visual changed; the
+canvas reference and the GPU picture were compared at each step.
+
+### New
+- Instrumentation. `Perf` measures the main thread's own work per frame (`work_ms`, the
+  schedule from `First` to `Last`, without the wait for the display), keeps 240 frames of
+  it, counts `spikes` past `spike_ms` (default 12) and sums `mesh_bytes`. F4 cycles the
+  numbers, the numbers with a frame-time graph, off. Lua: `perf()` fields, `perf_history`,
+  `perf_reset`, `show_perf_graph`. `cargo run --release --features profile` opens Tracy
+  spans for every system and the chunk tasks (generate, flood, faces, upload).
+- `--bench` (`--test bench`): a glide across chunk boundaries, two turns, a zoom and a
+  save, one line of numbers per phase, and a failure on any frame past the spike line.
+  `--test NAME` runs the test files whose name contains NAME.
+- `CANVAS_REF=name cargo test canvas_reference -- --ignored` draws a fixed world from a
+  fixed camera with the software canvas, for pixel comparisons across changes.
+- Startup is logged: packs, world, atlas, icons and the first frame, in milliseconds.
+
+### Changed
+- Chunk meshes are packed: one `Uint32x3` attribute a vertex (12 bytes, from 36) that
+  `shaders/block_vertex.wgsl` unpacks, u16 indices, GPU-only. The tile's turn, the
+  edges and the grid are found per cell in the fragment shaders from the block cell's
+  hash (bit for bit the Rust `hash01`), so a quad may cover many cells: faces of one
+  surface merge into runs and rectangles wherever the light interpolates to the same
+  values the single cells had (`Quality.merge`, default on; Lua `merge`). The canvas
+  mirror shares the helpers (`tile_turn`, `rotate_texel`, `border_edges`).
+- The Lua engine functions are created once at VM setup and reach the world through a
+  per-frame handle, instead of 70 closures and 70 string formats every frame.
+- The player's block light comes from the grid its chunk's last build flooded instead
+  of copying nine chunks and scanning them every frame. The HUD, the target highlight,
+  the camera projection, the pause menu and the tooltip are written only when they
+  change; the camera and performance mods write their HUD lines only on change.
+  Particles share one material per chip colour.
+- Worldgen remembers surface heights and whole columns (shared by the mesh tasks), so a
+  mesh at the edge of the loaded world costs 1.4 ms instead of 6.7. Unloaded edited
+  chunks are kept as runs (a few KB instead of 16). Saves serialise and write on the IO
+  pool.
+- `--test` runs flat out on a fixed 16 ms step: the whole harness takes about 3 s
+  instead of 45. `builds` defaults to two per compute thread (2 to 8).
+- Release profile: fat LTO.
+
+### Measured (Apple M3 Pro)
+- Binary 40.1 MB (1.1.0: 44.2 MB), fat LTO. Startup to the first frame: 379 ms windowed,
+  of which packs 4 ms, atlas 1 ms, icons 1 ms; the rest is the window and the GPU.
+- Release, windowed, orthographic, 170 chunks loaded (81 k faces, 4.6 MB of meshes):
+  main-thread work per frame over an 8 s walk averages 0.54 ms, worst 2.1 ms, no frame
+  past 12 ms, at `pixel_scale` 3 and 1 alike. (The display was asleep for these runs,
+  which puts the app in its 10 Hz background mode, so wall-clock frame times were not
+  re-measured; 1.1.0 measured 9.2 ms worst at the 120 Hz cap.)
+- Faces in the harness world 26 410 to 19 493 (-26 %); mesh bytes 4.2 MB to 1.1 MB (-74 %:
+  a third from merging, the rest from packing). Base-gen forest chunk: 660 to 521 faces,
+  mesher 0.56 to 0.62 ms; with no neighbour loaded 6.7 to 1.4 ms (the column cache).
+- `--bench` (debug, headless, fixed step): every phase under 1 ms of work a frame on
+  average; the gate is 25 ms. Headless startup to the first frame: 8 ms.
+- The whole harness (36 scenarios, three seeds): about 3 s a seed, from 45.
+
 ## 1.1.0
 
 A smooth orthographic view. The parallel projection sees far more ground than the

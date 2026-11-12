@@ -55,7 +55,8 @@ impl Default for Streaming {
     fn default() -> Self {
         Self {
             budget_ms: 2.0,
-            builds: 4,
+            // Two tasks per compute thread keeps the pool busy while results are taken in.
+            builds: AsyncComputeTaskPool::try_get().map_or(4, |p| (p.thread_num() * 2).clamp(2, 8)),
             margin: 96.0,
             horizon: 40.0,
             horizon_pinned: false,
