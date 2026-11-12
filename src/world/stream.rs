@@ -1,15 +1,18 @@
 //! Keeps the chunks the camera can see loaded and their meshes current, within a time
 //! budget per frame.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use bevy::pbr::{Material, MeshMaterial3d};
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use bevy::tasks::{AsyncComputeTaskPool, Task, TaskPool, block_on, poll_once};
 
-use super::mesh::{BlockMaterial, Faces, Grid, Quality, WaterMaterial, chunk_faces};
+use super::mesh::{BlockMaterial, ChunkFaces, Faces, Grid, Quality, WaterMaterial, chunk_faces};
 use super::tiles::Tiles;
 use super::worldgen::WorldGen;
-use super::{CHUNK, Chunk, Focus, HEIGHT, Map, chunk_of, light};
+use super::{Blocks, CHUNK, Chunk, Focus, HEIGHT, Map, Nearby, chunk_of, light};
 use crate::cam::{Cam, Lens};
 
 /// The picture's size in texels: the render target the camera draws into.
@@ -31,9 +34,11 @@ impl Default for Picture {
 /// How eagerly the world streams in.
 #[derive(Resource, Clone, Copy)]
 pub struct Streaming {
-    /// Milliseconds per frame spent generating and meshing chunks. At least one chunk is
-    /// always processed, so the world never stalls.
+    /// Milliseconds per frame the main thread spends taking finished chunks in (making
+    /// their meshes). At least one chunk is always taken, so the world never stalls.
     pub budget_ms: f32,
+    /// Chunks generating or meshing on the compute pool at once.
+    pub builds: usize,
     /// Texels beyond the screen edge that are kept loaded, so walking never shows a gap.
     pub margin: f32,
     /// Blocks behind the focus, along the view axis, at which the fog is whole and past
@@ -48,6 +53,7 @@ impl Default for Streaming {
     fn default() -> Self {
         Self {
             budget_ms: 2.0,
+            builds: 4,
             margin: 96.0,
             horizon: 40.0,
             horizon_pinned: false,
@@ -66,13 +72,112 @@ pub struct Perf {
     pub fps: f32,
     /// Milliseconds per frame, smoothed.
     pub frame_ms: f32,
+    /// The longest recent frame in milliseconds: a peak that settles back toward the
+    /// average over a couple of seconds, so a hitch stays readable.
+    pub worst_ms: f32,
     pub chunks: usize,
     /// Block faces across all loaded meshes.
     pub quads: usize,
-    /// Milliseconds spent meshing in the last frame that meshed anything.
+    /// Main-thread milliseconds taking finished chunks in, in the last frame that took any.
     pub mesh_ms: f32,
+    /// Milliseconds the compute pool spent on the chunks that finished this frame.
+    pub build_ms: f32,
+    /// Main-thread milliseconds this frame choosing what to load and unload.
+    pub stream_ms: f32,
+    /// Chunk meshes made this frame.
+    pub uploads: usize,
+    /// Chunks generating or meshing on the compute pool right now.
+    pub inflight: usize,
     /// Chunk meshes built since the game started.
     pub meshed: u64,
+}
+
+/// What a task hands back, and how long it took in milliseconds.
+pub enum Built {
+    /// A chunk's blocks, fresh from the generator.
+    Generated(Blocks, f32),
+    /// A loaded chunk's faces.
+    Meshed(ChunkFaces, f32),
+}
+
+/// Chunks being generated or meshed on the compute pool, and the shared inputs the tasks
+/// read. Generation and meshing are separate tasks: a chunk is meshed once it is loaded,
+/// ideally after its neighbours are too, since cells outside the loaded area are answered
+/// by the generator one at a time, which is far slower than reading a chunk's array.
+#[derive(Resource, Default)]
+pub struct Builds {
+    worldgen: Option<Arc<WorldGen>>,
+    tiles: Option<Arc<Tiles>>,
+    pub inflight: HashMap<IVec2, Task<Built>>,
+}
+
+impl Builds {
+    fn worldgen(&mut self, wg: &WorldGen) -> Arc<WorldGen> {
+        self.worldgen
+            .get_or_insert_with(|| Arc::new(wg.clone()))
+            .clone()
+    }
+
+    /// Starts generating chunk `pos`.
+    fn generate(&mut self, pos: IVec2, wg: &WorldGen) {
+        let worldgen = self.worldgen(wg);
+        let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);
+        let task = pool.spawn(async move {
+            let started = Instant::now();
+            let blocks = worldgen.chunk(pos);
+            Built::Generated(blocks, started.elapsed().as_secs_f32() * 1000.0)
+        });
+        self.inflight.insert(pos, task);
+    }
+
+    /// Starts meshing loaded chunk `pos` from a snapshot of the map around it.
+    #[allow(clippy::too_many_arguments)]
+    fn mesh(
+        &mut self,
+        pos: IVec2,
+        map: &Map,
+        wg: &WorldGen,
+        tiles: &Tiles,
+        tiles_changed: bool,
+        grid: bool,
+        quality: Quality,
+    ) {
+        let worldgen = self.worldgen(wg);
+        if tiles_changed || self.tiles.is_none() {
+            self.tiles = Some(Arc::new(tiles.clone()));
+        }
+        let tiles = self.tiles.clone().expect("set above");
+        let nearby = Nearby::of(map, pos);
+        let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);
+        let task = pool.spawn(async move {
+            let started = Instant::now();
+            let faces = build(pos, &nearby, &worldgen, &tiles, grid, quality);
+            Built::Meshed(faces, started.elapsed().as_secs_f32() * 1000.0)
+        });
+        self.inflight.insert(pos, task);
+    }
+}
+
+/// The faces of chunk `pos` from the blocks around it. Cells outside the snapshot are
+/// answered by the generator, so a chunk's border faces are right the first time and
+/// loading a neighbour never forces a rebuild.
+pub fn build(
+    pos: IVec2,
+    nearby: &Nearby,
+    wg: &WorldGen,
+    tiles: &Tiles,
+    grid: bool,
+    quality: Quality,
+) -> ChunkFaces {
+    let block = |p: IVec3| nearby.get(p).unwrap_or_else(|| wg.block(p));
+    let lamps = light::flood(
+        pos,
+        nearby,
+        &tiles.light,
+        |b| tiles.passes[b as usize],
+        block,
+    );
+    chunk_faces(pos, grid, quality, tiles, &lamps, block)
 }
 
 /// Chunks whose blocks could appear within `reach` texels of the middle of the picture
@@ -206,6 +311,7 @@ impl Visible {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn stream(
     focus: Res<Focus>,
     cam: Res<Cam>,
@@ -213,6 +319,8 @@ pub fn stream(
     streaming: Res<Streaming>,
     wg: Res<WorldGen>,
     mut visible: ResMut<Visible>,
+    mut builds: ResMut<Builds>,
+    mut perf: ResMut<Perf>,
     mut map: ResMut<Map>,
     mut commands: Commands,
 ) {
@@ -245,26 +353,26 @@ pub fn stream(
             commands.entity(e).despawn();
         }
     }
-    // Generation gets the smaller share of the frame's budget; meshing gets the rest.
-    let budget = streaming.budget_ms * 0.4;
-    for (n, pos) in visible
+    // Chunks to load, nearest first. Edited chunks come back from the park at once (their
+    // blocks are kept, only the mesh is missing); new ground is generated on the pool. A
+    // generation that is no longer wanted is dropped when it lands.
+    let missing: Vec<IVec2> = visible
         .wanted
         .iter()
         .copied()
-        .filter(|p| !map.chunks.contains_key(p))
-        .collect::<Vec<_>>()
-        .into_iter()
-        .enumerate()
-    {
-        if n > 0 && started.elapsed().as_secs_f32() * 1000.0 > budget {
+        .filter(|p| !map.chunks.contains_key(p) && !builds.inflight.contains_key(p))
+        .collect();
+    for pos in missing {
+        if let Some(blocks) = map.parked.remove(&pos) {
+            map.chunks.insert(pos, Chunk::new(blocks, true));
+            continue;
+        }
+        if builds.inflight.len() >= streaming.builds.max(1) {
             break;
         }
-        let (blocks, modified) = match map.parked.remove(&pos) {
-            Some(blocks) => (blocks, true),
-            None => (wg.chunk(pos), false),
-        };
-        map.chunks.insert(pos, Chunk::new(blocks, modified));
+        builds.generate(pos, &wg);
     }
+    perf.stream_ms = started.elapsed().as_secs_f32() * 1000.0;
 }
 
 /// `Q` / `E` turn the view a quarter; `G` toggles the full block grid.
@@ -306,6 +414,7 @@ pub fn settings_changed(grid: Res<Grid>, quality: Res<Quality>, mut map: ResMut<
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn remesh(
     focus: Res<Focus>,
     grid: Res<Grid>,
@@ -315,6 +424,8 @@ pub fn remesh(
     tiles: Option<Res<Tiles>>,
     material: Option<Res<BlockMaterial>>,
     water: Option<Res<WaterMaterial>>,
+    visible: Res<Visible>,
+    mut builds: ResMut<Builds>,
     mut perf: ResMut<Perf>,
     mut map: ResMut<Map>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -324,35 +435,77 @@ pub fn remesh(
         return;
     };
     let center = chunk_of(focus.0.floor().as_ivec3());
-    let mut dirty: Vec<IVec2> = map
+    // Meshes for dirty chunks: those with every wanted neighbour loaded first (a missing
+    // neighbour is answered cell by cell by the generator, many times slower), then by
+    // distance. A chunk's dirty flag clears when its build starts; an edit during the
+    // build sets it again and it goes round once more.
+    let wanted: HashSet<IVec2> = visible.wanted.iter().copied().collect();
+    let frontier = |p: IVec2| {
+        (-1..=1).any(|dy| {
+            (-1..=1).any(|dx| {
+                let n = p + IVec2::new(dx, dy);
+                wanted.contains(&n) && !map.chunks.contains_key(&n)
+            })
+        })
+    };
+    let mut dirty: Vec<(bool, i32, IVec2)> = map
         .chunks
         .iter()
-        .filter(|(_, c)| c.dirty)
+        .filter(|(p, c)| c.dirty && !builds.inflight.contains_key(*p))
+        .map(|(p, _)| (frontier(*p), (*p - center).length_squared(), *p))
+        .collect();
+    dirty.sort_unstable_by_key(|(frontier, d, _)| (*frontier, *d));
+    let tiles_changed = tiles.is_changed();
+    for (_, _, pos) in dirty {
+        if builds.inflight.len() >= streaming.builds.max(1) {
+            break;
+        }
+        builds.mesh(pos, &map, &wg, &tiles, tiles_changed, grid.0, *quality);
+        map.chunks.get_mut(&pos).expect("listed above").dirty = false;
+    }
+    // Finished tasks, nearest first, within the budget for making meshes.
+    let mut done: Vec<IVec2> = builds
+        .inflight
+        .iter_mut()
+        .filter(|(_, t)| t.is_finished())
         .map(|(p, _)| *p)
         .collect();
-    if dirty.is_empty() {
+    perf.uploads = 0;
+    perf.build_ms = 0.0;
+    perf.inflight = builds.inflight.len();
+    if done.is_empty() {
         perf.mesh_ms = 0.0;
         return;
     }
-    dirty.sort_by_key(|p| (*p - center).length_squared());
+    done.sort_by_key(|p| (*p - center).length_squared());
     let started = Instant::now();
-    let budget = streaming.budget_ms * 0.6;
-    for (n, pos) in dirty.into_iter().enumerate() {
-        if n > 0 && started.elapsed().as_secs_f32() * 1000.0 > budget {
+    for (n, pos) in done.into_iter().enumerate() {
+        if n > 0 && started.elapsed().as_secs_f32() * 1000.0 > streaming.budget_ms {
             break;
         }
-        // Cells outside the loaded area are answered by the generator, so a chunk's border
-        // faces are right the first time and loading a neighbour never forces a rebuild.
-        let lamps = light::flood(
-            pos,
-            &map,
-            &tiles.light,
-            |b| tiles.passes[b as usize],
-            |p| map.get(p).unwrap_or_else(|| wg.block(p)),
-        );
-        let faces = chunk_faces(pos, grid.0, *quality, &tiles, &lamps, |p| {
-            map.get(p).unwrap_or_else(|| wg.block(p))
-        });
+        let task = builds.inflight.remove(&pos).expect("listed above");
+        let Some(built) = block_on(poll_once(task)) else {
+            continue;
+        };
+        let faces = match built {
+            // The chunk arrives dirty and is meshed next, unless it is no longer wanted
+            // or came in by another road (the park) meanwhile.
+            Built::Generated(blocks, ms) => {
+                perf.build_ms += ms;
+                if !map.chunks.contains_key(&pos) && visible.keep.contains(&pos) {
+                    map.chunks.insert(pos, Chunk::new(blocks, false));
+                }
+                continue;
+            }
+            // The chunk may have been unloaded while its mesh was built.
+            Built::Meshed(faces, ms) => {
+                perf.build_ms += ms;
+                if !map.chunks.contains_key(&pos) {
+                    continue;
+                }
+                faces
+            }
+        };
         let quads = faces.solid.len() + faces.water.len();
         // Each mesh keeps or loses its entity on its own.
         let old = map.entities.remove(&pos);
@@ -370,12 +523,13 @@ pub fn remesh(
         if let Some(e) = place(faces.water, old, &water.0, pos, &mut meshes, &mut commands) {
             map.waters.insert(pos, e);
         }
-        let chunk = map.chunks.get_mut(&pos).expect("listed above");
-        chunk.dirty = false;
+        let chunk = map.chunks.get_mut(&pos).expect("present above");
         chunk.quads = quads as u32;
         chunk.builds += 1;
         perf.meshed += 1;
+        perf.uploads += 1;
     }
+    perf.inflight = builds.inflight.len();
     perf.mesh_ms = started.elapsed().as_secs_f32() * 1000.0;
 }
 
@@ -426,6 +580,8 @@ pub fn measure(
             perf.frame_ms + (ms - perf.frame_ms) * 0.05
         };
         perf.fps = 1000.0 / perf.frame_ms;
+        let settle = (ms / 2000.0).min(1.0);
+        perf.worst_ms = ms.max(perf.worst_ms - (perf.worst_ms - perf.frame_ms) * settle);
     }
     perf.chunks = map.chunks.len();
     perf.quads = map.chunks.values().map(|c| c.quads as usize).sum();
@@ -526,5 +682,66 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod build_timing {
+    use super::*;
+
+    /// `cargo test build_timing -- --ignored --nocapture`: one chunk build on the main
+    /// thread against the same build on the compute pool, four at a time.
+    #[test]
+    #[ignore]
+    fn build_timing() {
+        let (wg, blocks) = crate::world::worldgen::tests::base_gen(42);
+        let tiles = crate::world::tiles::atlas(&blocks, None).1;
+        let mut map = Map::default();
+        for cy in -3..3 {
+            for cx in -3..3 {
+                let pos = IVec2::new(cx, cy);
+                map.chunks.insert(pos, Chunk::new(wg.chunk(pos), false));
+            }
+        }
+        let quality = Quality::default();
+        let started = Instant::now();
+        for cy in -2..2 {
+            for cx in -2..2 {
+                let pos = IVec2::new(cx, cy);
+                let nearby = Nearby::of(&map, pos);
+                std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality));
+            }
+        }
+        println!(
+            "main thread: {:.2} ms per chunk",
+            started.elapsed().as_secs_f32() * 1000.0 / 16.0
+        );
+        let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);
+        let wg = Arc::new(wg);
+        let tiles = Arc::new(tiles);
+        let started = Instant::now();
+        let mut tasks = Vec::new();
+        for cy in -2..2 {
+            for cx in -2..2 {
+                let pos = IVec2::new(cx, cy);
+                let nearby = Nearby::of(&map, pos);
+                let (wg, tiles) = (wg.clone(), tiles.clone());
+                tasks.push(pool.spawn(async move {
+                    let t = Instant::now();
+                    std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality));
+                    t.elapsed().as_secs_f32() * 1000.0
+                }));
+            }
+        }
+        let mut task_ms = 0.0;
+        for t in tasks {
+            task_ms += block_on(t);
+        }
+        println!(
+            "pool ({} threads): {:.2} ms wall per chunk, {:.2} ms task time per chunk",
+            pool.thread_num(),
+            started.elapsed().as_secs_f32() * 1000.0 / 16.0,
+            task_ms / 16.0
+        );
     }
 }

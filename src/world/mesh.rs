@@ -1130,7 +1130,13 @@ mod tests {
         }
         map.set(IVec3::new(6, 6, 1), 3);
         let emits = [0u8, 0, 0, 14];
-        let grid = light::flood(IVec2::ZERO, &map, &emits, |b| b == 0, |q| map.block(q));
+        let grid = light::flood(
+            IVec2::ZERO,
+            &crate::world::Nearby::of(&map, IVec2::ZERO),
+            &emits,
+            |b| b == 0,
+            |q| map.block(q),
+        );
         let f = chunk_faces(
             IVec2::ZERO,
             false,

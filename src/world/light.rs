@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use bevy::prelude::*;
 
-use super::{AIR, CHUNK, HEIGHT, Map, chunk_of};
+use super::{AIR, CHUNK, HEIGHT, Map, Nearby, chunk_of};
 
 /// The brightest emission, and how many blocks light travels from it.
 pub const REACH: i32 = 15;
@@ -51,7 +51,7 @@ impl Grid {
 /// `passes` whether light travels through it; `block` answers for any position.
 pub fn flood(
     pos: IVec2,
-    map: &Map,
+    nearby: &Nearby,
     emits: &[u8],
     passes: impl Fn(u16) -> bool,
     block: impl Fn(IVec3) -> u16,
@@ -65,11 +65,11 @@ pub fn flood(
         for dy in -1..=1 {
             for dx in -1..=1 {
                 let c = pos + IVec2::new(dx, dy);
-                let Some(chunk) = map.chunks.get(&c) else {
+                let Some(blocks) = nearby.chunk(c) else {
                     continue;
                 };
                 let base = (c * CHUNK).extend(0);
-                for (i, b) in chunk.blocks.iter().enumerate() {
+                for (i, b) in blocks.iter().enumerate() {
                     let e = emits.get(*b as usize).copied().unwrap_or(0);
                     if e > 0 {
                         let i = i as i32;
@@ -128,7 +128,8 @@ pub fn flood(
 
 /// Light at one cell, flooding its chunk on demand. For scripts and tests.
 pub fn level_at(map: &Map, emits: &[u8], passes: impl Fn(u16) -> bool, p: IVec3) -> u8 {
-    flood(chunk_of(p), map, emits, passes, |q| map.block(q)).at(p)
+    let c = chunk_of(p);
+    flood(c, &Nearby::of(map, c), emits, passes, |q| map.block(q)).at(p)
 }
 
 #[cfg(test)]
@@ -154,7 +155,13 @@ mod tests {
         let mut map = world();
         map.set(IVec3::new(8, 8, 1), 2);
         let passes = |b: u16| b == 0;
-        let grid = flood(IVec2::ZERO, &map, &EMITS, passes, |q| map.block(q));
+        let grid = flood(
+            IVec2::ZERO,
+            &Nearby::of(&map, IVec2::ZERO),
+            &EMITS,
+            passes,
+            |q| map.block(q),
+        );
         assert_eq!(grid.at(IVec3::new(8, 8, 1)), 14);
         assert_eq!(grid.at(IVec3::new(9, 8, 1)), 13);
         assert_eq!(grid.at(IVec3::new(8, 8, 5)), 10);
@@ -162,7 +169,13 @@ mod tests {
         // Light goes round a wall rather than through it.
         map.set(IVec3::new(10, 8, 1), 1);
         map.set(IVec3::new(10, 8, 2), 1);
-        let grid = flood(IVec2::ZERO, &map, &EMITS, passes, |q| map.block(q));
+        let grid = flood(
+            IVec2::ZERO,
+            &Nearby::of(&map, IVec2::ZERO),
+            &EMITS,
+            passes,
+            |q| map.block(q),
+        );
         assert_eq!(grid.at(IVec3::new(10, 8, 1)), 0);
         assert_eq!(
             grid.at(IVec3::new(11, 8, 1)),
@@ -180,7 +193,13 @@ mod tests {
         map.chunks
             .insert(IVec2::X, Chunk::new(crate::world::empty_blocks(), false));
         map.set(IVec3::new(15, 4, 1), 2);
-        let grid = flood(IVec2::X, &map, &EMITS, |b| b == 0, |q| map.block(q));
+        let grid = flood(
+            IVec2::X,
+            &Nearby::of(&map, IVec2::X),
+            &EMITS,
+            |b| b == 0,
+            |q| map.block(q),
+        );
         assert_eq!(grid.at(IVec3::new(16, 4, 1)), 13);
         assert_eq!(grid.at(IVec3::new(20, 4, 1)), 9);
     }

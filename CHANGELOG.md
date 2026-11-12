@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.1.0
+
+A smooth orthographic view. The parallel projection sees far more ground than the
+perspective one (at 30 degrees a picture 30 blocks tall covers 60 blocks of ground and the
+world's full height), and the streaming that kept up with it ran on the main thread.
+
+### New
+- A fog horizon. The haze is now fog that reaches the sky colour `horizon` blocks behind
+  the focus along the view axis (default 40), and no chunk wholly past it is loaded: the far
+  edge of the world fades out instead of popping. Lua `set_setting("horizon", blocks)`;
+  the performance pack sets it with each level (48 / 40 / 32 / 24); `--horizon N` pins it
+  for snapshots.
+- Chunks are generated and meshed on Bevy's compute pool. The main thread only takes
+  finished chunks in (`mesh_budget_ms` now caps that), `builds` (default 4) is how many
+  run at once, and an edit during a build sends the chunk round again. Meshing waits for
+  a chunk's wanted neighbours where it can: a missing neighbour is answered cell by cell
+  by the generator, which is many times slower than reading a loaded chunk.
+- `perf()` and the F4 line report `worst_ms` (the longest recent frame), `stream_ms`,
+  `build_ms`, `uploads` and `inflight`; `dump_state` writes the same line with the view.
+- Harness scenarios compare the orthographic and perspective views' chunks and streaming
+  cost, and check a near horizon loads less.
+
+### Changed
+- The camera builds its view and projection once a frame (`Cam::lens`); streaming computes
+  the visible set once, for both the keep and load reaches, and reuses it until the focus
+  chunk, the view angle (to half a degree), the projection, the picture or the reach
+  changes. Before, every chunk corner rebuilt both matrices, several thousand times a frame.
+
+### Measured (Apple M3 Pro, release build, orthographic, pixel_scale 3)
+- An eight-second walk east across chunk boundaries, same window and seed: worst frame
+  18.5 ms on 1.0.1, 9.2 ms now; both average 8.3 ms, the display's 120 Hz cap.
+  225 chunks loaded before, 180 now (the horizon at the performance pack's full level, 48).
+- A settled frame's streaming pass: 0.004 ms orthographic, 0.007 ms perspective (the
+  harness, debug build), down from a full visible-set computation every frame.
+- Meshing one chunk with real content, full quality: 0.7 ms with its neighbours loaded,
+  6.7 ms without (the generator answers each border cell), which is why meshing waits for
+  neighbours. `cargo test build_timing -- --ignored --nocapture` compares the main thread
+  against the pool.
+
 ## 1.0.1
 
 ### Changed

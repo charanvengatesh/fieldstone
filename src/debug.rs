@@ -127,7 +127,7 @@ pub fn snapshot(world: &mut World, name: &str, scale: f32) -> Result<PathBuf, St
     for chunk in map.chunks.keys() {
         let lamps = light::flood(
             *chunk,
-            map,
+            &crate::world::Nearby::of(map, *chunk),
             &tiles.light,
             |b| tiles.passes[b as usize],
             |p| map.get(p).unwrap_or_else(|| wg.block(p)),
@@ -212,6 +212,25 @@ pub fn report(world: &mut World) -> String {
         map.chunks.values().filter(|c| c.modified).count(),
         blocks.len(),
         items.len(),
+    );
+    let perf = world.resource::<crate::world::stream::Perf>();
+    let cam_mode = if cam.perspective {
+        "perspective"
+    } else {
+        "orthographic"
+    };
+    let _ = writeln!(
+        out,
+        "{cam_mode} pitch {:.0}  {:.0} fps  {:.1} ms (peak {:.1})  stream {:.2} ms  upload {:.2} ms  build {:.1} ms  {} in flight  horizon {}",
+        cam.pitch.to_degrees(),
+        perf.fps,
+        perf.frame_ms,
+        perf.worst_ms,
+        perf.stream_ms,
+        perf.mesh_ms,
+        perf.build_ms,
+        perf.inflight,
+        world.resource::<crate::world::stream::Streaming>().horizon,
     );
     let Some((body, slots, selected)) = player else {
         out.push_str("no player\n");

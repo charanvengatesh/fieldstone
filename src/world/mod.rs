@@ -121,6 +121,47 @@ pub struct Map {
     pub parked: HashMap<IVec2, Blocks>,
 }
 
+/// A chunk's blocks and its eight neighbours', copied out of the map so a build can run off
+/// the main thread. A cell that is not loaded (nor parked) is `None`.
+pub struct Nearby {
+    pos: IVec2,
+    cells: [Option<Blocks>; 9],
+}
+
+impl Nearby {
+    pub fn of(map: &Map, pos: IVec2) -> Self {
+        let mut cells: [Option<Blocks>; 9] = Default::default();
+        for dy in -1..=1 {
+            for dx in -1..=1 {
+                let c = pos + IVec2::new(dx, dy);
+                let blocks = map
+                    .chunks
+                    .get(&c)
+                    .map(|ch| &ch.blocks)
+                    .or_else(|| map.parked.get(&c));
+                cells[((dy + 1) * 3 + dx + 1) as usize] = blocks.cloned();
+            }
+        }
+        Self { pos, cells }
+    }
+
+    pub fn chunk(&self, c: IVec2) -> Option<&Blocks> {
+        let d = c - self.pos;
+        if d.abs().max_element() > 1 {
+            return None;
+        }
+        self.cells[((d.y + 1) * 3 + d.x + 1) as usize].as_ref()
+    }
+
+    /// The block at `p`, or `None` outside the nine chunks or the world's height.
+    pub fn get(&self, p: IVec3) -> Option<u16> {
+        if !(0..HEIGHT).contains(&p.z) {
+            return None;
+        }
+        self.chunk(chunk_of(p)).map(|b| b[index(p)])
+    }
+}
+
 /// What the camera centres on, in block units.
 #[derive(Resource, Default)]
 pub struct Focus(pub Vec3);
@@ -222,6 +263,7 @@ impl Plugin for WorldPlugin {
             .init_resource::<stream::Visible>()
             .init_resource::<stream::Streaming>()
             .init_resource::<stream::Perf>()
+            .init_resource::<stream::Builds>()
             .add_systems(Startup, mesh::setup)
             // The view settles before the camera reads it, so the camera and the world
             // agree on the angle within a frame; scripts (the camera mod) get their say

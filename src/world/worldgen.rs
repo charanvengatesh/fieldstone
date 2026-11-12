@@ -10,7 +10,7 @@ use super::stamp::Stamp;
 use super::{AIR, Blocks, CHUNK, HEIGHT, empty_blocks, index};
 use crate::core::{BlockDef, FeatureDef, HeightDef, Registry, Rule, StampDef, WorldGenDef, hash01};
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 pub struct WorldGen {
     pub seed: u32,
     height: HeightDef,
@@ -27,6 +27,7 @@ pub struct WorldGen {
 }
 
 /// A `Replace` rule, resolved.
+#[derive(Clone)]
 struct Vein {
     block: u16,
     with: u16,
@@ -37,6 +38,7 @@ struct Vein {
 }
 
 /// A `Surface` rule, resolved.
+#[derive(Clone)]
 struct Scatter {
     stamp: Stamp,
     on: Vec<u16>,

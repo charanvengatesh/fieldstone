@@ -48,7 +48,8 @@ test("a slow machine steps quality down, a fast one brings it back", function()
     set_time_scale(1)
 end)
 
--- How long it takes to rebuild every loaded chunk at a quality level.
+-- Compute-pool time to rebuild every loaded chunk at a quality level: the builds run off
+-- the main thread, and perf().build_ms sums the ones that landed each frame.
 local function rebuild_cost(shadows, occlusion)
     set_setting("mesh_budget_ms", 16)
     -- Changing either setting marks every chunk dirty.
@@ -57,9 +58,9 @@ local function rebuild_cost(shadows, occlusion)
     wait(1)
     local total, idle = 0, 0
     for _ = 1, 600 do
-        local ms = perf().mesh_ms
-        total = total + ms
-        if ms == 0 then idle = idle + 1 else idle = 0 end
+        local p = perf()
+        total = total + p.build_ms
+        if p.build_ms == 0 and p.inflight == 0 then idle = idle + 1 else idle = 0 end
         if idle >= 3 then break end
         wait(1)
     end
@@ -76,4 +77,60 @@ test("lower quality levels rebuild the world faster", function()
     expect(fastest < full * 0.85, "no shadows and no corner shading is at least 15 percent cheaper")
     set_setting("mesh_budget_ms", 3)
     set_setting("shadows", before)
+end)
+
+-- Waits until nothing is generating or meshing for a few frames running, then reads the
+-- numbers.
+local function settled()
+    local quiet = 0
+    for _ = 1, 900 do
+        local p = perf()
+        if p.inflight == 0 and p.uploads == 0 then quiet = quiet + 1 else quiet = 0 end
+        if quiet >= 5 then return p end
+        wait(1)
+    end
+    return nil
+end
+
+test("the horizon bounds what the orthographic view loads", function()
+    local horizon = get_setting("horizon")
+    set_setting("perspective", false)
+    -- Near first: a chunk once loaded is kept a little past the horizon, so raising it
+    -- afterwards is what shows the difference.
+    set_setting("horizon", 8)
+    local near = settled()
+    expect(near ~= nil, "the world settled at a horizon of 8 blocks")
+    set_setting("horizon", 200)
+    local far = settled()
+    expect(far ~= nil, "the world settled at a horizon of 200 blocks")
+    log(string.format("horizon 8: %d chunks, %d faces; horizon 200: %d chunks, %d faces",
+        near.chunks, near.faces, far.chunks, far.faces))
+    expect(near.chunks < far.chunks, "a near horizon loads fewer chunks")
+    set_setting("horizon", horizon)
+end)
+
+test("orthographic and perspective views report their streaming cost", function()
+    local perspective = get_setting("perspective")
+    local function view(on)
+        set_setting("perspective", on)
+        local p = settled()
+        expect(p ~= nil, "the world settled")
+        -- The visible-set cache makes an ordinary frame's streaming pass cheap.
+        local stream, worst = 0, 0
+        for _ = 1, 30 do
+            wait(1)
+            local q = perf()
+            stream = stream + q.stream_ms
+            worst = math.max(worst, q.stream_ms)
+        end
+        return p, stream / 30, worst
+    end
+    local ortho, ortho_ms, ortho_worst = view(false)
+    local persp, persp_ms, persp_worst = view(true)
+    log(string.format(
+        "orthographic: %d chunks, %d faces, stream %.3f ms (worst %.3f); perspective: %d chunks, %d faces, stream %.3f ms (worst %.3f)",
+        ortho.chunks, ortho.faces, ortho_ms, ortho_worst, persp.chunks, persp.faces, persp_ms, persp_worst))
+    expect(ortho.chunks > 0 and persp.chunks > 0, "both views loaded ground")
+    expect(ortho_worst < 1.0, "a settled orthographic frame's streaming pass stays under a millisecond")
+    set_setting("perspective", perspective)
 end)

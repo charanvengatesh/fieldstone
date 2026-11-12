@@ -530,8 +530,19 @@ fn texts(
         )
     });
     text.0 = format!(
-        "{:.0} fps  {:.1} ms   pos {:.1} {:.1} {:.1}   {} chunks  {} faces  mesh {:.1} ms   aim {aim}",
-        perf.fps, perf.frame_ms, p.x, p.y, p.z, perf.chunks, perf.quads, perf.mesh_ms,
+        "{:.0} fps  {:.1} ms (peak {:.1})   pos {:.1} {:.1} {:.1}   {} chunks  {} faces   stream {:.2} ms  upload {:.2} ms  build {:.1} ms  {} in flight   aim {aim}",
+        perf.fps,
+        perf.frame_ms,
+        perf.worst_ms,
+        p.x,
+        p.y,
+        p.z,
+        perf.chunks,
+        perf.quads,
+        perf.stream_ms,
+        perf.mesh_ms,
+        perf.build_ms,
+        perf.inflight,
     );
 }
 

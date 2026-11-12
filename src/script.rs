@@ -639,6 +639,7 @@ pub fn run(world: &mut World) {
                     "mesh_budget_ms" => Some(mlua::Value::Number(streaming.budget_ms as f64)),
                     "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
                     "horizon" => Some(mlua::Value::Number(streaming.horizon as f64)),
+                    "builds" => Some(mlua::Value::Integer(streaming.builds as i64)),
                     _ => None,
                 })
             })?,
@@ -689,6 +690,10 @@ pub fn run(world: &mut World) {
                         w.resource_mut::<Streaming>().budget_ms = (ms as f32).clamp(0.5, 16.0);
                         true
                     }
+                    ("builds", _, Some(n)) => {
+                        w.resource_mut::<Streaming>().builds = (n as usize).clamp(1, 16);
+                        true
+                    }
                     ("horizon", _, Some(blocks)) => {
                         let mut streaming = w.resource_mut::<Streaming>();
                         if !streaming.horizon_pinned {
@@ -715,9 +720,14 @@ pub fn run(world: &mut World) {
                 let t = lua.create_table()?;
                 t.set("fps", p.fps)?;
                 t.set("frame_ms", p.frame_ms)?;
+                t.set("worst_ms", p.worst_ms)?;
                 t.set("chunks", p.chunks)?;
                 t.set("faces", p.quads)?;
                 t.set("mesh_ms", p.mesh_ms)?;
+                t.set("build_ms", p.build_ms)?;
+                t.set("stream_ms", p.stream_ms)?;
+                t.set("uploads", p.uploads)?;
+                t.set("inflight", p.inflight)?;
                 t.set("meshed", p.meshed)?;
                 Ok(t)
             })?,
