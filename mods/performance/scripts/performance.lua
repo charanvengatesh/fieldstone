@@ -1,6 +1,8 @@
 -- Performance.
 --
---   F4    show or hide the performance line (frames per second, frame time, chunks, faces)
+--   F4    the performance line (frames per second, frame time, chunks, faces), then the
+--         line with the frame-time graph (240 frames of main-thread work; lines at 8.3
+--         and 16.7 ms), then off
 --   F6    step the quality level by hand; it stops adapting until F6 comes back round to "auto"
 --
 -- Quality levels trade detail for speed. Level 1 is everything on. Each step down cuts
@@ -22,7 +24,7 @@ local WARMUP_SECONDS = 6    -- the world is still streaming in; do not judge yet
 
 local level = 1
 local auto = true
-local overlay = false
+local overlay = 0   -- 0 off, 1 line, 2 line and graph
 local elapsed = 0
 local low_for = 0
 local high_for = 0
@@ -52,7 +54,8 @@ function on_tick(dt)
     local p = perf()
 
     if key_just_pressed("F4") then
-        overlay = not overlay
+        overlay = (overlay + 1) % 3
+        show_perf_graph(overlay == 2)
         since_line = 1
     end
     if key_just_pressed("F6") then
@@ -89,13 +92,14 @@ function on_tick(dt)
         end
     end
 
-    if overlay then
+    if overlay > 0 then
         since_line = since_line + dt
         if since_line >= 0.25 then
             since_line = 0
             set_hud("performance", string.format(
-                "%.0f fps  %.1f ms  %d chunks  %d faces  %s%s",
-                p.fps, p.frame_ms, p.chunks, p.faces, LEVELS[level].name,
+                "%.0f fps  %.1f ms  work %.1f ms  %d spikes  %d chunks  %d faces  %.1f MB  %s%s",
+                p.fps, p.frame_ms, p.work_ms, p.spikes, p.chunks, p.faces,
+                p.mesh_bytes / 1048576, LEVELS[level].name,
                 auto and "" or " (by hand)"))
         end
     else

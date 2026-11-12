@@ -133,8 +133,11 @@ Functions you can call. They act immediately: a `set_block` is visible to the ne
 | `time_of_day()`, `set_time_of_day(f)` | the day clock as a fraction: 0 midnight, 0.25 dawn, 0.5 noon, 0.75 dusk; a day is 12 minutes |
 | `light_at(x, y, z)` | block light at a cell, 0 to 15 |
 | `pan_view(dx, dy)`, `camera_pan()`, `camera_center()` | hold a pan in texels (call every frame), read the pan, read the world point the camera looks at (`x, y, z`) |
-| `get_setting(name)`, `set_setting(name, value)` | `shadows`, `occlusion`, `grid`, `see_through` (the silhouette through blocks), `peek`, `dead_zone`, `perspective` (booleans), `mesh_budget_ms` (main-thread milliseconds a frame for taking finished chunks in), `builds` (chunks generating or meshing on the compute pool at once, 1 to 16), `view_margin`, `horizon` (blocks behind the focus where the fog is whole and loading stops; numbers) |
-| `perf()` | a table: `fps`, `frame_ms`, `worst_ms` (the longest recent frame), `chunks`, `faces`, `stream_ms` (choosing what to load), `mesh_ms` (main-thread time taking finished chunks in), `build_ms` (compute-pool time of the chunks that landed this frame), `uploads`, `inflight`, `meshed` |
+| `get_setting(name)`, `set_setting(name, value)` | `shadows`, `occlusion`, `grid`, `see_through` (the silhouette through blocks), `peek`, `dead_zone`, `perspective` (booleans), `mesh_budget_ms` (main-thread milliseconds a frame for taking finished chunks in), `builds` (chunks generating or meshing on the compute pool at once, 1 to 16), `view_margin`, `horizon` (blocks behind the focus where the fog is whole and loading stops), `spike_ms` (the frame-work line `perf().spikes` counts against, default 12; numbers) |
+| `perf()` | a table: `fps`, `frame_ms`, `worst_ms` (the longest recent frame), `work_ms` (the main thread's own work this frame, without the wait for the display), `spikes` (frames whose work went past `spike_ms`), `spike_ms`, `chunks`, `faces`, `mesh_bytes`, `stream_ms` (choosing what to load), `mesh_ms` (main-thread time taking finished chunks in), `build_ms` (compute-pool time of the chunks that landed this frame), `uploads`, `inflight`, `meshed` |
+| `perf_history()` | the last 240 frames' `work_ms`, oldest first |
+| `perf_reset()` | forget the spikes and the peak; a measurement starts now |
+| `show_perf_graph(on)` | the frame-time graph under the HUD lines (240 columns of `work_ms`, lines at 8.3 and 16.7 ms) |
 | `set_hud(key, text)` | keep a line on screen, top right; empty text removes it |
 | `screenshot(name)`, `snapshot(name)`, `dump_state(name)`, `append_file(name, line)` | debug output under `debug/` |
 

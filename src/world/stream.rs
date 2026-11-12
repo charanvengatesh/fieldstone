@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use bevy::mesh::Indices;
 use bevy::pbr::{Material, MeshMaterial3d};
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
@@ -65,8 +66,11 @@ impl Default for Streaming {
 /// the edge does not load and unload as the camera wobbles.
 const KEEP_EXTRA: f32 = 192.0;
 
+/// Frames of main-thread work the graph remembers.
+pub const HISTORY: usize = 240;
+
 /// Numbers the debug line and scripts read.
-#[derive(Resource, Default, Clone, Copy)]
+#[derive(Resource, Clone, Copy)]
 pub struct Perf {
     /// Frames per second, smoothed.
     pub fps: f32,
@@ -75,6 +79,17 @@ pub struct Perf {
     /// The longest recent frame in milliseconds: a peak that settles back toward the
     /// average over a couple of seconds, so a hitch stays readable.
     pub worst_ms: f32,
+    /// Main-thread milliseconds this frame spent in the game's own schedule (`First` to
+    /// `Last`): the work, without the wait for the display or the headless runner's sleep.
+    pub work_ms: f32,
+    /// The last `HISTORY` frames' `work_ms`, oldest first from `head`.
+    pub history: [f32; HISTORY],
+    pub head: usize,
+    /// Frames whose work went past `spike_ms` since the game started (or `perf_reset`).
+    pub spikes: u32,
+    pub spike_ms: f32,
+    /// Bytes of chunk mesh data on the GPU.
+    pub mesh_bytes: usize,
     pub chunks: usize,
     /// Block faces across all loaded meshes.
     pub quads: usize,
@@ -90,6 +105,63 @@ pub struct Perf {
     pub inflight: usize,
     /// Chunk meshes built since the game started.
     pub meshed: u64,
+}
+
+impl Default for Perf {
+    fn default() -> Self {
+        Self {
+            fps: 0.0,
+            frame_ms: 0.0,
+            worst_ms: 0.0,
+            work_ms: 0.0,
+            history: [0.0; HISTORY],
+            head: 0,
+            spikes: 0,
+            spike_ms: 12.0,
+            mesh_bytes: 0,
+            chunks: 0,
+            quads: 0,
+            mesh_ms: 0.0,
+            build_ms: 0.0,
+            stream_ms: 0.0,
+            uploads: 0,
+            inflight: 0,
+            meshed: 0,
+        }
+    }
+}
+
+impl Perf {
+    /// Forgets the spikes and the peak, for a measurement that starts now.
+    pub fn reset(&mut self) {
+        self.spikes = 0;
+        self.worst_ms = 0.0;
+        self.history = [0.0; HISTORY];
+        self.head = 0;
+    }
+}
+
+/// When the frame's work began; `begin_frame` sets it in `First`, `end_frame` reads it
+/// in `Last`.
+#[derive(Resource, Default)]
+pub struct FrameClock(Option<Instant>);
+
+pub fn begin_frame(mut clock: ResMut<FrameClock>) {
+    clock.0 = Some(Instant::now());
+}
+
+pub fn end_frame(clock: Res<FrameClock>, mut perf: ResMut<Perf>) {
+    let Some(started) = clock.0 else {
+        return;
+    };
+    let ms = started.elapsed().as_secs_f32() * 1000.0;
+    perf.work_ms = ms;
+    let head = perf.head;
+    perf.history[head] = ms;
+    perf.head = (head + 1) % HISTORY;
+    if ms > perf.spike_ms {
+        perf.spikes += 1;
+    }
 }
 
 /// What a task hands back, and how long it took in milliseconds.
@@ -123,6 +195,7 @@ impl Builds {
         let worldgen = self.worldgen(wg);
         let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);
         let task = pool.spawn(async move {
+            let _span = info_span!("generate").entered();
             let started = Instant::now();
             let blocks = worldgen.chunk(pos);
             Built::Generated(blocks, started.elapsed().as_secs_f32() * 1000.0)
@@ -150,6 +223,7 @@ impl Builds {
         let nearby = Nearby::of(map, pos);
         let pool = AsyncComputeTaskPool::get_or_init(TaskPool::new);
         let task = pool.spawn(async move {
+            let _span = info_span!("mesh").entered();
             let started = Instant::now();
             let faces = build(pos, &nearby, &worldgen, &tiles, grid, quality);
             Built::Meshed(faces, started.elapsed().as_secs_f32() * 1000.0)
@@ -170,13 +244,17 @@ pub fn build(
     quality: Quality,
 ) -> ChunkFaces {
     let block = |p: IVec3| nearby.get(p).unwrap_or_else(|| wg.block(p));
-    let lamps = light::flood(
-        pos,
-        nearby,
-        &tiles.light,
-        |b| tiles.passes[b as usize],
-        block,
-    );
+    let lamps = {
+        let _span = info_span!("flood").entered();
+        light::flood(
+            pos,
+            nearby,
+            &tiles.light,
+            |b| tiles.passes[b as usize],
+            block,
+        )
+    };
+    let _span = info_span!("faces").entered();
     chunk_faces(pos, grid, quality, tiles, &lamps, block)
 }
 
@@ -487,6 +565,7 @@ pub fn remesh(
         let Some(built) = block_on(poll_once(task)) else {
             continue;
         };
+        let _span = info_span!("upload").entered();
         let faces = match built {
             // The chunk arrives dirty and is meshed next, unless it is no longer wanted
             // or came in by another road (the park) meanwhile.
@@ -509,7 +588,8 @@ pub fn remesh(
         let quads = faces.solid.len() + faces.water.len();
         // Each mesh keeps or loses its entity on its own.
         let old = map.entities.remove(&pos);
-        if let Some(e) = place(
+        let mut bytes = 0;
+        if let Some((e, b)) = place(
             faces.solid,
             old,
             &material.0,
@@ -518,13 +598,16 @@ pub fn remesh(
             &mut commands,
         ) {
             map.entities.insert(pos, e);
+            bytes += b;
         }
         let old = map.waters.remove(&pos);
-        if let Some(e) = place(faces.water, old, &water.0, pos, &mut meshes, &mut commands) {
+        if let Some((e, b)) = place(faces.water, old, &water.0, pos, &mut meshes, &mut commands) {
             map.waters.insert(pos, e);
+            bytes += b;
         }
         let chunk = map.chunks.get_mut(&pos).expect("present above");
         chunk.quads = quads as u32;
+        chunk.bytes = bytes as u32;
         chunk.builds += 1;
         perf.meshed += 1;
         perf.uploads += 1;
@@ -534,7 +617,7 @@ pub fn remesh(
 }
 
 /// Puts `faces` on `old` or a new entity with `material`, or despawns `old` when there is
-/// nothing to draw. Returns the entity that now draws the chunk, if any.
+/// nothing to draw. Returns the entity that now draws the chunk and the mesh's bytes.
 fn place<M: Material>(
     faces: Faces,
     old: Option<Entity>,
@@ -542,15 +625,17 @@ fn place<M: Material>(
     pos: IVec2,
     meshes: &mut Assets<Mesh>,
     commands: &mut Commands,
-) -> Option<Entity> {
+) -> Option<(Entity, usize)> {
     if faces.len() == 0 {
         if let Some(e) = old {
             commands.entity(e).despawn();
         }
         return None;
     }
-    let mesh = Mesh3d(meshes.add(faces.into_mesh()));
-    Some(match old {
+    let mesh = faces.into_mesh();
+    let bytes = mesh_bytes(&mesh);
+    let mesh = Mesh3d(meshes.add(mesh));
+    let entity = match old {
         Some(e) => {
             commands.entity(e).insert(mesh);
             e
@@ -562,7 +647,19 @@ fn place<M: Material>(
                 Transform::from_translation((pos * CHUNK).extend(0).as_vec3()),
             ))
             .id(),
-    })
+    };
+    Some((entity, bytes))
+}
+
+/// Vertex and index bytes of a mesh as the GPU holds them.
+pub fn mesh_bytes(mesh: &Mesh) -> usize {
+    let vertices = mesh.count_vertices() * mesh.get_vertex_size() as usize;
+    let indices = match mesh.indices() {
+        Some(Indices::U16(i)) => i.len() * 2,
+        Some(Indices::U32(i)) => i.len() * 4,
+        None => 0,
+    };
+    vertices + indices
 }
 
 /// Keeps the smoothed frame time and the world totals current.
@@ -585,6 +682,7 @@ pub fn measure(
     }
     perf.chunks = map.chunks.len();
     perf.quads = map.chunks.values().map(|c| c.quads as usize).sum();
+    perf.mesh_bytes = map.chunks.values().map(|c| c.bytes as usize).sum();
 }
 
 #[cfg(test)]

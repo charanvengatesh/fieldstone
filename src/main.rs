@@ -35,8 +35,9 @@ pub struct Options {
     pub grid: bool,
     /// `--angle DEGREES`: start at a free view angle instead of a quarter turn.
     pub angle: Option<f32>,
-    /// `--test`: headless; run every `tests/*.lua` in the packs and exit with the result.
-    pub test: bool,
+    /// `--test [NAME]`: headless; run the packs' `tests/*.lua` (those whose file name
+    /// contains NAME, when given) and exit with the result. `--bench` is `--test bench`.
+    pub test: Option<Option<String>>,
     /// `--tilt NAME`: start at a tilt preset.
     pub tilt: Option<String>,
     /// `--time F`: start the day clock at this fraction (0.5 is noon, 0 midnight).
@@ -69,10 +70,16 @@ fn main() {
     let options = Options {
         fresh: args.iter().any(|a| a == "--new"),
         seed: value("--seed").and_then(|v| v.parse().ok()),
-        headless: args
-            .iter()
-            .any(|a| a == "--headless-smoke" || a == "--snapshot" || a == "--test"),
-        test: args.iter().any(|a| a == "--test"),
+        headless: args.iter().any(|a| {
+            a == "--headless-smoke" || a == "--snapshot" || a == "--test" || a == "--bench"
+        }),
+        test: if args.iter().any(|a| a == "--bench") {
+            Some(Some("bench".into()))
+        } else if args.iter().any(|a| a == "--test") {
+            Some(value("--test").filter(|v| !v.starts_with("--")).cloned())
+        } else {
+            None
+        },
         tilt: value("--tilt").cloned(),
         time: value("--time").and_then(|v| v.parse().ok()),
         perspective: args.iter().any(|a| a == "--perspective"),
@@ -163,8 +170,8 @@ fn main() {
             ..default()
         });
     }
-    if options.test {
-        app.insert_resource(script::RunTests);
+    if let Some(filter) = options.test.clone() {
+        app.insert_resource(script::RunTests { filter });
     } else if options.headless {
         app.insert_resource(smoke::Smoke::new(options.snapshot.clone(), options.scale))
             .add_systems(

@@ -54,6 +54,22 @@ struct ToastText;
 struct DebugText;
 #[derive(Component)]
 struct HudText;
+
+/// The frame-time graph under the HUD lines: 240 frames of main-thread work, one column
+/// each, with lines at 8.3 and 16.7 ms. Drawn only while `on`.
+#[derive(Resource)]
+pub struct PerfGraph {
+    pub on: bool,
+    image: Handle<Image>,
+}
+
+#[derive(Component)]
+struct GraphNode;
+
+const GRAPH_W: u32 = crate::world::stream::HISTORY as u32;
+const GRAPH_H: u32 = 48;
+/// Milliseconds per pixel row.
+const GRAPH_MS_PER_PX: f32 = 0.5;
 #[derive(Component)]
 struct InventoryPanel;
 #[derive(Component)]
@@ -175,7 +191,7 @@ fn build_icons(
     commands.insert_resource(Icons(icons));
 }
 
-fn spawn(mut commands: Commands) {
+fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     // Hotbar with the held item's name above it.
     commands
         .spawn(Node {
@@ -290,6 +306,37 @@ fn spawn(mut commands: Commands) {
             ..default()
         },
     ));
+    // The frame-time graph, under the HUD lines.
+    let mut graph = Image::new_fill(
+        bevy::render::render_resource::Extent3d {
+            width: GRAPH_W,
+            height: GRAPH_H,
+            depth_or_array_layers: 1,
+        },
+        bevy::render::render_resource::TextureDimension::D2,
+        &[0, 0, 0, 0],
+        bevy::render::render_resource::TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    graph.sampler = bevy::image::ImageSampler::nearest();
+    let graph = images.add(graph);
+    commands.spawn((
+        GraphNode,
+        ImageNode::new(graph.clone()),
+        Node {
+            position_type: PositionType::Absolute,
+            top: Val::Px(64.0),
+            right: Val::Px(12.0),
+            width: Val::Px(GRAPH_W as f32),
+            height: Val::Px(GRAPH_H as f32),
+            ..default()
+        },
+        Visibility::Hidden,
+    ));
+    commands.insert_resource(PerfGraph {
+        on: false,
+        image: graph,
+    });
     // Tooltip beside the pointer.
     commands
         .spawn((
@@ -546,6 +593,60 @@ fn texts(
     );
 }
 
+/// Redraws the graph image each frame it is shown; hides the node otherwise.
+fn graph(
+    perf: Res<crate::world::stream::Perf>,
+    g: Res<PerfGraph>,
+    mut images: ResMut<Assets<Image>>,
+    mut node: Single<&mut Visibility, With<GraphNode>>,
+) {
+    let want = if g.on {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    if **node != want {
+        **node = want;
+    }
+    if !g.on {
+        return;
+    }
+    let Some(mut image) = images.get_mut(&g.image) else {
+        return;
+    };
+    let Some(data) = image.data.as_mut() else {
+        return;
+    };
+    let (w, h) = (GRAPH_W as usize, GRAPH_H as usize);
+    let n = crate::world::stream::HISTORY;
+    for x in 0..w {
+        let ms = perf.history[(perf.head + x) % n];
+        let bar = (ms / GRAPH_MS_PER_PX).round().min(h as f32) as usize;
+        let colour = if ms <= 8.4 {
+            [90u8, 200, 110]
+        } else if ms <= 16.7 {
+            [230, 190, 70]
+        } else {
+            [230, 80, 70]
+        };
+        for y in 0..h {
+            // Row 0 is the top of the image.
+            let row_ms = (h - y) as f32 * GRAPH_MS_PER_PX;
+            let i = (y * w + x) * 4;
+            let px = if h - y <= bar {
+                [colour[0], colour[1], colour[2], 200]
+            } else if (row_ms - 8.33).abs() < GRAPH_MS_PER_PX * 0.5
+                || (row_ms - 16.67).abs() < GRAPH_MS_PER_PX * 0.5
+            {
+                [255, 255, 255, 60]
+            } else {
+                [0, 0, 0, 90]
+            };
+            data[i..i + 4].copy_from_slice(&px);
+        }
+    }
+}
+
 fn tooltip(
     tip: Res<Tooltip>,
     items: Res<Registry<ItemDef>>,
@@ -645,7 +746,7 @@ impl Plugin for UiPlugin {
                 (spawn, build_icons.after(crate::world::mesh::setup)),
             )
             .add_systems(Update, track_hover.before(crate::player::PlayerSet))
-            .add_systems(Update, (toggles, paint, texts, tooltip));
+            .add_systems(Update, (toggles, paint, texts, tooltip, graph));
     }
 }
 

@@ -58,9 +58,12 @@ struct Script {
     env: Table,
 }
 
-/// Present when the game was started with `--test`.
-#[derive(Resource)]
-pub struct RunTests;
+/// Present when the game was started with `--test`; `filter` keeps only the test files
+/// whose name contains it (`--test bench`, or `--bench`).
+#[derive(Resource, Default)]
+pub struct RunTests {
+    pub filter: Option<String>,
+}
 
 /// One registered test and, once it has run, what went wrong.
 struct Test {
@@ -149,6 +152,9 @@ impl Vm {
 /// Reads each pack's script files.
 pub fn setup(world: &mut World) {
     let testing = world.contains_resource::<RunTests>();
+    let filter = world
+        .get_resource::<RunTests>()
+        .and_then(|r| r.filter.clone());
     let mut sources = Vec::new();
     let mut tests = Vec::new();
     for (dir, pack) in &world.resource::<LoadedPacks>().0 {
@@ -167,6 +173,12 @@ pub fn setup(world: &mut World) {
                 .flatten()
                 .map(|e| e.path())
                 .filter(|p| p.extension().is_some_and(|x| x == "lua"))
+                .filter(|p| {
+                    filter.as_ref().is_none_or(|f| {
+                        p.file_name()
+                            .is_some_and(|n| n.to_string_lossy().contains(f.as_str()))
+                    })
+                })
                 .collect();
             files.sort();
             for path in files {
@@ -640,6 +652,7 @@ pub fn run(world: &mut World) {
                     "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
                     "horizon" => Some(mlua::Value::Number(streaming.horizon as f64)),
                     "builds" => Some(mlua::Value::Integer(streaming.builds as i64)),
+                    "spike_ms" => Some(mlua::Value::Number(w.resource::<Perf>().spike_ms as f64)),
                     _ => None,
                 })
             })?,
@@ -694,6 +707,10 @@ pub fn run(world: &mut World) {
                         w.resource_mut::<Streaming>().builds = (n as usize).clamp(1, 16);
                         true
                     }
+                    ("spike_ms", _, Some(ms)) => {
+                        w.resource_mut::<Perf>().spike_ms = (ms as f32).clamp(1.0, 1000.0);
+                        true
+                    }
                     ("horizon", _, Some(blocks)) => {
                         let mut streaming = w.resource_mut::<Streaming>();
                         if !streaming.horizon_pinned {
@@ -721,6 +738,10 @@ pub fn run(world: &mut World) {
                 t.set("fps", p.fps)?;
                 t.set("frame_ms", p.frame_ms)?;
                 t.set("worst_ms", p.worst_ms)?;
+                t.set("work_ms", p.work_ms)?;
+                t.set("spikes", p.spikes)?;
+                t.set("spike_ms", p.spike_ms)?;
+                t.set("mesh_bytes", p.mesh_bytes)?;
                 t.set("chunks", p.chunks)?;
                 t.set("faces", p.quads)?;
                 t.set("mesh_ms", p.mesh_ms)?;
@@ -730,6 +751,37 @@ pub fn run(world: &mut World) {
                 t.set("inflight", p.inflight)?;
                 t.set("meshed", p.meshed)?;
                 Ok(t)
+            })?,
+        )?;
+        g.set(
+            "perf_history",
+            scope.create_function(|lua, ()| {
+                let p = *shared.borrow().resource::<Perf>();
+                let t = lua.create_table()?;
+                for i in 0..crate::world::stream::HISTORY {
+                    let v = p.history[(p.head + i) % crate::world::stream::HISTORY];
+                    t.set(i + 1, v)?;
+                }
+                Ok(t)
+            })?,
+        )?;
+        g.set(
+            "perf_reset",
+            scope.create_function(|_, ()| {
+                shared.borrow_mut().resource_mut::<Perf>().reset();
+                Ok(())
+            })?,
+        )?;
+        g.set(
+            "show_perf_graph",
+            scope.create_function(|_, on: bool| {
+                let mut w = shared.borrow_mut();
+                if let Some(mut g) = w.get_resource_mut::<crate::ui::PerfGraph>()
+                    && g.on != on
+                {
+                    g.on = on;
+                }
+                Ok(())
             })?,
         )?;
         g.set(

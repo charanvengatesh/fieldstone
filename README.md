@@ -30,7 +30,7 @@ The earlier top-down survival game lives on at tag `v0.6.1`.
 | Esc | Pause: resume, save, save and quit |
 | F5 | Save to `saves/iso.ron`, loaded on the next start |
 | F3 | Debug line: frame rate, position, chunks, faces, target |
-| F4 / F6 | Performance line; quality level by hand (`mods/performance`) |
+| F4 / F6 | Performance line, then the line with a frame-time graph, then off; quality level by hand (`mods/performance`) |
 | F9 | Debug capture (with `mods/debug` enabled): pictures and a text dump under `debug/` |
 
 Keys are rebindable in `settings.ron`, written next to the executable on first run; it also
@@ -50,7 +50,9 @@ cargo run -- --new               # ignore the save and start a fresh world
 cargo run -- --seed 42           # fix the world seed
 cargo test                       # unit tests
 cargo run -- --headless-smoke    # no window: walk, break, place, save, verify; non-zero on failure
-cargo run -- --test              # no window: run every tests/*.lua in the packs; non-zero on failure
+cargo run -- --test [NAME]       # no window: run the packs' tests/*.lua (whose file name contains NAME); non-zero on failure
+cargo run -- --bench             # --test bench: a glide, turns, a zoom and a save; prints one BENCH line, fails on a spike
+cargo run --release --features profile   # Tracy spans for every system and the chunk build tasks
 cargo run -- --snapshot NAME     # the same script, then a software picture in debug/NAME.png
                                  #   options: --scale N  --rot 0..3  --angle DEGREES  --tilt NAME  --perspective  --time 0..1  --grid
 cargo build --release

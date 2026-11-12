@@ -35,6 +35,8 @@ pub struct Chunk {
     pub modified: bool,
     /// Faces in the current mesh.
     pub quads: u32,
+    /// Bytes of the current mesh on the GPU.
+    pub bytes: u32,
     /// How many times this chunk's mesh has been built since it was loaded.
     pub builds: u32,
 }
@@ -47,6 +49,7 @@ impl Chunk {
             dirty: true,
             modified,
             quads: 0,
+            bytes: 0,
             builds: 0,
         }
     }
@@ -264,6 +267,9 @@ impl Plugin for WorldPlugin {
             .init_resource::<stream::Streaming>()
             .init_resource::<stream::Perf>()
             .init_resource::<stream::Builds>()
+            .init_resource::<stream::FrameClock>()
+            .add_systems(First, stream::begin_frame)
+            .add_systems(Last, stream::end_frame)
             .add_systems(Startup, mesh::setup)
             // The view settles before the camera reads it, so the camera and the world
             // agree on the angle within a frame; scripts (the camera mod) get their say
