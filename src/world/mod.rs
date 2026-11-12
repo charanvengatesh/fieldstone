@@ -39,6 +39,8 @@ pub struct Chunk {
     pub bytes: u32,
     /// How many times this chunk's mesh has been built since it was loaded.
     pub builds: u32,
+    /// The block light the last build flooded, for anything standing in the chunk.
+    pub light: light::Grid,
 }
 
 impl Chunk {
@@ -51,6 +53,7 @@ impl Chunk {
             quads: 0,
             bytes: 0,
             builds: 0,
+            light: light::Grid::empty(),
         }
     }
 }

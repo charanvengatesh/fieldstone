@@ -168,8 +168,8 @@ pub fn end_frame(clock: Res<FrameClock>, mut perf: ResMut<Perf>) {
 pub enum Built {
     /// A chunk's blocks, fresh from the generator.
     Generated(Blocks, f32),
-    /// A loaded chunk's faces.
-    Meshed(ChunkFaces, f32),
+    /// A loaded chunk's faces and the block light they were lit by.
+    Meshed(Box<(ChunkFaces, light::Grid)>, f32),
 }
 
 /// Chunks being generated or meshed on the compute pool, and the shared inputs the tasks
@@ -225,16 +225,19 @@ impl Builds {
         let task = pool.spawn(async move {
             let _span = info_span!("mesh").entered();
             let started = Instant::now();
-            let faces = build(pos, &nearby, &worldgen, &tiles, grid, quality);
-            Built::Meshed(faces, started.elapsed().as_secs_f32() * 1000.0)
+            let (faces, lamps) = build(pos, &nearby, &worldgen, &tiles, grid, quality);
+            Built::Meshed(
+                Box::new((faces, lamps)),
+                started.elapsed().as_secs_f32() * 1000.0,
+            )
         });
         self.inflight.insert(pos, task);
     }
 }
 
-/// The faces of chunk `pos` from the blocks around it. Cells outside the snapshot are
-/// answered by the generator, so a chunk's border faces are right the first time and
-/// loading a neighbour never forces a rebuild.
+/// The faces of chunk `pos` from the blocks around it, and the light grid they were lit
+/// by. Cells outside the snapshot are answered by the generator, so a chunk's border faces
+/// are right the first time and loading a neighbour never forces a rebuild.
 pub fn build(
     pos: IVec2,
     nearby: &Nearby,
@@ -242,7 +245,7 @@ pub fn build(
     tiles: &Tiles,
     grid: bool,
     quality: Quality,
-) -> ChunkFaces {
+) -> (ChunkFaces, light::Grid) {
     let block = |p: IVec3| nearby.get(p).unwrap_or_else(|| wg.block(p));
     let lamps = {
         let _span = info_span!("flood").entered();
@@ -255,7 +258,8 @@ pub fn build(
         )
     };
     let _span = info_span!("faces").entered();
-    chunk_faces(pos, grid, quality, tiles, &lamps, block)
+    let faces = chunk_faces(pos, grid, quality, tiles, &lamps, block);
+    (faces, lamps)
 }
 
 /// Chunks whose blocks could appear within `reach` texels of the middle of the picture
@@ -577,11 +581,13 @@ pub fn remesh(
                 continue;
             }
             // The chunk may have been unloaded while its mesh was built.
-            Built::Meshed(faces, ms) => {
+            Built::Meshed(built, ms) => {
                 perf.build_ms += ms;
-                if !map.chunks.contains_key(&pos) {
+                let Some(chunk) = map.chunks.get_mut(&pos) else {
                     continue;
-                }
+                };
+                let (faces, lamps) = *built;
+                chunk.light = lamps;
                 faces
             }
         };
@@ -807,7 +813,7 @@ mod build_timing {
             for cx in -2..2 {
                 let pos = IVec2::new(cx, cy);
                 let nearby = Nearby::of(&map, pos);
-                std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality));
+                std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality).0);
             }
         }
         println!(
@@ -826,7 +832,7 @@ mod build_timing {
                 let (wg, tiles) = (wg.clone(), tiles.clone());
                 tasks.push(pool.spawn(async move {
                     let t = Instant::now();
-                    std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality));
+                    std::hint::black_box(build(pos, &nearby, &wg, &tiles, false, quality).0);
                     t.elapsed().as_secs_f32() * 1000.0
                 }));
             }

@@ -102,7 +102,9 @@ function on_tick(dt)
                 p.mesh_bytes / 1048576, LEVELS[level].name,
                 auto and "" or " (by hand)"))
         end
-    else
+    elseif since_line >= 0 then
+        -- Once, when the overlay goes off.
+        since_line = -1
         set_hud("performance", "")
     end
 end

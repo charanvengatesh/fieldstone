@@ -12,10 +12,9 @@ use crate::core::time::{Daylight, GameTime, daylight};
 use crate::core::{BlockDef, Registry};
 use crate::figure;
 use crate::inventory::Inventory;
-use crate::world::light::{REACH, level_at};
+use crate::world::light::REACH;
 use crate::world::mesh::{FlatArt, SilhouetteArt, compose, sunlit};
 use crate::world::physics::{Body, jump, step};
-use crate::world::tiles::Tiles;
 use crate::world::{AIR, Focus, HEIGHT, Map};
 
 /// Blocks per second.
@@ -287,7 +286,6 @@ pub fn place(
     clock: Res<GameTime>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
-    tiles: Option<Res<Tiles>>,
     mut last_color: Local<Vec3>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut flats: ResMut<Assets<FlatArt>>,
@@ -328,16 +326,12 @@ pub fn place(
         SHADED
     };
     player.lit += (target - player.lit) * (time.delta_secs() * 8.0).min(1.0);
-    let lamp = tiles
-        .map(|t| {
-            level_at(
-                &map,
-                &t.light,
-                |b| t.passes.get(b as usize).copied().unwrap_or(false),
-                (pos + Vec3::Z * 0.9).floor().as_ivec3(),
-            )
-        })
-        .unwrap_or(0);
+    // Block light at the chest, from the grid the chunk's last build flooded.
+    let cell = (pos + Vec3::Z * 0.9).floor().as_ivec3();
+    let lamp = map
+        .chunks
+        .get(&crate::world::chunk_of(cell))
+        .map_or(0, |c| c.light.at(cell));
     let color = figure_light(player.lit, lamp, &daylight(clock.frac()));
     if (color - *last_color).abs().max_element() > 1e-3
         && let Some(mut m) = flats.get_mut(&material.0)

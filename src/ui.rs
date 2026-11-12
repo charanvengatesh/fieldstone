@@ -535,11 +535,14 @@ fn toggles(
             crate::core::settings::save(&settings);
         }
     }
-    **panels.p1() = if paused.0 {
+    let want = if paused.0 {
         Visibility::Visible
     } else {
         Visibility::Hidden
     };
+    if **panels.p1() != want {
+        **panels.p1() = want;
+    }
 }
 
 fn texts(
@@ -560,7 +563,10 @@ fn texts(
         lines.p0().0 = toast.text.clone();
     }
     if hud.is_changed() {
-        lines.p2().0 = hud.0.values().cloned().collect::<Vec<_>>().join("\n");
+        let joined = hud.0.values().cloned().collect::<Vec<_>>().join("\n");
+        if lines.p2().0 != joined {
+            lines.p2().0 = joined;
+        }
     }
     let mut debug = lines.p1();
     let (text, vis) = &mut *debug;
@@ -656,19 +662,28 @@ fn tooltip(
 ) {
     let (node, vis) = &mut *panel;
     let Some(item) = tip.0 else {
-        **vis = Visibility::Hidden;
+        if **vis != Visibility::Hidden {
+            **vis = Visibility::Hidden;
+        }
         return;
     };
-    let def = items.at(item);
-    text.0 = match &def.places {
-        Some(block) if *block != def.id => format!("{}\nPlaces {block}", def.label()),
-        Some(_) => format!("{}\nBlock", def.label()),
-        None => def.label().to_owned(),
-    };
-    **vis = Visibility::Visible;
+    if tip.is_changed() {
+        let def = items.at(item);
+        text.0 = match &def.places {
+            Some(block) if *block != def.id => format!("{}\nPlaces {block}", def.label()),
+            Some(_) => format!("{}\nBlock", def.label()),
+            None => def.label().to_owned(),
+        };
+    }
+    if **vis != Visibility::Visible {
+        **vis = Visibility::Visible;
+    }
     if let Some(p) = window.cursor_position() {
-        node.left = Val::Px(p.x + 14.0);
-        node.top = Val::Px(p.y + 14.0);
+        let (left, top) = (Val::Px(p.x + 14.0), Val::Px(p.y + 14.0));
+        if node.left != left || node.top != top {
+            node.left = left;
+            node.top = top;
+        }
     }
 }
 
@@ -678,10 +693,13 @@ fn track_hover(
     nodes: Query<(), With<Node>>,
     mut ui: ResMut<UiHovered>,
 ) {
-    ui.0 = hover
+    let over = hover
         .values()
         .flat_map(|m| m.keys())
         .any(|e| nodes.contains(*e));
+    if ui.0 != over {
+        ui.0 = over;
+    }
 }
 
 /// A white isometric cube with shaded sides and inked edges, 32 texels square.

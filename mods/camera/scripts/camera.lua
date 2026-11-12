@@ -25,6 +25,7 @@ local twisting = false       -- a trackpad twist is in progress
 local since_twist = 0
 local zoom_scroll = 0
 local compass = true
+local compass_line = nil   -- what the HUD shows, so it is written only when it changes
 local home = 0              -- the view the game started with; R comes back to it
 
 local NAMES = { "south-west", "south", "south-east", "east", "north-east", "north", "north-west", "west" }
@@ -120,8 +121,13 @@ function on_tick(dt)
     end
     if compass then
         local how = get_setting("perspective") and "perspective" or "parallel"
-        set_hud("camera", string.format("looking %s, %s tilt (%.0f degrees), %s", facing(view_angle()), tilt(), pitch(), how))
-    else
+        local line = string.format("looking %s, %s tilt (%.0f degrees), %s", facing(view_angle()), tilt(), pitch(), how)
+        if line ~= compass_line then
+            compass_line = line
+            set_hud("camera", line)
+        end
+    elseif compass_line then
+        compass_line = nil
         set_hud("camera", "")
     end
 end

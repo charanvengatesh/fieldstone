@@ -89,6 +89,26 @@ pub fn chip_mesh() -> Mesh {
 
 pub fn setup(mut meshes: ResMut<Assets<Mesh>>, mut commands: Commands) {
     commands.insert_resource(ChipMesh(meshes.add(chip_mesh())));
+    commands.init_resource::<ChipMaterials>();
+}
+
+/// One material per chip colour (quantised to 5 bits a channel), kept for the run: a
+/// burst reuses them instead of making and preparing a material per particle.
+#[derive(Resource, Default)]
+pub struct ChipMaterials(bevy::platform::collections::HashMap<[u8; 3], Handle<FlatArt>>);
+
+impl ChipMaterials {
+    fn get(&mut self, color: Color, flats: &mut Assets<FlatArt>) -> Handle<FlatArt> {
+        let c = color.to_linear();
+        let key = [c.red, c.green, c.blue].map(|v| (v.clamp(0.0, 1.0) * 31.0).round() as u8);
+        self.0
+            .entry(key)
+            .or_insert_with(|| {
+                let v = key.map(|k| k as f32 / 31.0);
+                flats.add(FlatArt::plain(Vec4::new(v[0], v[1], v[2], 1.0), false))
+            })
+            .clone()
+    }
 }
 
 #[derive(Component)]
@@ -131,10 +151,12 @@ pub fn burst(seed: i32, n: usize, up: f32) -> Vec<Vec3> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_burst(
     commands: &mut Commands,
     mesh: &Handle<Mesh>,
     flats: &mut Assets<FlatArt>,
+    materials: &mut ChipMaterials,
     origin: Vec3,
     colors: &[Color],
     vels: &[Vec3],
@@ -145,7 +167,6 @@ fn spawn_burst(
             return;
         }
         *room -= 1;
-        let c = color.to_linear();
         commands.spawn((
             Particle {
                 pos: origin,
@@ -153,10 +174,7 @@ fn spawn_burst(
                 life: LIFE,
             },
             Mesh3d(mesh.clone()),
-            MeshMaterial3d(flats.add(FlatArt::plain(
-                Vec4::new(c.red, c.green, c.blue, 1.0),
-                false,
-            ))),
+            MeshMaterial3d(materials.get(*color, flats)),
             Transform::from_translation(origin),
         ));
     }
@@ -171,6 +189,7 @@ pub fn emit(
     chip: Option<Res<ChipMesh>>,
     live: Query<(), With<Particle>>,
     mut flats: ResMut<Assets<FlatArt>>,
+    mut materials: ResMut<ChipMaterials>,
     mut commands: Commands,
 ) {
     let Some(chip) = chip else {
@@ -192,6 +211,7 @@ pub fn emit(
             &mut commands,
             &chip.0,
             &mut flats,
+            &mut materials,
             b.at.as_vec3() + Vec3::splat(0.5),
             &colors,
             &vels,
@@ -215,6 +235,7 @@ pub fn emit(
             &mut commands,
             &chip.0,
             &mut flats,
+            &mut materials,
             l.pos + Vec3::Z * 0.1,
             &colors[..n],
             &vels,
@@ -228,20 +249,13 @@ pub fn tick(
     time: Res<Time>,
     map: Res<Map>,
     blocks: Res<Registry<BlockDef>>,
-    mut particles: Query<(
-        Entity,
-        &mut Particle,
-        &mut Transform,
-        &MeshMaterial3d<FlatArt>,
-    )>,
-    mut flats: ResMut<Assets<FlatArt>>,
+    mut particles: Query<(Entity, &mut Particle, &mut Transform)>,
     mut commands: Commands,
 ) {
     let dt = time.delta_secs().min(0.05);
-    for (e, mut p, mut tf, material) in &mut particles {
+    for (e, mut p, mut tf) in &mut particles {
         p.life -= dt;
         if p.life <= 0.0 {
-            flats.remove(&material.0);
             commands.entity(e).despawn();
             continue;
         }

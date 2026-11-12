@@ -248,14 +248,26 @@ pub fn show_highlight(
         ),
         With<Highlight>,
     >,
+    mut last: Local<Option<(crate::world::Hit, u32, bool)>>,
 ) {
     let (mesh, material, tf, vis) = &mut *quad;
     let Some(hit) = target.0 else {
-        **vis = Visibility::Hidden;
+        if **vis != Visibility::Hidden {
+            **vis = Visibility::Hidden;
+        }
         return;
     };
-    **vis = Visibility::Visible;
+    if **vis != Visibility::Visible {
+        **vis = Visibility::Visible;
+    }
     let stage = crack_stage(breaking.progress);
+    // The quad is rebuilt (a mesh upload and a material write) only when the face or the
+    // crack stage changed, or the atlas arrived.
+    let key = (hit, stage, atlas.is_some());
+    if *last == Some(key) {
+        return;
+    }
+    *last = Some(key);
     if let Some(mut m) = meshes.get_mut(&mesh.0) {
         // The face's corners, pushed a hair off it so it never fights the block.
         let lift = hit.normal.as_vec3() * 0.01;

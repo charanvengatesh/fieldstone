@@ -13,8 +13,10 @@
 //! injects is indistinguishable from a player's. When the last test ends the game exits,
 //! non-zero if anything failed.
 
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell, RefMut};
 use std::collections::HashSet;
+use std::ptr::NonNull;
+use std::rc::Rc;
 
 use bevy::input::gestures::RotationGesture;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
@@ -83,6 +85,41 @@ struct TestRun {
     done: bool,
 }
 
+/// The world, reachable from the engine functions while [`run`] has it. The pointer is
+/// set for the frame and cleared after, so a function called outside a frame (there is
+/// no such path: Lua only runs from `run`) would panic rather than touch a stale world.
+/// The `RefCell` keeps a nested borrow a panic, as the per-frame `RefCell<&mut World>` did.
+pub struct Shared(RefCell<Option<NonNull<World>>>);
+
+impl Shared {
+    fn borrow(&self) -> Ref<'_, World> {
+        // SAFETY: the pointer came from the `&mut World` that `run` holds for the whole
+        // frame and is cleared before `run` returns; the RefCell forbids a second borrow
+        // while a mutable one is out.
+        Ref::map(self.0.borrow(), |p| unsafe {
+            p.expect("engine call outside a frame").as_ref()
+        })
+    }
+
+    fn borrow_mut(&self) -> RefMut<'_, World> {
+        // SAFETY: as above.
+        RefMut::map(self.0.borrow_mut(), |p| unsafe {
+            p.expect("engine call outside a frame").as_mut()
+        })
+    }
+}
+
+/// What the engine functions reach through the Lua state's app data.
+#[derive(Clone)]
+struct Ctx {
+    shared: Rc<Shared>,
+    tests: Rc<RefCell<Option<TestRun>>>,
+}
+
+fn ctx(lua: &Lua) -> Ctx {
+    lua.app_data_ref::<Ctx>().expect("engine context").clone()
+}
+
 /// The Lua state and the scripts in it. Not `Send`, so it lives as a non-send resource and
 /// only [`run`] touches it.
 pub struct Vm {
@@ -93,9 +130,10 @@ pub struct Vm {
     /// `script:hook` pairs that already failed, so an error is logged once, not every frame.
     reported: HashSet<String>,
     /// Present under `--test`.
-    tests: Option<TestRun>,
-    /// Whether the permanent wrappers around the engine functions exist yet.
-    wrapped: bool,
+    tests: Rc<RefCell<Option<TestRun>>>,
+    shared: Rc<Shared>,
+    /// Whether the engine functions and their wrappers are in the state yet.
+    installed: bool,
 }
 
 /// Registers engine functions under a private name and remembers the public one.
@@ -133,18 +171,25 @@ impl Vm {
         let libs = StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE;
         let lua = Lua::new_with(libs, LuaOptions::default()).expect("lua state");
         lua.load(PRELUDE).exec().expect("prelude");
+        let shared = Rc::new(Shared(RefCell::new(None)));
+        let tests = Rc::new(RefCell::new(None));
+        lua.set_app_data(Ctx {
+            shared: shared.clone(),
+            tests: tests.clone(),
+        });
         Self {
             lua,
             scripts: Vec::new(),
             pending: sources,
             reported: HashSet::new(),
-            tests: None,
-            wrapped: false,
+            tests,
+            shared,
+            installed: false,
         }
     }
 
-    pub fn with_tests(mut self) -> Self {
-        self.tests = Some(TestRun::default());
+    pub fn with_tests(self) -> Self {
+        *self.tests.borrow_mut() = Some(TestRun::default());
         self
     }
 }
@@ -242,51 +287,30 @@ fn lua_radians(degrees: f32) -> f32 {
     degrees.to_radians() + std::f32::consts::FRAC_PI_4
 }
 
-pub fn run(world: &mut World) {
-    let Some(vm) = world.remove_non_send::<Vm>() else {
-        return;
-    };
-    let Vm {
-        lua,
-        mut scripts,
-        mut pending,
-        mut reported,
-        tests,
-        wrapped,
-    } = vm;
-    let tests = RefCell::new(tests);
-    let events = std::mem::take(&mut world.resource_mut::<ScriptEvents>().0);
-    let dt = world.resource::<Time>().delta_secs_f64();
-    let names: Vec<(IVec3, String, bool)> = {
-        let blocks = world.resource::<Registry<BlockDef>>();
-        events
-            .iter()
-            .map(|e| match e {
-                Event::Broken(at, b) => (*at, blocks.id_of(*b).to_owned(), true),
-                Event::Placed(at, b) => (*at, blocks.id_of(*b).to_owned(), false),
-            })
-            .collect()
-    };
-    let shared = RefCell::new(&mut *world);
-    let result = lua.scope(|scope| {
+/// Puts the engine functions into the state as `__name` globals, then one permanent
+/// wrapper `name(...)` per function. Runs once; the functions reach the world through
+/// [`Shared`], which [`run`] points at the world for each frame.
+fn install(lua: &Lua) -> mlua::Result<()> {
+    {
         let g = lua.globals();
-        // Engine functions are scoped to this frame. Scripts call them through permanent
-        // Lua wrappers (see below), so a function fetched before a coroutine `wait` is still
-        // good after it.
+        // Scripts call the engine functions through permanent Lua wrappers (see below),
+        // so a function fetched before a coroutine `wait` is still good after it.
         let g = Api {
             table: &g,
             names: RefCell::new(Vec::new()),
         };
         g.set(
             "log",
-            scope.create_function(|_, msg: String| {
+            lua.create_function(|_, msg: String| {
                 info!("[script] {msg}");
                 Ok(())
             })?,
         )?;
         g.set(
             "show_text",
-            scope.create_function(|_, (msg, secs): (String, Option<f32>)| {
+            lua.create_function(|lua, (msg, secs): (String, Option<f32>)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 w.resource_mut::<Toast>()
                     .show(msg, secs.unwrap_or(3.0).max(0.5));
@@ -295,7 +319,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "get_block",
-            scope.create_function(|_, (x, y, z): (f64, f64, f64)| {
+            lua.create_function(|lua, (x, y, z): (f64, f64, f64)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let id = w.resource::<Map>().block(cell(x, y, z));
                 Ok(w.resource::<Registry<BlockDef>>().id_of(id).to_owned())
@@ -303,7 +329,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_block",
-            scope.create_function(|_, (x, y, z, id): (f64, f64, f64, String)| {
+            lua.create_function(|lua, (x, y, z, id): (f64, f64, f64, String)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let Some(block) = w.resource::<Registry<BlockDef>>().idx(&id) else {
                     warn!("script: unknown block '{id}'");
@@ -314,7 +342,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "light_at",
-            scope.create_function(|_, (x, y, z): (f64, f64, f64)| {
+            lua.create_function(|lua, (x, y, z): (f64, f64, f64)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let Some(tiles) = w.get_resource::<Tiles>() else {
                     return Ok(0);
@@ -330,11 +360,17 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "time_of_day",
-            scope.create_function(|_, ()| Ok(shared.borrow().resource::<GameTime>().frac()))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
+                Ok(shared.borrow().resource::<GameTime>().frac())
+            })?,
         )?;
         g.set(
             "set_time_of_day",
-            scope.create_function(|_, frac: f32| {
+            lua.create_function(|lua, frac: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared
                     .borrow_mut()
                     .resource_mut::<GameTime>()
@@ -344,7 +380,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "give_item",
-            scope.create_function(|_, (id, n): (String, Option<u32>)| {
+            lua.create_function(|lua, (id, n): (String, Option<u32>)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let n = n.unwrap_or(1);
                 let left = w.resource_scope(|world: &mut World, items: Mut<Registry<ItemDef>>| {
@@ -363,7 +401,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "count_item",
-            scope.create_function(|_, id: String| {
+            lua.create_function(|lua, id: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 let Some(item) = world.resource::<Registry<ItemDef>>().idx(&id) else {
@@ -378,7 +418,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "take_item",
-            scope.create_function(|_, (id, n): (String, Option<u32>)| {
+            lua.create_function(|lua, (id, n): (String, Option<u32>)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 let Some(item) = world.resource::<Registry<ItemDef>>().idx(&id) else {
@@ -393,7 +435,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "sort_inventory",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 w.resource_scope(|world: &mut World, items: Mut<Registry<ItemDef>>| {
                     if let Some(mut inv) = world
@@ -410,7 +454,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "player_pos",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 let p = world
@@ -423,7 +469,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "key_just_pressed",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 Ok(parse_key(&name)
                     .is_some_and(|k| w.resource::<ButtonInput<KeyCode>>().just_pressed(k)))
@@ -431,7 +479,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "key_pressed",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 Ok(parse_key(&name)
                     .is_some_and(|k| w.resource::<ButtonInput<KeyCode>>().pressed(k)))
@@ -439,7 +489,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "mouse_pressed",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let Some(button) = mouse_button(&name) else {
                     return Ok(false);
                 };
@@ -449,14 +501,18 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "mouse_delta",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let d = shared.borrow().resource::<AccumulatedMouseMotion>().delta;
                 Ok((d.x, d.y))
             })?,
         )?;
         g.set(
             "scroll_delta",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let s = w.resource::<AccumulatedMouseScroll>();
                 Ok(match s.unit {
@@ -467,18 +523,26 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "rotate_gesture",
-            scope.create_function(|_, ()| Ok(shared.borrow().resource::<Twist>().0))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
+                Ok(shared.borrow().resource::<Twist>().0)
+            })?,
         )?;
         g.set(
             "capture_pointer",
-            scope.create_function(|_, on: bool| {
+            lua.create_function(|lua, on: bool| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared.borrow_mut().resource_mut::<PointerCaptured>().0 = on;
                 Ok(())
             })?,
         )?;
         g.set(
             "window_focused",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 Ok(world
@@ -490,18 +554,25 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "view_angle",
-            scope
-                .create_function(|_, ()| Ok(lua_degrees(shared.borrow().resource::<Cam>().yaw)))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
+                Ok(lua_degrees(shared.borrow().resource::<Cam>().yaw))
+            })?,
         )?;
         g.set(
             "view_target",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 Ok(lua_degrees(shared.borrow().resource::<Cam>().target_yaw))
             })?,
         )?;
         g.set(
             "turn_view",
-            scope.create_function(|_, degrees: f32| {
+            lua.create_function(|lua, degrees: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared
                     .borrow_mut()
                     .resource_mut::<Cam>()
@@ -511,7 +582,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_view_angle",
-            scope.create_function(|_, degrees: f32| {
+            lua.create_function(|lua, degrees: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let mut cam = w.resource_mut::<Cam>();
                 cam.yaw = lua_radians(degrees);
@@ -521,7 +594,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "snap_view",
-            scope.create_function(|_, step: Option<f32>| {
+            lua.create_function(|lua, step: Option<f32>| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared
                     .borrow_mut()
                     .resource_mut::<Cam>()
@@ -531,12 +606,17 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "zoom",
-            scope
-                .create_function(|_, ()| Ok(shared.borrow().resource::<Settings>().pixel_scale))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
+                Ok(shared.borrow().resource::<Settings>().pixel_scale)
+            })?,
         )?;
         g.set(
             "zoom_at",
-            scope.create_function(|_, (level, sx, sy): (f32, f32, f32)| {
+            lua.create_function(|lua, (level, sx, sy): (f32, f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let wanted = level.round().clamp(1.0, 6.0) as u32;
                 w.resource_mut::<Cam>().zoom_about(Vec2::new(sx, sy));
@@ -548,11 +628,17 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "tilt",
-            scope.create_function(|_, ()| Ok(shared.borrow().resource::<Cam>().pitch_name()))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
+                Ok(shared.borrow().resource::<Cam>().pitch_name())
+            })?,
         )?;
         g.set(
             "set_tilt",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let Some(pitch) = Cam::pitch_named(&name) else {
                     warn!("script: no tilt preset '{name}'");
                     return Ok(false);
@@ -563,13 +649,17 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "pitch",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 Ok(shared.borrow().resource::<Cam>().target_pitch.to_degrees())
             })?,
         )?;
         g.set(
             "set_pitch",
-            scope.create_function(|_, degrees: f32| {
+            lua.create_function(|lua, degrees: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared
                     .borrow_mut()
                     .resource_mut::<Cam>()
@@ -579,7 +669,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "pan_view",
-            scope.create_function(|_, (dx, dy): (f32, f32)| {
+            lua.create_function(|lua, (dx, dy): (f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared
                     .borrow_mut()
                     .resource_mut::<Cam>()
@@ -589,21 +681,27 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "camera_pan",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let p = shared.borrow().resource::<Cam>().pan;
                 Ok((p.x, p.y))
             })?,
         )?;
         g.set(
             "camera_center",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let c = shared.borrow().resource::<Cam>().focus;
                 Ok((c.x, c.y, c.z))
             })?,
         )?;
         g.set(
             "screen_of",
-            scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
+            lua.create_function(|lua, (x, y, z): (f32, f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let o = w
                     .resource::<Cam>()
@@ -613,7 +711,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "aim_screen",
-            scope.create_function(|_, (sx, sy): (f32, f32)| {
+            lua.create_function(|lua, (sx, sy): (f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let at = Vec2::new(sx, sy);
                 let mut injected = w.resource_mut::<Injected>();
@@ -625,7 +725,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_zoom",
-            scope.create_function(|_, scale: f32| {
+            lua.create_function(|lua, scale: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let wanted = scale.round().clamp(1.0, 6.0) as u32;
                 if w.resource::<Settings>().pixel_scale != wanted {
@@ -636,7 +738,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "get_setting",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let quality = w.resource::<Quality>();
                 let streaming = w.resource::<Streaming>();
@@ -659,7 +763,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_setting",
-            scope.create_function(|_, (name, value): (String, mlua::Value)| {
+            lua.create_function(|lua, (name, value): (String, mlua::Value)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let flag = value.as_boolean();
                 let number = value.as_number().or(value.as_integer().map(|i| i as f64));
@@ -732,7 +838,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "perf",
-            scope.create_function(|lua, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let p = *shared.borrow().resource::<Perf>();
                 let t = lua.create_table()?;
                 t.set("fps", p.fps)?;
@@ -755,7 +863,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "perf_history",
-            scope.create_function(|lua, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let p = *shared.borrow().resource::<Perf>();
                 let t = lua.create_table()?;
                 for i in 0..crate::world::stream::HISTORY {
@@ -767,14 +877,18 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "perf_reset",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared.borrow_mut().resource_mut::<Perf>().reset();
                 Ok(())
             })?,
         )?;
         g.set(
             "show_perf_graph",
-            scope.create_function(|_, on: bool| {
+            lua.create_function(|lua, on: bool| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 if let Some(mut g) = w.get_resource_mut::<crate::ui::PerfGraph>()
                     && g.on != on
@@ -786,7 +900,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_hud",
-            scope.create_function(|_, (key, text): (String, Option<String>)| {
+            lua.create_function(|lua, (key, text): (String, Option<String>)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let mut hud = w.resource_mut::<Hud>();
                 match text.filter(|t| !t.is_empty()) {
@@ -796,7 +912,9 @@ pub fn run(world: &mut World) {
                         }
                     }
                     None => {
-                        hud.0.remove(&key);
+                        if hud.0.contains_key(&key) {
+                            hud.0.remove(&key);
+                        }
                     }
                 }
                 Ok(())
@@ -805,7 +923,9 @@ pub fn run(world: &mut World) {
         // Injected input: lands next frame where real input would.
         g.set(
             "press_key",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 if let Some(k) = parse_key(&name) {
                     shared.borrow_mut().resource_mut::<Injected>().press.push(k);
                 }
@@ -814,7 +934,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "release_key",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 if let Some(k) = parse_key(&name) {
                     shared
                         .borrow_mut()
@@ -827,7 +949,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "press_mouse",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 if let Some(b) = mouse_button(&name) {
                     shared
                         .borrow_mut()
@@ -840,7 +964,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "release_mouse",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 if let Some(b) = mouse_button(&name) {
                     shared
                         .borrow_mut()
@@ -853,28 +979,36 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "move_mouse",
-            scope.create_function(|_, (dx, dy): (f32, f32)| {
+            lua.create_function(|lua, (dx, dy): (f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared.borrow_mut().resource_mut::<Injected>().motion += Vec2::new(dx, dy);
                 Ok(())
             })?,
         )?;
         g.set(
             "scroll",
-            scope.create_function(|_, lines: f32| {
+            lua.create_function(|lua, lines: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared.borrow_mut().resource_mut::<Injected>().scroll += lines;
                 Ok(())
             })?,
         )?;
         g.set(
             "twist",
-            scope.create_function(|_, radians: f32| {
+            lua.create_function(|lua, radians: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared.borrow_mut().resource_mut::<Injected>().twist += radians;
                 Ok(())
             })?,
         )?;
         g.set(
             "aim_at",
-            scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
+            lua.create_function(|lua, (x, y, z): (f32, f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let at = w
                     .resource::<Cam>()
@@ -889,7 +1023,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "clear_aim",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let mut injected = w.resource_mut::<Injected>();
                 injected.cursor = None;
@@ -900,7 +1036,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "teleport",
-            scope.create_function(|_, (x, y, z): (f32, f32, f32)| {
+            lua.create_function(|lua, (x, y, z): (f32, f32, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 if let Some(mut p) = world.query::<&mut Player>().iter_mut(world).next() {
@@ -912,7 +1050,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_time_scale",
-            scope.create_function(|_, scale: f32| {
+            lua.create_function(|lua, scale: f32| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared
                     .borrow_mut()
                     .resource_mut::<Time<Virtual>>()
@@ -922,7 +1062,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "simulate_frame_ms",
-            scope.create_function(|_, ms: Option<f32>| {
+            lua.create_function(|lua, ms: Option<f32>| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 shared.borrow_mut().resource_mut::<Fake>().frame_ms = ms.filter(|m| *m > 0.0);
                 Ok(())
             })?,
@@ -930,21 +1072,33 @@ pub fn run(world: &mut World) {
         // Readouts.
         g.set(
             "frame",
-            scope.create_function(|_, ()| Ok(tests.borrow().as_ref().map_or(0, |t| t.frame)))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = shared;
+                Ok(tests.borrow().as_ref().map_or(0, |t| t.frame))
+            })?,
         )?;
         g.set(
             "view_turning",
-            scope.create_function(|_, ()| Ok(shared.borrow().resource::<Cam>().turning()))?,
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
+                Ok(shared.borrow().resource::<Cam>().turning())
+            })?,
         )?;
         g.set(
             "hud_text",
-            scope.create_function(|_, key: String| {
+            lua.create_function(|lua, key: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 Ok(shared.borrow().resource::<Hud>().0.get(&key).cloned())
             })?,
         )?;
         g.set(
             "selected_slot",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 Ok(world
@@ -956,7 +1110,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "is_grounded",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 Ok(world
@@ -968,7 +1124,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "shader_passes",
-            scope.create_function(|lua, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let list = lua.create_table()?;
                 if let Some(chain) = w.get_resource::<crate::post::Chain>() {
@@ -985,7 +1143,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_shader",
-            scope.create_function(|_, (id, on): (String, bool)| {
+            lua.create_function(|lua, (id, on): (String, bool)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let Some(mut chain) = w.get_resource_mut::<crate::post::Chain>() else {
                     return Ok(false);
@@ -1004,7 +1164,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "set_shader_param",
-            scope.create_function(|_, (id, index, value): (String, usize, f32)| {
+            lua.create_function(|lua, (id, index, value): (String, usize, f32)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let Some(mut chain) = w.get_resource_mut::<crate::post::Chain>() else {
                     return Ok(false);
@@ -1020,7 +1182,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "particles",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 Ok(world
@@ -1031,7 +1195,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "player_heading",
-            scope.create_function(|_, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let mut w = shared.borrow_mut();
                 let world: &mut World = &mut w;
                 let cam = *world.resource::<Cam>();
@@ -1051,7 +1217,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "target",
-            scope.create_function(|lua, ()| {
+            lua.create_function(|lua, ()| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 let w = shared.borrow();
                 let Some(hit) = w.resource::<Target>().0 else {
                     return Ok(None);
@@ -1071,7 +1239,9 @@ pub fn run(world: &mut World) {
         // Tests.
         g.set(
             "test",
-            scope.create_function(|_, (name, body): (String, Function)| {
+            lua.create_function(|lua, (name, body): (String, Function)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = shared;
                 if let Some(run) = tests.borrow_mut().as_mut() {
                     run.tests.push(Test {
                         name,
@@ -1084,7 +1254,9 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "expect",
-            scope.create_function(|_, (ok, message): (bool, Option<String>)| {
+            lua.create_function(|lua, (ok, message): (bool, Option<String>)| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = shared;
                 if !ok && let Some(run) = tests.borrow_mut().as_mut() {
                     let message = message.unwrap_or_else(|| "expectation failed".into());
                     let i = run.next.saturating_sub(1);
@@ -1098,33 +1270,39 @@ pub fn run(world: &mut World) {
         )?;
         g.set(
             "screenshot",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 crate::debug::screenshot(&mut shared.borrow_mut(), &name);
                 Ok(())
             })?,
         )?;
         g.set(
             "snapshot",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 Ok(crate::debug::snapshot(&mut shared.borrow_mut(), &name, 2.0).is_ok())
             })?,
         )?;
         g.set(
             "dump_state",
-            scope.create_function(|_, name: String| {
+            lua.create_function(|lua, name: String| {
+                let Ctx { shared, tests } = ctx(lua);
+                let _ = tests;
                 crate::debug::dump(&mut shared.borrow_mut(), &name);
                 Ok(())
             })?,
         )?;
         g.set(
             "append_file",
-            scope.create_function(|_, (name, line): (String, String)| {
+            lua.create_function(|_, (name, line): (String, String)| {
                 crate::debug::append(&name, &line);
                 Ok(())
             })?,
         )?;
 
-        if !wrapped {
+        {
             // One permanent wrapper per engine function, looking the real one up by name.
             let mut src = String::new();
             for name in g.names.borrow().iter() {
@@ -1132,12 +1310,47 @@ pub fn run(world: &mut World) {
             }
             lua.load(&src).set_name("api").exec()?;
         }
+    }
+    Ok(())
+}
+
+pub fn run(world: &mut World) {
+    let Some(vm) = world.remove_non_send::<Vm>() else {
+        return;
+    };
+    let Vm {
+        lua,
+        mut scripts,
+        mut pending,
+        mut reported,
+        tests,
+        shared,
+        installed,
+    } = vm;
+    let events = std::mem::take(&mut world.resource_mut::<ScriptEvents>().0);
+    let dt = world.resource::<Time>().delta_secs_f64();
+    let names: Vec<(IVec3, String, bool)> = {
+        let blocks = world.resource::<Registry<BlockDef>>();
+        events
+            .iter()
+            .map(|e| match e {
+                Event::Broken(at, b) => (*at, blocks.id_of(*b).to_owned(), true),
+                Event::Placed(at, b) => (*at, blocks.id_of(*b).to_owned(), false),
+            })
+            .collect()
+    };
+    if !installed && let Err(e) = install(&lua) {
+        error!("script setup: {e}");
+    }
+    *shared.0.borrow_mut() = Some(NonNull::from(&mut *world));
+    let result = (|| -> mlua::Result<()> {
+        let g = lua.globals();
         for (name, src) in pending.drain(..) {
             // Each script sees the globals through its own table, so two mods can both
             // define `on_tick`.
             let env = lua.create_table()?;
             let meta = lua.create_table()?;
-            meta.set("__index", g.table.clone())?;
+            meta.set("__index", g.clone())?;
             env.set_metatable(Some(meta))?;
             match lua
                 .load(&src)
@@ -1168,13 +1381,12 @@ pub fn run(world: &mut World) {
         }
         drive_tests(&lua, &tests, &shared)?;
         Ok(())
-    });
-    let wrapped = true;
+    })();
+    *shared.0.borrow_mut() = None;
     if let Err(e) = result {
         error!("script runtime: {e}");
     }
-    let tests = tests.into_inner();
-    if let Some(run) = &tests
+    if let Some(run) = tests.borrow().as_ref()
         && run.done
     {
         let failed: Vec<&Test> = run
@@ -1206,7 +1418,8 @@ pub fn run(world: &mut World) {
         pending,
         reported,
         tests,
-        wrapped,
+        shared,
+        installed: true,
     });
 }
 
@@ -1215,8 +1428,8 @@ pub fn run(world: &mut World) {
 /// borrowed while the coroutine runs, since `expect` inside it needs it.
 fn drive_tests(
     lua: &Lua,
-    tests: &RefCell<Option<TestRun>>,
-    shared: &RefCell<&mut World>,
+    tests: &Rc<RefCell<Option<TestRun>>>,
+    shared: &Rc<Shared>,
 ) -> mlua::Result<()> {
     let (thread, index) = {
         let mut guard = tests.borrow_mut();
