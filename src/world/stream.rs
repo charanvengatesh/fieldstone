@@ -4,6 +4,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
+use bevy::camera::primitives::Aabb;
 use bevy::mesh::Indices;
 use bevy::pbr::{Material, MeshMaterial3d};
 use bevy::platform::collections::{HashMap, HashSet};
@@ -638,7 +639,7 @@ fn place<M: Material>(
         }
         return None;
     }
-    let mesh = faces.into_mesh();
+    let mesh = faces.into_block_mesh();
     let bytes = mesh_bytes(&mesh);
     let mesh = Mesh3d(meshes.add(mesh));
     let entity = match old {
@@ -646,11 +647,17 @@ fn place<M: Material>(
             commands.entity(e).insert(mesh);
             e
         }
+        // A packed mesh has no float positions for Bevy to measure, so the chunk's box is
+        // given by hand and frustum culling keeps working.
         None => commands
             .spawn((
                 mesh,
                 MeshMaterial3d(material.clone()),
                 Transform::from_translation((pos * CHUNK).extend(0).as_vec3()),
+                Aabb::from_min_max(
+                    Vec3::ZERO,
+                    Vec3::new(CHUNK as f32, CHUNK as f32, HEIGHT as f32),
+                ),
             ))
             .id(),
     };

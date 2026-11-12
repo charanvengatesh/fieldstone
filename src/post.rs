@@ -107,6 +107,14 @@ pub struct Chain {
 }
 
 impl Chain {
+    /// The picture the world camera draws into, when it draws into one rather than the
+    /// window: readable whatever the display is doing.
+    pub fn picture(&self) -> Option<Handle<Image>> {
+        (!self.direct).then(|| self.images[0].clone())
+    }
+}
+
+impl Chain {
     pub fn pass_mut(&mut self, id: &str) -> Option<&mut Pass> {
         self.dirty = true;
         self.passes.iter_mut().find(|p| p.id == id)

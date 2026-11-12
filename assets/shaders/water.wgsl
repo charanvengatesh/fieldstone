@@ -51,14 +51,14 @@ fn haze_at(world: vec3<f32>) -> f32 {
 @group(3) @binding(1) var atlas: texture_2d<f32>;
 @group(3) @binding(2) var atlas_sampler: sampler;
 
-// The 3D mesh pipeline's vertex output (bevy_pbr forward_io), the fields this shader
-// reads: world position is the true world position, colour is the mesh's COLOR attribute.
+// What block_vertex.wgsl hands over: the world position, the atlas uv, the light channels
+// (sun, block light, ambient) and the face's flags (flag_bits in src/world/mesh.rs).
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) world_position: vec4<f32>,
-    @location(1) world_normal: vec3<f32>,
-    @location(2) uv: vec2<f32>,
-    @location(5) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) light: vec3<f32>,
+    @location(3) @interpolate(flat) flags: u32,
 };
 
 const TILE: f32 = 16.0;
@@ -97,8 +97,8 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     // Derivatives first: they must be taken in uniform control flow.
     let uv_dx = dpdx(in.uv);
     let uv_dy = dpdy(in.uv);
-    let light_dx = dpdx(in.color.rgb);
-    let light_dy = dpdy(in.color.rgb);
+    let light_dx = dpdx(in.light);
+    let light_dy = dpdy(in.light);
 
     let px = in.uv * size;
     let texel = floor(px);
@@ -107,7 +107,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Light channels at the texel's centre: step from this pixel to the centre in screen
     // space using the inverse of the uv derivative matrix.
-    var channels = in.color.rgb;
+    var channels = in.light;
     let to_centre = (texel + vec2<f32>(0.5) - px) / size;
     let det = uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x;
     if (abs(det) > 1e-14) {
@@ -119,7 +119,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     channels = max(channels, vec3<f32>(0.0));
 
-    let flags = i32(round(in.color.a * 2048.0));
+    let flags = i32(in.flags);
     let mask = flags % 16;
     let water = (flags / 16) % 2 == 1;
     let top = (flags / 32) % 2 == 1;

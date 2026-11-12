@@ -76,9 +76,17 @@ pub fn screenshot(world: &mut World, name: &str) {
     }
     let path = dir().join(format!("{}.png", safe_name(name)));
     info!("debug: screenshot {}", path.display());
-    world
-        .spawn(Screenshot::primary_window())
-        .observe(save_to_disk(path));
+    // The world's picture when there is one (a pass or picture_scale above 1): it reads
+    // back whatever the display is doing, where the window comes out black when the
+    // display is asleep.
+    let picture = world
+        .get_resource::<crate::post::Chain>()
+        .and_then(|c| c.picture());
+    let shot = match picture {
+        Some(image) => Screenshot::image(image),
+        None => Screenshot::primary_window(),
+    };
+    world.spawn(shot).observe(save_to_disk(path));
 }
 
 /// Draws what the camera sees with the software canvas and saves `debug/<name>.png`.
@@ -751,6 +759,7 @@ mod tests {
             uvs: vec![[0.0; 2]; 4],
             colors: vec![color; 4],
             flips: vec![false],
+            ..Default::default()
         };
         let cam = Cam::quarter(0);
         let at = |toward: f32| Transform::from_translation(cam.toward_eye() * toward);

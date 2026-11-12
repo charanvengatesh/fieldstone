@@ -8,13 +8,12 @@
 //! vertex and the sun, tinted cool in shade and warm in sun.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::mesh::MeshVertexBufferLayoutRef;
-use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::mesh::{Indices, MeshVertexAttribute, MeshVertexBufferLayoutRef, PrimitiveTopology};
 use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, CompareFunction, RenderPipelineDescriptor, ShaderType,
-    SpecializedMeshPipelineError,
+    SpecializedMeshPipelineError, VertexFormat,
 };
 
 use super::tiles::{TILE, Tiles, atlas};
@@ -132,6 +131,21 @@ fn unlit(descriptor: &mut RenderPipelineDescriptor) {
     descriptor.primitive.cull_mode = None;
 }
 
+/// The chunk materials draw packed vertices: the vertex buffer holds [`ATTRIBUTE_BLOCK`]
+/// alone, and `shaders/block_vertex.wgsl` unpacks it.
+fn packed(
+    descriptor: &mut RenderPipelineDescriptor,
+    layout: &MeshVertexBufferLayoutRef,
+) -> Result<(), SpecializedMeshPipelineError> {
+    unlit(descriptor);
+    descriptor.vertex.buffers = vec![
+        layout
+            .0
+            .get_layout(&[ATTRIBUTE_BLOCK.at_shader_location(0)])?,
+    ];
+    Ok(())
+}
+
 /// The block material: the tile atlas lit by vertex colour, with outlines, banded light,
 /// in `shaders/block.wgsl`. Mask, so cutout texels are dropped and depth still written.
 #[derive(Asset, TypePath, AsBindGroup, Clone)]
@@ -144,6 +158,9 @@ pub struct BlockArt {
 }
 
 impl Material for BlockArt {
+    fn vertex_shader() -> bevy::shader::ShaderRef {
+        "shaders/block_vertex.wgsl".into()
+    }
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/block.wgsl".into()
     }
@@ -159,11 +176,10 @@ impl Material for BlockArt {
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
+        layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        unlit(descriptor);
-        Ok(())
+        packed(descriptor, layout)
     }
 }
 
@@ -179,6 +195,9 @@ pub struct WaterArt {
 }
 
 impl Material for WaterArt {
+    fn vertex_shader() -> bevy::shader::ShaderRef {
+        "shaders/block_vertex.wgsl".into()
+    }
     fn fragment_shader() -> bevy::shader::ShaderRef {
         "shaders/water.wgsl".into()
     }
@@ -194,11 +213,10 @@ impl Material for WaterArt {
     fn specialize(
         _pipeline: &MaterialPipeline,
         descriptor: &mut RenderPipelineDescriptor,
-        _layout: &MeshVertexBufferLayoutRef,
+        layout: &MeshVertexBufferLayoutRef,
         _key: MaterialPipelineKey<Self>,
     ) -> Result<(), SpecializedMeshPipelineError> {
-        unlit(descriptor);
-        Ok(())
+        packed(descriptor, layout)
     }
 }
 
@@ -403,12 +421,113 @@ fn quantize(v: f32) -> f32 {
     (v * 255.0).round() / 255.0
 }
 
-/// Packs a face's outline mask, its water flag, whether it faces up, whether it lies under
+/// A face's outline mask, its water flag, whether it faces up, whether it lies under
 /// water, and which of its edges are drops (the ground falls away past them, inked
-/// heavier) into the vertex alpha.
+/// heavier), as the bits the shader reads.
+pub fn flag_bits(mask: u32, water: bool, top: bool, submerged: bool, drop: u32) -> u32 {
+    (mask & 15) + 16 * water as u32 + 32 * top as u32 + 64 * submerged as u32 + 128 * (drop & 15)
+}
+
+/// [`flag_bits`] as the vertex alpha of the CPU-side [`Faces`] (the canvas reads it).
 pub fn pack_flags(mask: u32, water: bool, top: bool, submerged: bool, drop: u32) -> f32 {
-    (mask + 16 * water as u32 + 32 * top as u32 + 64 * submerged as u32 + 128 * (drop & 15)) as f32
-        / 2048.0
+    flag_bits(mask, water, top, submerged, drop) as f32 / 2048.0
+}
+
+/// The one vertex attribute of a chunk mesh: three words holding the local position,
+/// face, corner, extent, tile, light and flags. See [`pack_vertex`].
+pub const ATTRIBUTE_BLOCK: MeshVertexAttribute = MeshVertexAttribute::new(
+    "Vertex_Block",
+    0x4649_454C_4453_544E,
+    VertexFormat::Uint32x3,
+);
+
+/// Steps the light channels are stored in: sun in 1/256 (up to 4), block light in 1/63,
+/// ambient in 1/128 (up to 2). All at least ten times finer than a light band.
+pub const SUN_STEP: f32 = 256.0;
+pub const LAMP_STEP: f32 = 63.0;
+pub const AMBIENT_STEP: f32 = 128.0;
+
+/// Rounds the light channels to the steps the packed vertex holds, so the CPU canvas and
+/// the GPU see the same numbers.
+pub fn quantize_light(light: Vec3) -> Vec3 {
+    Vec3::new(
+        (light.x * SUN_STEP).round().clamp(0.0, 1023.0) / SUN_STEP,
+        (light.y * LAMP_STEP).round().clamp(0.0, 63.0) / LAMP_STEP,
+        (light.z * AMBIENT_STEP).round().clamp(0.0, 255.0) / AMBIENT_STEP,
+    )
+}
+
+/// Packs one chunk vertex. `local` is the corner in blocks from the chunk origin (whole
+/// numbers: x, y in 0..=16, z in 0..=32), `face` 0 top, 1 +x, 2 +y, 3 -x, 4 -y, 5 cross;
+/// `corner` which corner of the tile the vertex takes (u, v in {0, 1}); `extent` the
+/// quad's size in cells (1 for a single face); `tile` the atlas tile index; `light` the
+/// channels (sun, block light, ambient) and `flags` [`flag_bits`].
+///
+/// Word 0: x 5 bits, y 5, z 6, face 3, corner u 1, corner v 1, extent u-1 5, extent v-1 5.
+/// Word 1: tile 12 bits, sun 10, block light 6. Word 2: flags 12 bits, ambient 8.
+pub fn pack_vertex(
+    local: IVec3,
+    face: u32,
+    corner: (bool, bool),
+    extent: (u32, u32),
+    tile: u32,
+    light: Vec3,
+    flags: u32,
+) -> [u32; 3] {
+    debug_assert!((0..=CHUNK).contains(&local.x) && (0..=CHUNK).contains(&local.y));
+    debug_assert!((0..=HEIGHT).contains(&local.z));
+    let w0 = (local.x as u32 & 31)
+        | (local.y as u32 & 31) << 5
+        | (local.z as u32 & 63) << 10
+        | (face & 7) << 16
+        | (corner.0 as u32) << 19
+        | (corner.1 as u32) << 20
+        | ((extent.0.clamp(1, 32) - 1) & 31) << 21
+        | ((extent.1.clamp(1, 32) - 1) & 31) << 26;
+    let sun = (light.x * SUN_STEP).round().clamp(0.0, 1023.0) as u32;
+    let lamp = (light.y * LAMP_STEP).round().clamp(0.0, 63.0) as u32;
+    let ambient = (light.z * AMBIENT_STEP).round().clamp(0.0, 255.0) as u32;
+    let w1 = (tile & 4095) | sun << 12 | lamp << 22;
+    let w2 = (flags & 4095) | ambient << 12;
+    [w0, w1, w2]
+}
+
+/// The fields of a packed vertex: `(local, face, corner, extent, tile, light, flags)`.
+#[cfg(test)]
+pub fn unpack_vertex(v: [u32; 3]) -> (IVec3, u32, (bool, bool), (u32, u32), u32, Vec3, u32) {
+    let [w0, w1, w2] = v;
+    let local = IVec3::new(
+        (w0 & 31) as i32,
+        ((w0 >> 5) & 31) as i32,
+        ((w0 >> 10) & 63) as i32,
+    );
+    let face = (w0 >> 16) & 7;
+    let corner = ((w0 >> 19) & 1 == 1, (w0 >> 20) & 1 == 1);
+    let extent = (((w0 >> 21) & 31) + 1, ((w0 >> 26) & 31) + 1);
+    let tile = w1 & 4095;
+    let light = Vec3::new(
+        ((w1 >> 12) & 1023) as f32 / SUN_STEP,
+        ((w1 >> 22) & 63) as f32 / LAMP_STEP,
+        ((w2 >> 12) & 255) as f32 / AMBIENT_STEP,
+    );
+    (local, face, corner, extent, tile, light, w2 & 4095)
+}
+
+/// Face number of a normal, as [`pack_vertex`] takes it.
+pub fn face_index(normal: IVec3, cross: bool) -> u32 {
+    if cross {
+        5
+    } else if normal == IVec3::Z {
+        0
+    } else if normal == IVec3::X {
+        1
+    } else if normal == IVec3::Y {
+        2
+    } else if normal == IVec3::NEG_X {
+        3
+    } else {
+        4
+    }
 }
 
 /// The inverse of [`pack_flags`]: `(outline mask, water, top, submerged, drop mask)`.
@@ -487,6 +606,9 @@ pub struct Faces {
     pub colors: Vec<[f32; 4]>,
     /// Per quad: split along corners 1-3 instead of 0-2, so light interpolates evenly.
     pub flips: Vec<bool>,
+    /// The same vertices packed for the chunk materials ([`pack_vertex`]); empty for
+    /// meshes drawn with the plain materials (the figure, particles).
+    pub packed: Vec<[u32; 3]>,
 }
 
 impl Faces {
@@ -503,15 +625,36 @@ impl Faces {
         }
     }
 
+    fn indices(&self) -> Indices {
+        let n = self.len() * 4;
+        if n <= u16::MAX as usize + 1 {
+            Indices::U16(
+                (0..self.len())
+                    .flat_map(|q| {
+                        self.triangles(q)
+                            .into_iter()
+                            .flatten()
+                            .map(move |i| (q * 4 + i) as u16)
+                    })
+                    .collect(),
+            )
+        } else {
+            Indices::U32(
+                (0..self.len())
+                    .flat_map(|q| {
+                        self.triangles(q)
+                            .into_iter()
+                            .flatten()
+                            .map(move |i| (q * 4 + i) as u32)
+                    })
+                    .collect(),
+            )
+        }
+    }
+
+    /// A mesh for the plain materials: float position, uv and colour.
     pub fn into_mesh(self) -> Mesh {
-        let indices = (0..self.len())
-            .flat_map(|q| {
-                self.triangles(q)
-                    .into_iter()
-                    .flatten()
-                    .map(move |i| (q * 4 + i) as u32)
-            })
-            .collect();
+        let indices = self.indices();
         Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::default(),
@@ -519,7 +662,20 @@ impl Faces {
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, self.uvs)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, self.colors)
-        .with_inserted_indices(Indices::U32(indices))
+        .with_inserted_indices(indices)
+    }
+
+    /// A mesh for the chunk materials: the packed attribute alone, 12 bytes a vertex, kept
+    /// on the GPU only.
+    pub fn into_block_mesh(self) -> Mesh {
+        debug_assert_eq!(self.packed.len(), self.positions.len());
+        let indices = self.indices();
+        Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::RENDER_WORLD,
+        )
+        .with_inserted_attribute(ATTRIBUTE_BLOCK, self.packed)
+        .with_inserted_indices(indices)
     }
 }
 
@@ -703,6 +859,13 @@ pub fn chunk_faces(
         } else {
             &mut out.solid
         };
+        let bits = flag_bits(
+            q.mask,
+            is_water,
+            q.normal == IVec3::Z && !q.cross,
+            q.submerged,
+            q.drop,
+        );
         let flags = pack_flags(
             q.mask,
             is_water,
@@ -710,6 +873,8 @@ pub fn chunk_faces(
             q.submerged,
             q.drop,
         );
+        let face = face_index(q.normal, q.cross);
+        let tile_index = id as u32 * 2 + q.tile;
         let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
         let shade = if q.cross {
             // Upright, but a little under full top light so it sits in its cell.
@@ -765,16 +930,23 @@ pub fn chunk_faces(
             let shade_cast = lit && shadowed(sample, SUN, &casts);
             let ambient = shade * OCCLUSION[open] * lift;
             let sun = ambient * if shade_cast { 1.0 - SHADOW } else { 1.0 };
-            lights[i] = sun.max(glow);
-            let uv = (tile_origin
-                + Vec2::splat(INSET)
-                + tile_corner(i, q.rot, q.flip) * (TILE as f32 - 2.0 * INSET))
+            let light = quantize_light(Vec3::new(sun.max(glow), lamp.max(glow), ambient));
+            lights[i] = light.x;
+            let tc = tile_corner(i, q.rot, q.flip);
+            let uv = (tile_origin + Vec2::splat(INSET) + tc * (TILE as f32 - 2.0 * INSET))
                 / tiles.size.as_vec2();
             target.positions.push(corner.to_array());
             target.uvs.push(uv.to_array());
-            target
-                .colors
-                .push([sun.max(glow), lamp.max(glow), ambient, flags]);
+            target.colors.push([light.x, light.y, light.z, flags]);
+            target.packed.push(pack_vertex(
+                corner.round().as_ivec3(),
+                face,
+                (tc.x > 0.5, tc.y > 0.5),
+                (1, 1),
+                tile_index,
+                light,
+                bits,
+            ));
         }
         // Split along the brighter diagonal so a dark corner stays a corner.
         target
@@ -1110,10 +1282,82 @@ mod tests {
     }
 
     #[test]
+    fn packed_vertex_round_trips() {
+        let light = Vec3::new(1.37, 0.6, 0.84);
+        let v = pack_vertex(
+            IVec3::new(16, 3, 32),
+            4,
+            (true, false),
+            (16, 32),
+            4095,
+            light,
+            4095,
+        );
+        let (local, face, corner, extent, tile, got, flags) = unpack_vertex(v);
+        assert_eq!(local, IVec3::new(16, 3, 32));
+        assert_eq!(face, 4);
+        assert_eq!(corner, (true, false));
+        assert_eq!(extent, (16, 32));
+        assert_eq!(tile, 4095);
+        assert_eq!(flags, 4095);
+        // Each channel within its step, and every step well under a light band.
+        assert!((got.x - light.x).abs() <= 0.5 / SUN_STEP);
+        assert!((got.y - light.y).abs() <= 0.5 / LAMP_STEP);
+        assert!((got.z - light.z).abs() <= 0.5 / AMBIENT_STEP);
+    }
+
+    #[test]
+    fn cpu_and_gpu_vertices_agree() {
+        // The canvas draws the float vertices; the GPU unpacks the words. Same numbers.
+        let f = mesh(|p| {
+            if p.z == 0 || p == IVec3::new(3, 3, 1) {
+                1
+            } else {
+                0
+            }
+        });
+        assert_eq!(f.packed.len(), f.positions.len());
+        for (i, v) in f.packed.iter().enumerate() {
+            let (local, _, _, extent, _, light, flags) = unpack_vertex(*v);
+            assert_eq!(local.as_vec3().to_array(), f.positions[i]);
+            assert_eq!(extent, (1, 1));
+            assert_eq!(
+                [light.x, light.y, light.z],
+                [f.colors[i][0], f.colors[i][1], f.colors[i][2]]
+            );
+            assert_eq!(flags as f32 / 2048.0, f.colors[i][3]);
+        }
+    }
+
+    #[test]
+    fn index_type_follows_vertex_count() {
+        let mut small = Faces::default();
+        let mut big = Faces::default();
+        for (f, quads) in [(&mut small, 100usize), (&mut big, 17_000usize)] {
+            for _ in 0..quads * 4 {
+                f.positions.push([0.0; 3]);
+                f.uvs.push([0.0; 2]);
+                f.colors.push([0.0; 4]);
+                f.packed.push([0; 3]);
+            }
+            f.flips.resize(quads, false);
+        }
+        assert!(matches!(
+            small.into_block_mesh().indices(),
+            Some(Indices::U16(_))
+        ));
+        assert!(matches!(
+            big.into_block_mesh().indices(),
+            Some(Indices::U32(_))
+        ));
+    }
+
+    #[test]
     fn glowing_blocks_ignore_shade() {
         let f = mesh(|p| if p == IVec3::new(3, 3, 3) { 3 } else { 0 });
         // Even the face turned away from the sun is at least as bright as the glow.
-        assert!((0..5).all(|q| lights(&f, q).iter().all(|v| *v >= 0.95)));
+        // (Within a packing step of the glow.)
+        assert!((0..5).all(|q| lights(&f, q).iter().all(|v| *v >= 0.95 - 1.0 / LAMP_STEP)));
     }
 
     #[test]
