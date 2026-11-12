@@ -756,6 +756,7 @@ fn install(lua: &Lua) -> mlua::Result<()> {
                     "view_margin" => Some(mlua::Value::Number(streaming.margin as f64)),
                     "horizon" => Some(mlua::Value::Number(streaming.horizon as f64)),
                     "builds" => Some(mlua::Value::Integer(streaming.builds as i64)),
+                    "merge" => Some(mlua::Value::Boolean(w.resource::<Quality>().merge)),
                     "spike_ms" => Some(mlua::Value::Number(w.resource::<Perf>().spike_ms as f64)),
                     _ => None,
                 })
@@ -811,6 +812,10 @@ fn install(lua: &Lua) -> mlua::Result<()> {
                     }
                     ("builds", _, Some(n)) => {
                         w.resource_mut::<Streaming>().builds = (n as usize).clamp(1, 16);
+                        true
+                    }
+                    ("merge", Some(on), _) => {
+                        w.resource_mut::<Quality>().merge = on;
                         true
                     }
                     ("spike_ms", _, Some(ms)) => {

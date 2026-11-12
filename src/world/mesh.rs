@@ -46,6 +46,10 @@ pub const SUN: Vec3 = Vec3::new(-0.9, 0.45, 1.0);
 pub struct Quality {
     pub shadows: bool,
     pub occlusion: bool,
+    /// Join neighbouring cells of a surface into one quad where the picture cannot tell
+    /// (same tile and flags, light that interpolates to the same values). Fewer vertices,
+    /// the same pixels.
+    pub merge: bool,
 }
 
 impl Default for Quality {
@@ -53,6 +57,7 @@ impl Default for Quality {
         Self {
             shadows: true,
             occlusion: true,
+            merge: true,
         }
     }
 }
@@ -433,6 +438,7 @@ pub fn flag_bits(mask: u32, water: bool, top: bool, submerged: bool, drop: u32, 
 }
 
 /// [`flag_bits`] as the vertex alpha of the CPU-side [`Faces`] (the canvas reads it).
+#[cfg(test)]
 pub fn pack_flags(
     mask: u32,
     water: bool,
@@ -894,24 +900,16 @@ pub fn chunk_faces(
         }
     }
 
+    // Light every quad, then push it: merged with its neighbours where that changes
+    // nothing on screen, or on its own.
+    let mut lit: Vec<Lit> = Vec::with_capacity(quads.len());
     for q in quads {
         let id = block(q.p);
         let is_water = water(id);
-        let target = if is_water {
-            &mut out.water
-        } else {
-            &mut out.solid
-        };
         let top = q.normal == IVec3::Z && !q.cross;
         let bits = flag_bits(q.mask, is_water, top, q.submerged, q.drop, grid);
-        let flags = pack_flags(q.mask, is_water, top, q.submerged, q.drop, grid);
         let face = face_index(q.normal, q.cross);
         let tile_index = id as u32 * 2 + q.tile;
-        target.meta.push(QuadMeta {
-            tile: tile_index,
-            face: face as u8,
-            extent: (1, 1),
-        });
         let glow = tiles.glow.get(id as usize).copied().unwrap_or(0.0);
         let shade = if q.cross {
             // Upright, but a little under full top light so it sits in its cell.
@@ -919,12 +917,12 @@ pub fn chunk_faces(
         } else {
             face_shade(q.normal)
         };
-        let lit = quality.shadows && q.normal.as_vec3().dot(SUN) > 0.0;
+        let sunward = quality.shadows && q.normal.as_vec3().dot(SUN) > 0.0;
         let centre = q.corners.iter().sum::<Vec3>() / 4.0;
         let local = q.p - origin;
         let block_centre = local.as_vec3() + Vec3::splat(0.5);
         let lift = 1.0 + (local.z as f32 - MID) * RISE;
-        let mut lights = [0.0f32; 4];
+        let mut lights = [Vec3::ZERO; 4];
         for (i, corner) in q.corners.iter().enumerate() {
             // The two neighbours beside this corner and the one diagonal to it, all in
             // the layer the face looks into. A cross quad reads its own cell.
@@ -963,31 +961,265 @@ pub fn chunk_faces(
                 / super::light::REACH as f32;
             // Shadow is sampled a quarter of the way in from the corner.
             let sample = origin.as_vec3() + corner.lerp(centre, 0.5) + q.normal.as_vec3() * 0.02;
-            let shade_cast = lit && shadowed(sample, SUN, &casts);
+            let shade_cast = sunward && shadowed(sample, SUN, &casts);
             let ambient = shade * OCCLUSION[open] * lift;
             let sun = ambient * if shade_cast { 1.0 - SHADOW } else { 1.0 };
-            let light = quantize_light(Vec3::new(sun.max(glow), lamp.max(glow), ambient));
-            lights[i] = light.x;
-            let tc = corner_uv(i);
-            target.positions.push(corner.to_array());
-            target.uvs.push(tc.to_array());
-            target.colors.push([light.x, light.y, light.z, flags]);
-            target.packed.push(pack_vertex(
-                corner.round().as_ivec3(),
-                face,
-                (tc.x > 0.5, tc.y > 0.5),
-                (1, 1),
-                tile_index,
-                light,
-                bits,
-            ));
+            lights[i] = quantize_light(Vec3::new(sun.max(glow), lamp.max(glow), ambient));
         }
-        // Split along the brighter diagonal so a dark corner stays a corner.
-        target
-            .flips
-            .push(lights[1] + lights[3] > lights[0] + lights[2]);
+        lit.push(Lit {
+            local,
+            face,
+            cross: q.cross,
+            corners: q.corners,
+            tile: tile_index,
+            water: is_water,
+            bits,
+            lights,
+        });
+    }
+    if quality.merge {
+        merge_and_push(&mut out, lit);
+    } else {
+        for l in lit {
+            let target = if l.water {
+                &mut out.water
+            } else {
+                &mut out.solid
+            };
+            push_quad(target, &l, l.corners, (1, 1), l.lights, l.bits);
+        }
     }
     out
+}
+
+/// A quad with its light worked out, before it is pushed.
+#[derive(Clone)]
+struct Lit {
+    /// The cell, relative to the chunk origin.
+    local: IVec3,
+    face: u32,
+    cross: bool,
+    corners: [Vec3; 4],
+    tile: u32,
+    water: bool,
+    /// [`flag_bits`], edges by geometric edge.
+    bits: u32,
+    /// Quantised light channels at the four corners.
+    lights: [Vec3; 4],
+}
+
+/// Pushes one quad of `extent` cells.
+fn push_quad(
+    target: &mut Faces,
+    l: &Lit,
+    corners: [Vec3; 4],
+    extent: (u32, u32),
+    lights: [Vec3; 4],
+    bits: u32,
+) {
+    let flags = bits as f32 / 4096.0;
+    target.meta.push(QuadMeta {
+        tile: l.tile,
+        face: l.face as u8,
+        extent: (extent.0 as u8, extent.1 as u8),
+    });
+    for (i, corner) in corners.iter().enumerate() {
+        let light = lights[i];
+        let tc = corner_uv(i) * Vec2::new(extent.0 as f32, extent.1 as f32);
+        target.positions.push(corner.to_array());
+        target.uvs.push(tc.to_array());
+        target.colors.push([light.x, light.y, light.z, flags]);
+        target.packed.push(pack_vertex(
+            corner.round().as_ivec3(),
+            l.face,
+            (tc.x > 0.5, tc.y > 0.5),
+            extent,
+            l.tile,
+            light,
+            bits,
+        ));
+    }
+    // Split along the brighter diagonal so a dark corner stays a corner.
+    target
+        .flips
+        .push(lights[1].x + lights[3].x > lights[0].x + lights[2].x);
+}
+
+/// Where a face's cell sits on its surface: the plane it lies in and its `(u, v)` on
+/// that plane, in the face's own axes (the ones its corners run along).
+fn surface_cell(local: IVec3, face: u32) -> (i32, IVec2) {
+    let n = CHUNK - 1;
+    match face {
+        0 => (local.z, IVec2::new(local.x, local.y)),
+        1 => (local.x, IVec2::new(local.y, local.z)),
+        2 => (local.y, IVec2::new(n - local.x, local.z)),
+        3 => (local.x, IVec2::new(n - local.y, local.z)),
+        _ => (local.y, IVec2::new(local.x, local.z)),
+    }
+}
+
+/// Edge bits that may differ between two cells joined along `u` (the `v = 0` and `v = 1`
+/// edges must agree) and along `v` (the `u` edges must agree).
+const U_EDGES: u32 = 0b1010;
+const V_EDGES: u32 = 0b0101;
+
+/// Joins cells of the same surface into runs along `u` and runs into rectangles along
+/// `v`, where the light interpolates to the same values the single cells had (constant
+/// along the joined direction in each cell and equal between them) and the tile, flags
+/// and the edges that remain on the joined quad's border agree. Everything else is pushed
+/// as it is. Lossless: the canvas and the GPU draw the same pixels either way.
+fn merge_and_push(out: &mut ChunkFaces, lit: Vec<Lit>) {
+    use std::collections::HashMap;
+    // Group the cube faces by surface; cross props go straight out.
+    let mut surfaces: HashMap<(u32, i32), Vec<usize>> = HashMap::new();
+    for (i, l) in lit.iter().enumerate() {
+        if l.cross {
+            push_quad(&mut out.solid, l, l.corners, (1, 1), l.lights, l.bits);
+            continue;
+        }
+        let (plane, _) = surface_cell(l.local, l.face);
+        surfaces.entry((l.face, plane)).or_default().push(i);
+    }
+    let mut keys: Vec<(u32, i32)> = surfaces.keys().copied().collect();
+    keys.sort_unstable();
+    for key in keys {
+        let members = &surfaces[&key];
+        // The surface as a grid of quad indices, u across, v up.
+        let mut grid = [[None::<usize>; CHUNK as usize]; HEIGHT as usize];
+        for &i in members {
+            let (_, uv) = surface_cell(lit[i].local, lit[i].face);
+            grid[uv.y as usize][uv.x as usize] = Some(i);
+        }
+        let rows = if key.0 == 0 { CHUNK } else { HEIGHT } as usize;
+        let mut taken = [[false; CHUNK as usize]; HEIGHT as usize];
+        for v0 in 0..rows {
+            for u0 in 0..CHUNK as usize {
+                let Some(first) = grid[v0][u0] else {
+                    continue;
+                };
+                if taken[v0][u0] {
+                    continue;
+                }
+                let a = &lit[first];
+                // A run along u.
+                let mut w = 1;
+                while u0 + w < CHUNK as usize {
+                    let Some(next) = grid[v0][u0 + w] else {
+                        break;
+                    };
+                    if taken[v0][u0 + w]
+                        || !joins_u(&lit[grid[v0][u0 + w - 1].unwrap()], &lit[next])
+                    {
+                        break;
+                    }
+                    w += 1;
+                }
+                // Rows of the same run, while the light is flat over all of them.
+                let mut h = 1;
+                let flat = |l: &Lit| l.lights.iter().all(|c| *c == l.lights[0]);
+                if flat(a) {
+                    'rows: while v0 + h < rows {
+                        for u in u0..u0 + w {
+                            let (Some(below), Some(here)) = (grid[v0 + h - 1][u], grid[v0 + h][u])
+                            else {
+                                break 'rows;
+                            };
+                            if taken[v0 + h][u] || !joins_v(&lit[below], &lit[here]) {
+                                break 'rows;
+                            }
+                            // The row must be the same run: it joins along u the same way,
+                            // and starts and ends where this one does.
+                            if u == u0
+                                && u0 > 0
+                                && grid[v0 + h][u0 - 1].is_some_and(|g| {
+                                    !taken[v0 + h][u0 - 1] && joins_u(&lit[g], &lit[here])
+                                })
+                            {
+                                break 'rows;
+                            }
+                            if u == u0 + w - 1
+                                && u0 + w < CHUNK as usize
+                                && grid[v0 + h][u0 + w]
+                                    .is_some_and(|g| joins_u(&lit[here], &lit[g]))
+                            {
+                                break 'rows;
+                            }
+                        }
+                        h += 1;
+                    }
+                }
+                for row in taken.iter_mut().skip(v0).take(h) {
+                    for cell in row.iter_mut().skip(u0).take(w) {
+                        *cell = true;
+                    }
+                }
+                let target = if a.water {
+                    &mut out.water
+                } else {
+                    &mut out.solid
+                };
+                if w == 1 && h == 1 {
+                    push_quad(target, a, a.corners, (1, 1), a.lights, a.bits);
+                    continue;
+                }
+                // The merged quad: corners from the four corner cells, edge bits from the
+                // run's ends and the first and last rows, the rest from the first cell.
+                let at = |u: usize, v: usize| &lit[grid[v][u].expect("in the rectangle")];
+                let (bl, br, tr, tl) = (
+                    at(u0, v0),
+                    at(u0 + w - 1, v0),
+                    at(u0 + w - 1, v0 + h - 1),
+                    at(u0, v0 + h - 1),
+                );
+                let corners = [bl.corners[0], br.corners[1], tr.corners[2], tl.corners[3]];
+                let lights = [bl.lights[0], br.lights[1], tr.lights[2], tl.lights[3]];
+                let mask = (bl.bits & 0b1001) | (br.bits & 0b0010) | (tl.bits & 0b0100);
+                let drop = ((bl.bits >> 7) & 0b1001)
+                    | ((br.bits >> 7) & 0b0010)
+                    | ((tl.bits >> 7) & 0b0100);
+                let rest = a.bits & !(15 | (15 << 7));
+                let bits = rest | mask | drop << 7;
+                push_quad(target, a, corners, (w as u32, h as u32), lights, bits);
+            }
+        }
+    }
+}
+
+/// Whether `b`, the cell after `a` along `u`, continues `a`'s quad.
+fn joins_u(a: &Lit, b: &Lit) -> bool {
+    a.tile == b.tile
+        && a.water == b.water
+        && same_but(a.bits, b.bits, U_EDGES)
+        && a.bits & 0b0010 == 0
+        && b.bits & 0b1000 == 0
+        && (a.bits >> 7) & 0b0010 == 0
+        && (b.bits >> 7) & 0b1000 == 0
+        && a.lights[0] == a.lights[1]
+        && a.lights[3] == a.lights[2]
+        && b.lights[0] == b.lights[1]
+        && b.lights[3] == b.lights[2]
+        && a.lights[0] == b.lights[0]
+        && a.lights[3] == b.lights[3]
+}
+
+/// Whether `b`, the cell above `a` along `v`, continues `a`'s quad: flat light.
+fn joins_v(a: &Lit, b: &Lit) -> bool {
+    a.tile == b.tile
+        && a.water == b.water
+        && same_but(a.bits, b.bits, V_EDGES)
+        && a.bits & 0b0100 == 0
+        && b.bits & 0b0001 == 0
+        && (a.bits >> 7) & 0b0100 == 0
+        && (b.bits >> 7) & 0b0001 == 0
+        && a.lights.iter().all(|c| *c == a.lights[0])
+        && b.lights.iter().all(|c| *c == a.lights[0])
+}
+
+/// Whether two flag words agree except in the given edge bits (of the mask and the drop
+/// mask both).
+fn same_but(a: u32, b: u32, edges: u32) -> bool {
+    let keep = !(edges | edges << 7);
+    a & keep == b & keep
 }
 
 /// The four corners of the face of block `p` with outward `normal`, ordered so that edge
@@ -1012,6 +1244,244 @@ pub fn corners(p: IVec3, normal: IVec3) -> [Vec3; 4] {
 mod tests {
     use super::*;
     use crate::cam::Cam;
+
+    /// Every cell its own quad, for the tests that count and inspect them.
+    fn unmerged() -> Quality {
+        Quality {
+            merge: false,
+            ..Quality::default()
+        }
+    }
+
+    #[test]
+    fn a_flat_floor_merges_to_one_quad() {
+        let floor = |p: IVec3| if p.z == 0 { 1 } else { 0 };
+        let f = chunk_faces(
+            IVec2::ZERO,
+            false,
+            Quality::default(),
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            floor,
+        )
+        .solid;
+        assert_eq!(f.len(), 1);
+        assert_eq!(f.meta[0].extent, (16, 16));
+        let (local, _, _, extent, _, _, _) = unpack_vertex(f.packed[2]);
+        assert_eq!((local, extent), (IVec3::new(16, 16, 1), (16, 16)));
+        // The face-local coordinates span the cells.
+        assert_eq!(f.uvs[2], [16.0, 16.0]);
+        // With the grid on it is still one quad; the shader inks each cell.
+        let g = chunk_faces(
+            IVec2::ZERO,
+            true,
+            Quality::default(),
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            floor,
+        )
+        .solid;
+        assert_eq!(g.len(), 1);
+        assert!(unpack_flags(g.colors[0][3]).5);
+    }
+
+    #[test]
+    fn a_change_of_block_is_two_quads_with_a_seam() {
+        // Two kinds of floor, split down the middle: two quads, inked where they meet.
+        let f = chunk_faces(
+            IVec2::ZERO,
+            false,
+            Quality::default(),
+            &tiles(),
+            &super::super::light::Grid::empty(),
+            |p| {
+                if p.z != 0 {
+                    0
+                } else if p.x < 8 {
+                    1
+                } else {
+                    2
+                }
+            },
+        )
+        .solid;
+        assert_eq!(f.len(), 2);
+        let seam: Vec<u32> = f
+            .colors
+            .iter()
+            .step_by(4)
+            .map(|c| unpack_flags(c[3]).0)
+            .collect();
+        // One has its u = 1 edge inked, the other its u = 0 edge.
+        assert!(seam.contains(&0b0010) && seam.contains(&0b1000), "{seam:?}");
+    }
+
+    /// Checks that `merged` draws exactly what `cells` (the same surface, a quad per
+    /// cell) draws: every cell lies inside one merged quad of the same face, tile and
+    /// flags, and the merged quad's light interpolates to the cell's corner light.
+    fn assert_lossless(cells: &Faces, merged: &Faces) {
+        for q in 0..cells.len() {
+            let m = &cells.meta[q];
+            let ps: Vec<Vec3> = (0..4)
+                .map(|k| Vec3::from(cells.positions[q * 4 + k]))
+                .collect();
+            let host = (0..merged.len())
+                .find(|&r| {
+                    let rm = &merged.meta[r];
+                    let c0 = Vec3::from(merged.positions[r * 4]);
+                    let du = Vec3::from(merged.positions[r * 4 + 1]) - c0;
+                    let dv = Vec3::from(merged.positions[r * 4 + 3]) - c0;
+                    rm.face == m.face
+                        && ps.iter().all(|p| {
+                            let d = *p - c0;
+                            let u = d.dot(du) / du.length_squared();
+                            let v = d.dot(dv) / dv.length_squared();
+                            (-1e-4..=1.0 + 1e-4).contains(&u)
+                                && (-1e-4..=1.0 + 1e-4).contains(&v)
+                                && (d - du * u - dv * v).length() < 1e-4
+                        })
+                })
+                .unwrap_or_else(|| {
+                    panic!("cell {:?} of face {} has no merged quad", ps[0], m.face)
+                });
+            let rm = &merged.meta[host];
+            assert_eq!(rm.tile, m.tile);
+            let c0 = Vec3::from(merged.positions[host * 4]);
+            let du = Vec3::from(merged.positions[host * 4 + 1]) - c0;
+            let dv = Vec3::from(merged.positions[host * 4 + 3]) - c0;
+            let light = |k: usize| {
+                let c = merged.colors[host * 4 + k];
+                Vec3::new(c[0], c[1], c[2])
+            };
+            // Which cell of the merged quad this is, from the cell's first corner.
+            let extent = IVec2::new(rm.extent.0 as i32, rm.extent.1 as i32);
+            let cell = {
+                let d = ps[0] - c0;
+                IVec2::new(
+                    (d.dot(du) / du.length_squared() * extent.x as f32).round() as i32,
+                    (d.dot(dv) / dv.length_squared() * extent.y as f32).round() as i32,
+                )
+            };
+            for k in 0..4 {
+                let d = ps[k] - c0;
+                let u = d.dot(du) / du.length_squared();
+                let v = d.dot(dv) / dv.length_squared();
+                let want = cells.colors[q * 4 + k];
+                let got = light(0) * (1.0 - u) * (1.0 - v)
+                    + light(1) * u * (1.0 - v)
+                    + light(2) * u * v
+                    + light(3) * (1.0 - u) * v;
+                assert!(
+                    (got - Vec3::new(want[0], want[1], want[2]))
+                        .abs()
+                        .max_element()
+                        < 1e-5,
+                    "cell {:?} corner {k}: merged light {got} against {want:?}",
+                    ps[0]
+                );
+                // Flags other than the edges agree; the cell's own edges are a subset of
+                // what the merged quad shows on that border.
+                let (cm, cw, ct, cs, cd, cg) = unpack_flags(want[3]);
+                let (mm, mw, mt, ms, md, mg) = unpack_flags(merged.colors[host * 4][3]);
+                assert_eq!((cw, ct, cs, cg), (mw, mt, ms, mg));
+                assert_eq!(
+                    border_edges(mm, cell, extent, mg),
+                    border_edges(cm, IVec2::ZERO, IVec2::ONE, cg),
+                    "cell {:?} edges",
+                    ps[0]
+                );
+                assert_eq!(
+                    border_edges(md, cell, extent, false),
+                    cd,
+                    "cell {:?} drops",
+                    ps[0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn merging_is_lossless() {
+        let lamp_world = |p: IVec3| {
+            if p.z == 0 {
+                1
+            } else if p == IVec3::new(6, 6, 1) {
+                3
+            } else {
+                0
+            }
+        };
+        let pillar = |p: IVec3| (p.z == 0 || (p.x == 8 && p.y == 8 && p.z < 4)) as u16;
+        let shore = |p: IVec3| {
+            if p.z == 0 {
+                1
+            } else if p.z == 1 && p.x < 6 {
+                2
+            } else {
+                0
+            }
+        };
+        let families = |p: IVec3| {
+            if p.z != 0 {
+                0
+            } else if (p.x + p.y) % 5 == 0 {
+                2
+            } else {
+                1
+            }
+        };
+        for (name, world) in [
+            ("pillar", &pillar as &dyn Fn(IVec3) -> u16),
+            ("lamp", &lamp_world),
+            ("shore", &shore),
+            ("families", &families),
+        ] {
+            let t = tiles();
+            let mut map = crate::world::Map::default();
+            map.chunks.insert(
+                IVec2::ZERO,
+                crate::world::Chunk::new(crate::world::empty_blocks(), false),
+            );
+            for z in 0..4 {
+                for y in 0..CHUNK {
+                    for x in 0..CHUNK {
+                        let p = IVec3::new(x, y, z);
+                        map.set(p, world(p));
+                    }
+                }
+            }
+            let emits = [0u8, 0, 0, 14];
+            let lamps = crate::world::light::flood(
+                IVec2::ZERO,
+                &crate::world::Nearby::of(&map, IVec2::ZERO),
+                &emits,
+                |b| b == 0,
+                |q| map.block(q),
+            );
+            let run = |merge: bool| {
+                chunk_faces(
+                    IVec2::ZERO,
+                    false,
+                    Quality {
+                        merge,
+                        ..Quality::default()
+                    },
+                    &t,
+                    &lamps,
+                    |p| map.block(p),
+                )
+            };
+            let (cells, merged) = (run(false), run(true));
+            assert!(
+                merged.solid.len() < cells.solid.len(),
+                "{name}: {} merged, {} cells",
+                merged.solid.len(),
+                cells.solid.len()
+            );
+            assert_lossless(&cells.solid, &merged.solid);
+            assert_lossless(&cells.water, &merged.water);
+        }
+    }
 
     fn tiles() -> Tiles {
         let mut blocks = Registry::<BlockDef>::default();
@@ -1042,7 +1512,7 @@ mod tests {
         chunk_faces(
             IVec2::ZERO,
             false,
-            Quality::default(),
+            unmerged(),
             &tiles(),
             &super::super::light::Grid::empty(),
             world,
@@ -1053,7 +1523,7 @@ mod tests {
         chunk_faces(
             IVec2::ZERO,
             false,
-            Quality::default(),
+            unmerged(),
             &tiles(),
             &super::super::light::Grid::empty(),
             world,
@@ -1193,7 +1663,7 @@ mod tests {
         let g = chunk_faces(
             IVec2::ZERO,
             true,
-            Quality::default(),
+            unmerged(),
             &t,
             &super::super::light::Grid::empty(),
             floor,
@@ -1271,7 +1741,7 @@ mod tests {
         // the block, so no shadow falls on it either).
         let plain = Quality {
             occlusion: false,
-            ..default()
+            ..unmerged()
         };
         let g = chunk_faces(
             IVec2::ZERO,
@@ -1302,7 +1772,7 @@ mod tests {
         // With shadows off the same cell is fully lit.
         let plain = Quality {
             shadows: false,
-            ..default()
+            ..unmerged()
         };
         let g = chunk_faces(
             IVec2::ZERO,
@@ -1342,12 +1812,14 @@ mod tests {
             }
         }
         for (name, quality) in [
-            ("shadows and occlusion", Quality::default()),
+            ("shadows and occlusion, merged", Quality::default()),
+            ("shadows and occlusion", unmerged()),
             (
                 "occlusion only",
                 Quality {
                     shadows: false,
                     occlusion: true,
+                    merge: false,
                 },
             ),
             (
@@ -1355,6 +1827,7 @@ mod tests {
                 Quality {
                     shadows: false,
                     occlusion: false,
+                    merge: false,
                 },
             ),
         ] {
@@ -1483,14 +1956,9 @@ mod tests {
             |b| b == 0,
             |q| map.block(q),
         );
-        let f = chunk_faces(
-            IVec2::ZERO,
-            false,
-            Quality::default(),
-            &tiles(),
-            &grid,
-            |q| map.block(q),
-        )
+        let f = chunk_faces(IVec2::ZERO, false, unmerged(), &tiles(), &grid, |q| {
+            map.block(q)
+        })
         .solid;
         let lamp = |q: usize| {
             f.colors[q * 4..q * 4 + 4]
