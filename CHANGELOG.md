@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.1
+
+### Fixed
+- The block under the pointer was not the block picked. 1.2.0 wrote the camera's
+  projection only when its inputs changed; Bevy fills an orthographic projection's area
+  from the viewport only on change, and the viewport of the first frames is not the final
+  one, so the world was drawn at the wrong scale and offset while the pick (through `Cam`)
+  was right. The projection is written every frame again, as before.
+
 ## 1.2.0
 
 The engine made fast: less work on the main thread, a third of the mesh bytes, a

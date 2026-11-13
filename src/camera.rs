@@ -36,7 +36,6 @@ pub fn follow(
     picture: Res<Picture>,
     settings: Res<Settings>,
     mut cams: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
-    mut last: Local<Option<(Vec2, f32, bool)>>,
 ) {
     let (right, up) = cam.axes();
     let p = cam.project(picture.size, cam.focus);
@@ -47,18 +46,17 @@ pub fn follow(
     // Picture pixels per texel: the magnification over the picture's own coarseness.
     let magnify = cam.magnify / settings.picture_scale.clamp(1, 4) as f32;
     let (transform, projection) = snapped.pose(picture.size, magnify);
-    // The projection depends on the picture, the magnification and the kind only; writing
-    // it marks the camera changed, so it is written when one of those moved.
-    let key = (picture.size, magnify, cam.perspective);
-    let fresh = *last != Some(key);
-    *last = Some(key);
+    // The projection is written every frame on purpose. Bevy fills an orthographic
+    // projection's `area` from the viewport only when the projection changed, and the
+    // viewport it sees on the first frames (before the window's scale factor and the
+    // picture target settle) is not the final one; a projection written once was left
+    // with the wrong area, drawing the world at the wrong scale and offset while the
+    // pick, which goes through `Cam`, did not follow (1.2.0).
     for (mut tf, mut proj) in &mut cams {
         if *tf != transform {
             *tf = transform;
         }
-        if fresh {
-            *proj = projection.clone();
-        }
+        *proj = projection.clone();
     }
 }
 
