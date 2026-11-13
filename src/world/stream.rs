@@ -17,7 +17,10 @@ use super::worldgen::WorldGen;
 use super::{Blocks, CHUNK, Chunk, Focus, HEIGHT, Map, Nearby, Parked, chunk_of, light};
 use crate::cam::{Cam, Lens};
 
-/// The picture's size in texels: the render target the camera draws into.
+/// The picture's size in texels: what `Cam` projects into, and the unit of the cursor,
+/// the streaming reach and the dead zone. A texel is `magnify` picture pixels, so on a
+/// window this is the physical size over the magnification (`pixel_scale`); a snapshot
+/// sets its own.
 #[derive(Resource, Clone, Copy)]
 pub struct Picture {
     pub size: Vec2,

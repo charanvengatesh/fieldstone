@@ -34,7 +34,6 @@ pub fn setup(mut commands: Commands) {
 pub fn follow(
     cam: Res<Cam>,
     picture: Res<Picture>,
-    settings: Res<Settings>,
     mut cams: Query<(&mut Transform, &mut Projection), With<MainCamera>>,
 ) {
     let (right, up) = cam.axes();
@@ -43,9 +42,7 @@ pub fn follow(
     let nudge = (right * snap.x + up * snap.y) / cam.zoom();
     let mut snapped = *cam;
     snapped.focus -= nudge;
-    // Picture pixels per texel: the magnification over the picture's own coarseness.
-    let magnify = cam.magnify / settings.picture_scale.clamp(1, 4) as f32;
-    let (transform, projection) = snapped.pose(picture.size, magnify);
+    let (transform, projection) = snapped.pose(picture.size);
     // The projection is written every frame on purpose. Bevy fills an orthographic
     // projection's `area` from the viewport only when the projection changed, and the
     // viewport it sees on the first frames (before the window's scale factor and the
@@ -61,16 +58,18 @@ pub fn follow(
 }
 
 /// The pointer as texels from the middle of the picture, x right, y up. A texel is
-/// `pixel_scale` physical pixels; the window reports the pointer in logical ones.
+/// `magnify` physical pixels (the picture's own coarseness is already in that: a
+/// coarser picture draws fewer, bigger pixels a texel); the window reports the pointer
+/// in logical ones.
 pub fn track_cursor(
-    settings: Res<Settings>,
+    cam: Res<Cam>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut cursor: ResMut<Cursor>,
 ) {
     cursor.0 = window.cursor_position().map(|p| {
         let centre = Vec2::new(window.width(), window.height()) / 2.0;
         let d = (p - centre) * window.scale_factor();
-        Vec2::new(d.x, -d.y) / settings.picture_scale.clamp(1, 4) as f32
+        Vec2::new(d.x, -d.y) / cam.magnify.max(1e-3)
     });
 }
 

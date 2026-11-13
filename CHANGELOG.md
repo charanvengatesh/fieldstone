@@ -1,5 +1,21 @@
 # Changelog
 
+## 1.2.2
+
+### Fixed
+- The block under the pointer is the block picked, at every zoom and in both projections.
+  Since 1.0.1 the picture was drawn at `pixel_scale` pixels a texel while `Cam` (the
+  pick, the streaming reach, the dead zone) took a texel to be one pixel: right at the
+  centre, off by the zoom factor away from it. `Picture.size` is now the picture in texels,
+  the pointer is read in texels, and the camera's orthographic area is given in world
+  units outright (Bevy's own fitting goes by the window's logical size, half the pixels on
+  a high-density display, which also drew the world at twice the size).
+- Perspective now keeps the orthographic framing when toggled (it showed `pixel_scale`
+  times more world) and zooms with the magnification.
+- Streaming loaded `pixel_scale` times too wide a view for the same reason; the loaded
+  chunk count at the default zoom falls accordingly.
+- The software canvas skips triangles with a corner behind the eye instead of streaking.
+
 ## 1.2.1
 
 ### Fixed

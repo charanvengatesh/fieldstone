@@ -638,6 +638,9 @@ impl Canvas {
             for tri in faces.triangles(q) {
                 let i = tri.map(|k| q * 4 + k);
                 let screen = i.map(|k| place(faces.positions[k]));
+                if screen.iter().any(|s| !s.x.is_finite() || !s.y.is_finite()) {
+                    continue;
+                }
                 let p = screen.map(to_px);
                 let area = (p[1] - p[0]).perp_dot(p[2] - p[0]);
                 if area.abs() < 1e-6 {

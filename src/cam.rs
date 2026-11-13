@@ -12,6 +12,7 @@
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, TAU};
 
+use bevy::camera::ScalingMode;
 use bevy::prelude::*;
 
 use crate::core::PointerCaptured;
@@ -303,9 +304,11 @@ impl Cam {
         self.lens(target).unproject(texel, z)
     }
 
-    /// Bevy's transform and projection for this camera on a `target`-sized picture drawn
-    /// at `magnify` pixels per texel (1 when the picture is its own render target).
-    pub fn pose(&self, target: Vec2, magnify: f32) -> (Transform, Projection) {
+    /// Bevy's transform and projection for this camera on a picture `target` texels wide
+    /// and high. The picture may be drawn at any number of pixels a texel: the area is
+    /// given in world units, so Bevy's own fitting (which goes by the viewport's logical
+    /// size, half the pixels on a high-density window) has no say.
+    pub fn pose(&self, target: Vec2) -> (Transform, Projection) {
         let eye = if self.perspective {
             self.focus + self.toward_eye() * self.perspective_distance(target.y)
         } else {
@@ -321,7 +324,11 @@ impl Cam {
             })
         } else {
             Projection::Orthographic(OrthographicProjection {
-                scale: 1.0 / (self.zoom() * magnify.max(1e-3)),
+                scaling_mode: ScalingMode::Fixed {
+                    width: target.x / self.zoom(),
+                    height: target.y / self.zoom(),
+                },
+                scale: 1.0,
                 near: 0.1,
                 far: 2000.0,
                 ..OrthographicProjection::default_3d()
@@ -359,6 +366,11 @@ impl Lens {
     /// nearer the eye.
     pub fn project(&self, p: Vec3) -> Vec3 {
         let clip = self.clip * p.extend(1.0);
+        if clip.w <= 1e-4 {
+            // Behind the eye (perspective): no place on the picture. The canvas skips
+            // triangles with such a corner; the GPU clips them itself.
+            return Vec3::new(f32::NAN, f32::NAN, (self.view * p.extend(1.0)).z);
+        }
         let ndc = clip.truncate() / clip.w;
         let depth = (self.view * p.extend(1.0)).z;
         Vec3::new(
@@ -459,11 +471,10 @@ pub fn follow(
     }
 
     // Dead zone: the anchor only moves when the player leaves the box around it, measured
-    // on the picture, in texels of the magnified picture.
-    let m = cam.magnify / settings.picture_scale.clamp(1, 4) as f32;
+    // on the picture in texels, so it covers the same ground at every magnification.
     if cam.dead_zone_on {
         let d = (cam.project(target, focus.0) - cam.project(target, cam.settled)).truncate();
-        let zone = DEAD_ZONE * m;
+        let zone = DEAD_ZONE;
         let excess = Vec2::new(
             (d.x.abs() - zone.x).max(0.0) * d.x.signum(),
             (d.y.abs() - zone.y).max(0.0) * d.y.signum(),
@@ -478,9 +489,7 @@ pub fn follow(
 
     // Peek toward the pointer, unless a script has the pointer.
     let want_peek = match cursor.0 {
-        Some(o) if cam.peek_on && !captured.0 => {
-            (o * PEEK_SHARE).clamp(-PEEK_MAX * m, PEEK_MAX * m)
-        }
+        Some(o) if cam.peek_on && !captured.0 => (o * PEEK_SHARE).clamp(-PEEK_MAX, PEEK_MAX),
         _ => Vec2::ZERO,
     };
     cam.peek = ease2(cam.peek, want_peek, dt, 8.0);
@@ -515,6 +524,44 @@ mod tests {
     use super::*;
 
     const T: Vec2 = Vec2::new(1280.0, 800.0);
+
+    /// The Bevy camera `pose` builds must put points where `Cam::project` says, whatever
+    /// size Bevy hands the projection: on a high-density window the viewport Bevy fits an
+    /// orthographic area to is the logical size, half the picture's pixels.
+    #[test]
+    fn the_bevy_camera_agrees_with_cam_at_any_viewport_scale() {
+        let pixels = Vec2::new(2560.0, 1440.0);
+        for perspective in [false, true] {
+            let mut cam = Cam::quarter(1);
+            cam.perspective = perspective;
+            cam.focus = Vec3::new(10.0, -4.0, 12.0);
+            for magnify in [1.0f32, 3.0] {
+                // The picture in texels, `magnify` pixels each.
+                let target = pixels / magnify;
+                let (transform, mut projection) = cam.pose(target);
+                for logical in [pixels, pixels / 2.0] {
+                    projection.update(logical.x, logical.y);
+                    let clip_from_view = projection.get_clip_from_view();
+                    let view_from_world = transform.to_matrix().inverse();
+                    for p in [
+                        Vec3::new(12.0, -3.0, 12.0),
+                        Vec3::new(30.0, 5.0, 20.0),
+                        Vec3::new(-7.0, -40.0, 0.0),
+                    ] {
+                        let clip = clip_from_view * view_from_world * p.extend(1.0);
+                        let ndc = clip.truncate() / clip.w;
+                        // Picture pixels from the centre, x right, y up, both ways.
+                        let gpu = Vec2::new(ndc.x, ndc.y) * pixels / 2.0;
+                        let cpu = cam.project(target, p).truncate() * magnify;
+                        assert!(
+                            (gpu - cpu).length() < 0.05,
+                            "perspective {perspective}, magnify {magnify}, logical {logical}: {p} lands at {gpu} on the GPU and {cpu} by Cam"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn projection_and_ray_round_trip_in_both_projections() {

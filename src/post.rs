@@ -20,6 +20,7 @@ use bevy::sprite_render::{Material2d, Material2dKey, Material2dPipeline, MeshMat
 use bevy::ui::IsDefaultUiCamera;
 use bevy::window::PrimaryWindow;
 
+use crate::cam::Cam;
 use crate::camera::MainCamera;
 use crate::core::settings::Settings;
 use crate::core::{Registry, ShaderDef};
@@ -154,11 +155,12 @@ pub fn setup(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<PostArt>>,
     mut picture: ResMut<Picture>,
+    cam: Res<Cam>,
     world_cam: Single<Entity, With<MainCamera>>,
     mut commands: Commands,
 ) {
     let size = picture_size(&window, settings.picture_scale);
-    picture.size = size.as_vec2();
+    picture.size = texels(size, &cam, &settings);
     let a = images.add(picture_image(size));
     let b = images.add(picture_image(size));
     commands
@@ -261,6 +263,12 @@ pub fn setup(
 
 /// Pixels across and down the picture: the window's physical pixels over the picture
 /// scale.
+/// The picture's size in texels: its pixels over the pixels a texel takes on it.
+fn texels(picture: UVec2, cam: &Cam, settings: &Settings) -> Vec2 {
+    let per_texel = cam.magnify.max(1e-3) / settings.picture_scale.clamp(1, 4) as f32;
+    picture.as_vec2() / per_texel
+}
+
 fn picture_size(window: &Window, picture_scale: u32) -> UVec2 {
     let scale = picture_scale.clamp(1, 4);
     UVec2::new(
@@ -276,6 +284,7 @@ fn picture_size(window: &Window, picture_scale: u32) -> UVec2 {
 pub fn wire(
     time: Res<Time>,
     settings: Res<Settings>,
+    cam: Res<Cam>,
     window: Single<&Window, With<PrimaryWindow>>,
     mut chain: ResMut<Chain>,
     mut picture: ResMut<Picture>,
@@ -302,11 +311,15 @@ pub fn wire(
     mut quad_vis: Query<&mut Visibility, (With<Compositor>, With<Mesh2d>)>,
 ) {
     let size = picture_size(&window, settings.picture_scale);
+    // In texels, every frame: the magnification eases while zooming.
+    let in_texels = texels(size, &cam, &settings);
+    if picture.size != in_texels {
+        picture.size = in_texels;
+    }
     if let Some((images, pending_size)) = chain.pending.take() {
         if pending_size == size {
             chain.images = images;
             chain.size = size;
-            picture.size = size.as_vec2();
             chain.dirty = true;
             if !chain.direct
                 && let Ok(mut target) = world_cam.single_mut()
